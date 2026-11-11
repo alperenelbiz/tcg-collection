@@ -81,10 +81,11 @@ struct CardPageView: View {
         let finishes = model.prices.prices(game: game.id, productID: shown.productID)
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(shown.cardName).font(.title.bold())
+                Text(shown.cardName).font(.title.bold()).textSelection(.enabled)
                 Text(CardFacts.line(setName: setNames[shown.groupID] ?? "", product: shown))
                     .foregroundStyle(.secondary)
-                if !shown.cardType.isEmpty { Text(shown.cardType) }
+                    .textSelection(.enabled)
+                if !shown.cardType.isEmpty { Text(shown.cardType).textSelection(.enabled) }
             }
             if !stats.isEmpty {
                 HStack(alignment: .top, spacing: 28) {
@@ -101,15 +102,14 @@ struct CardPageView: View {
             }
             if !shown.rulesText.isEmpty {
                 Divider()
-                Text(shown.rulesText)
+                // Selection is set on single texts only: on a container it takes the taps of the printing rows.
+                Text(shown.rulesText).textSelection(.enabled)
             }
             if printings.count > 1 {
                 Divider()
-                // Text selection would take the touches of the rows from their buttons.
-                otherPrintings(printings, game: game).textSelection(.disabled)
+                otherPrintings(printings, game: game)
             }
         }
-        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -127,6 +127,7 @@ struct CardPageView: View {
                             .monospacedDigit()
                     }
                     .fontWeight(printing.productID == shown?.productID ? .semibold : .regular)
+                    .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
