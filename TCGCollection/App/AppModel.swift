@@ -136,21 +136,32 @@ final class AppModel {
         }
     }
 
-    /// Opens the catalog store. A store that cannot be opened is moved aside into `unreadable-<date>` and a fresh one
-    /// is made at the normal path. When that fails too, the store lives in memory and `failure` says why.
+    /// Opens the catalog store (P8). A file that is corrupt or not a database, or whose migration failed, is moved
+    /// aside into `unreadable-<date>` and a fresh store is made at the normal path. Any other open error keeps the file.
+    /// When no store file is open in the end, the store lives in memory and `failure` says why.
     private nonisolated static func openStore(paths: AppPaths, now: Date)
         -> (store: CatalogStore, movedAside: Bool, failure: String?) {
-        if let store = try? CatalogStore(url: paths.catalogStore) { return (store, false, nil) }
+        let reason: String
         do {
-            try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
-            return (try CatalogStore(url: paths.catalogStore), true, nil)
+            return (try CatalogStore(url: paths.catalogStore), false, nil)
         } catch {
-            do {
-                return (try CatalogStore.inMemory(), false, "Catalog: the store cannot be opened (\(describe(error)))")
-            } catch {
-                // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
-                fatalError("The catalog schema cannot be loaded: \(error)")
+            switch CatalogStore.classify(error) {
+            case .other(let text):
+                reason = text
+            case .unreadable:
+                do {
+                    try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
+                    return (try CatalogStore(url: paths.catalogStore), true, nil)
+                } catch {
+                    reason = CatalogStore.reason(error)
+                }
             }
+        }
+        do {
+            return (try CatalogStore.inMemory(), false, "Catalog: the store cannot be opened (\(reason))")
+        } catch {
+            // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
+            fatalError("The catalog schema cannot be loaded: \(error)")
         }
     }
 

@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import SwiftData
 
@@ -23,6 +24,14 @@ nonisolated struct SetProgress: Sendable, Equatable {
     let total: Int
     let fetched: Int
     let failed: Int
+}
+
+/// Why the store file could not be opened (P8).
+nonisolated enum StoreOpenFailure: Sendable, Equatable {
+    /// The file is corrupt or not a database, or its migration failed: it is moved aside and the catalog downloaded again.
+    case unreadable
+    /// Anything else (a full disk, no permission): the file stays where it is. The text says what happened.
+    case other(String)
 }
 
 /// Runs every job of one `CatalogStore` on that store's own serial queue.
@@ -79,16 +88,24 @@ actor CatalogStore: ModelActor {
         self.modelContainer = modelContainer
     }
 
+    /// Opens the store file at `url` with the current schema, and migrates a store of an older version first.
+    /// What it throws is judged by `classify(_:)`.
     init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let schema = Schema([CatalogSet.self, CatalogProduct.self])
-        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, url: url))
+        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
+        let container: ModelContainer
+        do {
+            container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
+                                           configurations: ModelConfiguration(schema: schema, url: url))
+        } catch {
+            throw Self.openError(error, url: url)
+        }
         self.init(modelContainer: container)
     }
 
     /// An empty store that lives in memory only: the last fallback when no store file can be opened. It needs no disk.
     static func inMemory() throws -> CatalogStore {
-        let schema = Schema([CatalogSet.self, CatalogProduct.self])
+        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return CatalogStore(modelContainer: try ModelContainer(for: schema, configurations: configuration))
     }
@@ -106,24 +123,28 @@ actor CatalogStore: ModelActor {
                 row.abbreviation = record.abbreviation
                 row.publishedOn = record.publishedOn
             } else {
+                // A set with no products yet has nothing stored under older rules.
                 modelContext.insert(CatalogSet(groupID: record.groupID, gameID: record.gameID, name: record.name,
-                                               abbreviation: record.abbreviation, publishedOn: record.publishedOn))
+                                               abbreviation: record.abbreviation, publishedOn: record.publishedOn,
+                                               rulesVersion: CatalogRules.version))
             }
         }
         try modelContext.save()
     }
 
-    /// Replaces the products of one set in one transaction. A set row that does not exist yet is
-    /// created (with an empty name) from the game of the first product; `upsertSets` fills it later.
+    /// Replaces the products of one set in one transaction and records the date and the current rules version on the
+    /// set. A set row that does not exist yet is created (with an empty name) from the game of the first product;
+    /// `upsertSets` fills it later.
     func replaceProducts(of groupID: Int, with products: [ProductRecord], at date: Date) throws {
         try modelContext.delete(model: CatalogProduct.self, where: #Predicate { $0.groupID == groupID })
         for product in products { modelContext.insert(CatalogProduct(product)) }
         if let row = try setRow(groupID) {
             row.fetchedAt = date
             row.failed = false
+            row.rulesVersion = CatalogRules.version
         } else if let game = products.first?.gameID {
             modelContext.insert(CatalogSet(groupID: groupID, gameID: game, name: "", abbreviation: "",
-                                           publishedOn: nil, fetchedAt: date))
+                                           publishedOn: nil, fetchedAt: date, rulesVersion: CatalogRules.version))
         }
         try modelContext.save()
     }
@@ -146,6 +167,11 @@ actor CatalogStore: ModelActor {
         var dates: [Int: Date] = [:]
         for row in try setRows(game: game) { if let date = row.fetchedAt { dates[row.groupID] = date } }
         return dates
+    }
+
+    /// The rules version of every set of the game (group id: version).
+    func rulesVersions(game: String) throws -> [Int: Int] {
+        Dictionary(try setRows(game: game).map { ($0.groupID, $0.rulesVersion) }, uniquingKeysWith: { first, _ in first })
     }
 
     func progress(game: String) throws -> SetProgress {
@@ -273,10 +299,75 @@ actor CatalogStore: ModelActor {
     private func distinct(game: String, _ values: (CatalogProduct) -> [String]) throws -> [String] {
         var seen = Set<String>()
         var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game })
-        descriptor.propertiesToFetch = [\.rarity, \.typeFacets]
+        descriptor.propertiesToFetch = [\.rarity, \.facetText]
         for row in try modelContext.fetch(descriptor) {
             for value in values(row) where !value.isEmpty { seen.insert(value) }
         }
         return seen.sorted()
+    }
+}
+
+// MARK: - Open errors (P8)
+
+extension CatalogStore {
+    /// SQLite primary result codes of a file that is bad in itself: SQLITE_CORRUPT, SQLITE_NOTADB.
+    private nonisolated static let unreadableSQLiteCodes: Set<Int> = [11, 26]
+    /// Core Data codes of a store that cannot be migrated: NSPersistentStoreIncompatibleVersionHashError,
+    /// NSMigrationError, NSMigrationMissingSourceModelError, NSMigrationMissingMappingModelError.
+    private nonisolated static let unreadableCocoaCodes: Set<Int> = [134100, 134110, 134130, 134140]
+
+    /// `.unreadable` when the error or one of its causes says that the file is corrupt or not a database, or that its
+    /// migration failed; `.other` for everything else (a full disk, no permission, a folder that cannot be written).
+    nonisolated static func classify(_ error: any Error) -> StoreOpenFailure {
+        causes(of: error).contains(where: isUnreadable) ? .unreadable : .other(reason(error))
+    }
+
+    /// The text of the outermost cause that is not SwiftData's own: a `SwiftDataError` reads "SwiftData.SwiftDataError
+    /// error 1" whatever happened.
+    nonisolated static func reason(_ error: any Error) -> String {
+        (causes(of: error).first { !($0 is SwiftDataError) } ?? error).localizedDescription
+    }
+
+    private nonisolated static func isUnreadable(_ error: any Error) -> Bool {
+        // A store written with a schema that no version of the migration plan has (seen for another app's schema and
+        // for a newer version of ours): SwiftData throws this with no cause.
+        if let swiftData = error as? SwiftDataError { return swiftData == .unknownDataStoreSchema }
+        let error = error as NSError
+        // An extended SQLite code keeps the primary code in its low byte (SQLITE_READONLY_DIRECTORY is 1544 = 8 + 6 << 8).
+        func unreadableSQLite(_ code: Int) -> Bool { unreadableSQLiteCodes.contains(code & 0xFF) }
+        if error.domain == NSSQLiteErrorDomain, unreadableSQLite(error.code) { return true }
+        if error.domain == NSCocoaErrorDomain, unreadableCocoaCodes.contains(error.code) { return true }
+        // Core Data also puts an SQLite code in the user info of a Cocoa error (seen: 256 with 1544 for a read-only folder).
+        if let code = error.userInfo[NSSQLiteErrorDomain] as? Int, unreadableSQLite(code) { return true }
+        return false
+    }
+
+    /// The error, the Core Data error that a `SwiftDataError` keeps, and every underlying error, depth first.
+    private nonisolated static func causes(of error: any Error) -> [any Error] {
+        var found = [error]
+        if let wrapped = wrappedCocoaError(error) { found += causes(of: wrapped) }
+        for underlying in (error as NSError).underlyingErrors { found += causes(of: underlying) }
+        return found
+    }
+
+    /// SwiftData keeps the Core Data error that stopped a container in `_underlyingCocoaError`, which it does not make
+    /// public (seen on macOS 27). Nil when the error has none, or when a later SwiftData no longer has that property.
+    private nonisolated static func wrappedCocoaError(_ error: any Error) -> (any Error)? {
+        guard error is SwiftDataError else { return nil }
+        return Mirror(reflecting: error).children.first { $0.label == "_underlyingCocoaError" }?.value as? any Error
+    }
+
+    /// For a file that is not a database or is corrupt, SwiftData throws `loadIssueModelContainer` with no cause and
+    /// writes the SQLite error only to its log (seen on macOS 27). Reading the file's metadata through Core Data gives
+    /// that error back; it is thrown instead. Any other error is thrown as it is.
+    private nonisolated static func openError(_ error: any Error, url: URL) -> any Error {
+        guard case SwiftDataError.loadIssueModelContainer = error, wrappedCocoaError(error) == nil,
+              FileManager.default.fileExists(atPath: url.path) else { return error }
+        do {
+            _ = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
+            return error
+        } catch let metadataError {
+            return metadataError
+        }
     }
 }

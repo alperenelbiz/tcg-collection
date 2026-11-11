@@ -136,6 +136,53 @@ struct AppModelTests {
         #expect(try await model.reader.product(1) != nil)
     }
 
+    /// P8: only a file that is corrupt or not a database, or a failed migration, is moved aside. Here the store is
+    /// healthy but its folder cannot be written: the file stays, the model runs in memory with the sync off.
+    @MainActor @Test func aStoreThatCannotBeOpenedForAnotherReasonIsNotMoved() async throws {
+        // the support folder is made read-only after a healthy store was written; the model starts in memory,
+        // the store file is still at its path, no unreadable-… folder exists, and start() makes no network call
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        do {
+            let store = try CatalogStore(url: paths.catalogStore)
+            try await store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
+        }
+        // SQLite opens a store in a read-only folder while its -wal and -shm files exist (seen on macOS 27); without
+        // them the open fails with SQLITE_READONLY_DIRECTORY.
+        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: paths.catalogStore.path + suffix) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: paths.support.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.support.path) }
+        let model = model(["app", "-store", root.path])
+        let inMemory = model.store.modelContainer.configurations.allSatisfy { $0.isStoredInMemoryOnly }
+        #expect(inMemory)
+        #expect(model.canSync == false)
+        await model.start()
+        if case .failed(let text) = model.status { #expect(text.hasPrefix("Catalog: the store cannot be opened")) } else { Issue.record("no failure shown") }
+        #expect(FileManager.default.fileExists(atPath: paths.catalogStore.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }.isEmpty)
+        #expect(await fakeCatalog.groupCalls == 0); #expect(await fakeArchive.calls.isEmpty); #expect(await fakeFetcher.calls == 0)
+    }
+
+    /// P8 where a move would work: the folder can be written, but the store file cannot be read (no permission).
+    /// Phase 1 moved such a file aside and downloaded everything again.
+    @MainActor @Test func aStoreFileThatCannotBeReadIsNotMoved() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        do {
+            let store = try CatalogStore(url: paths.catalogStore)
+            try await store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: paths.catalogStore.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: paths.catalogStore.path) }
+        let model = model(["app", "-store", root.path])
+        #expect(model.canSync == false)
+        await model.start()
+        if case .failed(let text) = model.status { #expect(text.hasPrefix("Catalog: the store cannot be opened (")) } else { Issue.record("no failure shown") }
+        #expect(FileManager.default.fileExists(atPath: paths.catalogStore.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }.isEmpty)
+        #expect(await fakeCatalog.groupCalls == 0)
+    }
+
     @MainActor @Test func theChosenGameIsRemembered() {
         let root = tempRoot().path
         let first = model(["app", "-store", root])

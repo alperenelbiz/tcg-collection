@@ -159,6 +159,17 @@ struct CatalogStoreTests {
         #expect(try await s.progress(game: "riftbound").failed == 1)
     }
 
+    /// P3: a set filled now holds the current rules version, and so does a set that only `upsertSets` made (it has no
+    /// products to be stale). A set row that `replaceProducts` creates holds it too.
+    @Test func everySetWrittenNowHoldsTheCurrentRulesVersion() async throws {
+        let s = try await filledStore()                    // 24819 is filled, the other 13 Riftbound sets only upserted
+        let riftbound = try await s.rulesVersions(game: "riftbound")
+        #expect(riftbound.count == 14); #expect(riftbound.values.allSatisfy { $0 == CatalogRules.version })
+        #expect(try await s.rulesVersions(game: "cyberpunk") == [24884: CatalogRules.version])   // made by replaceProducts
+        try await s.markFailed(24832)
+        #expect(try await s.rulesVersions(game: "riftbound")[24832] == CatalogRules.version)
+    }
+
     /// The views read through a second store on the writer's container (AppModel.reader).
     @Test func aReaderOnTheWritersContainerSeesWhatTheWriterSavedLater() async throws {
         let writer = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
