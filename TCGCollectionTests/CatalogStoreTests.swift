@@ -108,6 +108,30 @@ struct CatalogStoreTests {
         #expect(try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 50) == all)   // same as default batch
     }
 
+    /// I5: search pages by key, not by offset. Rows inserted out of key order, with product ids out of key order and
+    /// names that sort one way as text and another way as numbers ("2" and "10"), give the same cards in every
+    /// batch size, and no card twice.
+    @Test func searchPagesByKeyInEveryBatchSize() async throws {
+        let s = try await filledStore()
+        func record(_ id: Int, _ name: String) -> ProductRecord {
+            ProductRecord(productID: id, gameID: "riftbound", groupID: 24819, name: name, cardName: name,
+                          searchKey: CardName.searchKey(name), number: "", rarity: "", cardType: "Unit",
+                          typeFacets: ["Unit"], rulesText: "", url: "", fields: [:])
+        }
+        let rows = [record(9, "Zz Card 10"), record(3, "Zz Card 2"), record(8, "Zz Bee"), record(1, "Zz Card 10"),
+                    record(7, "Zz Ant"), record(2, "Zz Card 2"), record(6, "Zz Bee"), record(5, "Zz Ant"),
+                    record(4, "Zz Card 1")]
+        try await s.replaceProducts(of: 24819, with: rows, at: .now)
+
+        let whole = try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 50)
+        #expect(whole.count == 5); #expect(whole.map(\.printings).reduce(0, +) == rows.count)
+        for size in [1, 2, 3] {
+            let paged = try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 50, batchSize: size)
+            #expect(paged == whole)
+            #expect(Set(paged.map(\.id)).count == paged.count)                      // no card id twice
+        }
+    }
+
     @Test func productLookupKeepsEveryField() async throws {
         let s = try await filledStore()
         let (cards, _) = try ProductParser.products(fixture("products-1.json"), game: Games.game("magic-the-gathering")!)

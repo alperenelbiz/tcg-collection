@@ -162,16 +162,25 @@ actor CatalogStore: ModelActor {
         let facetText = filter.typeFacet.map { "|\($0)|" }
         let useFacet = facetText != nil, facet = facetText ?? ""
 
-        var descriptor = FetchDescriptor<CatalogProduct>(
-            predicate: #Predicate {
-                $0.gameID == game
-                    && (first == "" || $0.searchKey.contains(first))
-                    && (!useGroup || $0.groupID == group)
-                    && (!useRarity || $0.rarity == rarity)
-                    && (!useFacet || $0.facetText.contains(facet))
-            },
-            sortBy: [SortDescriptor(\.cardKey), SortDescriptor(\.productID)])
-        descriptor.fetchLimit = batchSize
+        // A batch starts after the last row of the one before, by key, not at an offset: the writer commits between
+        // two batches, and rows it inserts before an offset would push rows already read into the next batch.
+        // The key sort is `.lexical`, the order of `>` in the predicate. The default for a String
+        // (`.localizedStandard`) puts "card 2" before "card 10", and the next batch would then skip "card 10".
+        func batch(after last: (key: String, id: Int)?) throws -> [CatalogProduct] {
+            let paging = last != nil, lastKey = last?.key ?? "", lastID = last?.id ?? 0
+            var descriptor = FetchDescriptor<CatalogProduct>(
+                predicate: #Predicate {
+                    $0.gameID == game
+                        && (first == "" || $0.searchKey.contains(first))
+                        && (!useGroup || $0.groupID == group)
+                        && (!useRarity || $0.rarity == rarity)
+                        && (!useFacet || $0.facetText.contains(facet))
+                        && (!paging || $0.cardKey > lastKey || ($0.cardKey == lastKey && $0.productID > lastID))
+                },
+                sortBy: [SortDescriptor(\.cardKey, comparator: .lexical), SortDescriptor(\.productID)])
+            descriptor.fetchLimit = batchSize
+            return try modelContext.fetch(descriptor)
+        }
 
         let publishDates = Dictionary(
             try setRows(game: game).compactMap { row in row.publishedOn.map { (row.groupID, $0) } },
@@ -180,7 +189,7 @@ actor CatalogStore: ModelActor {
         var cards: [CardSummary] = []
         var currentKey = ""
         var currentPrintings: [ProductRecord] = []
-        var offset = 0
+        var last: (key: String, id: Int)?
         func closeCard() {
             guard let cover = currentPrintings.max(by: { Self.older($0, than: $1, dates: publishDates) }) else { return }
             cards.append(CardSummary(id: currentKey, name: cover.cardName, cover: cover,
@@ -188,8 +197,7 @@ actor CatalogStore: ModelActor {
             currentPrintings = []
         }
         scan: while true {
-            descriptor.fetchOffset = offset
-            let batch = try modelContext.fetch(descriptor)
+            let batch = try batch(after: last)
             for product in batch {
                 if !others.allSatisfy({ product.searchKey.contains($0) }) { continue }
                 if product.cardKey != currentKey {
@@ -199,8 +207,8 @@ actor CatalogStore: ModelActor {
                 }
                 currentPrintings.append(product.record)
             }
-            if batch.count < batchSize { break }
-            offset += batch.count
+            guard batch.count == batchSize, let end = batch.last else { break }
+            last = (end.cardKey, end.productID)
         }
         if cards.count < limit { closeCard() }
         return cards
