@@ -30,6 +30,21 @@ struct CardNameTests {
         #expect(CardName.base("Erase", game: m) == "Erase")
         #expect(CardName.searchKey(CardName.base("Erase (Not the Urza's Legacy One)", game: m)) != CardName.searchKey("Erase"))
     }
+    @Test func aWholeNameStaysWhenBracketGroupsFollowIt() {
+        let m = Games.game("magic-the-gathering")!
+        #expect(CardName.base("Erase (Not the Urza's Legacy One) (Foil)", game: m) == "Erase (Not the Urza's Legacy One)")
+        #expect(CardName.base("Erase (Not the Urza's Legacy One) (Foil) (0123)", game: m) == "Erase (Not the Urza's Legacy One)")
+        #expect(CardName.searchKey(CardName.base("Erase (Not the Urza's Legacy One) (Foil)", game: m)) != CardName.searchKey("Erase"))
+    }
+    @Test func aKeptBracketSurvivesWhereverItStands() {
+        let y = Games.game("yu-gi-oh")!
+        #expect(CardName.base("Power Bond (Ultra Rare) (Skill Card)", game: y) == "Power Bond (Skill Card)")
+        #expect(CardName.base("Power Bond (Ultra Rare) (Skill Card) (1st Edition)", game: y) == "Power Bond (Skill Card)")
+        #expect(CardName.base("Power Bond (skill card) (Ultra Rare)", game: y) == "Power Bond (skill card)")
+        #expect(CardName.base("Power Bond (Skill Card)", game: y) == "Power Bond (Skill Card)")
+        #expect(CardName.base("(Skill Card)", game: y) == "(Skill Card)")
+        #expect(CardName.base("Power Bond (Skill Card) (Skill Card)", game: y) == "Power Bond (Skill Card)")
+    }
     @Test func searchKeyFoldsCaseAccentsAndPunctuation() {
         #expect(CardName.searchKey("\"A Case for K9\"") == "a case for k9")
         #expect(CardName.searchKey("Lim-Dûl's Vault") == "lim dul s vault")
