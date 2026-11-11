@@ -10,6 +10,8 @@ nonisolated struct LaunchOptions: Sendable {
     var offline = false
     var snapshot: URL?
     var catalogReport = false
+    /// `-fixtures <dir>` (DEBUG): the network is served from the files in this folder.
+    var fixtures: URL?
 
     init(arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -23,5 +25,6 @@ nonisolated struct LaunchOptions: Sendable {
         offline = value("-offline") == "YES"
         snapshot = value("-snapshot").map { URL(fileURLWithPath: $0) }
         catalogReport = value("-catalogReport") == "YES"
+        fixtures = value("-fixtures").map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 }

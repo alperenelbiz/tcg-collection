@@ -14,6 +14,16 @@ struct LaunchOptionsTests {
         #expect(o.storeRoot == nil && o.game == nil && o.card == nil && !o.offline && o.snapshot == nil && !o.catalogReport)
     }
     @Test func aFlagWithoutAValueIsIgnored() { #expect(LaunchOptions(arguments: ["app", "-game"]).game == nil) }
+    @Test func parsesTheFixturesFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-fixtures", "/tmp/f"]).fixtures?.path == "/tmp/f")
+        #expect(LaunchOptions(arguments: ["app"]).fixtures == nil)
+    }
+    /// A Debug run without `-store` uses its own folders, never the installed app's store.
+    @Test func aDebugBuildWithoutARootHasItsOwnFolders() {
+        let folders = AppPaths.systemFolders()
+        #expect(folders.support == URL.applicationSupportDirectory.appending(path: "TCGCollection2-Debug", directoryHint: .isDirectory))
+        #expect(folders.caches == URL.cachesDirectory.appending(path: "TCGCollection2-Debug", directoryHint: .isDirectory))
+    }
     @Test func pathsUnderARootStayUnderIt() {
         let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
         let p = AppPaths(root: root)

@@ -8,9 +8,23 @@ struct TCGCollectionApp: App {
         // The unit tests run inside the app. There the app makes no model: no store is opened and
         // nothing is downloaded; the tests make their own models with fakes.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        _model = State(initialValue: AppModel(options: LaunchOptions(arguments: CommandLine.arguments),
-                                              catalogClient: TCGCSVClient(), archiveClient: ArchiveClient(),
-                                              fetcher: URLSessionFetcher()))
+        _model = State(initialValue: Self.makeModel(LaunchOptions(arguments: CommandLine.arguments)))
+    }
+
+    private static func makeModel(_ options: LaunchOptions) -> AppModel {
+        #if DEBUG
+        // `-fixtures <dir>`: the UI tests run the app on files, never on the network.
+        if let fixtures = options.fixtures {
+            // Fixture data goes only into a store of its own, never into the default one.
+            if options.storeRoot != nil {
+                return AppModel(options: options, catalogClient: FileCatalogClient(directory: fixtures),
+                                archiveClient: FileArchiveClient(directory: fixtures), fetcher: FileFetcher(directory: fixtures))
+            }
+            FileHandle.standardOutput.write(Data("-fixtures is ignored: it needs -store <dir>\n".utf8))
+        }
+        #endif
+        return AppModel(options: options, catalogClient: TCGCSVClient(), archiveClient: ArchiveClient(),
+                        fetcher: URLSessionFetcher())
     }
 
     var body: some Scene {

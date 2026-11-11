@@ -11,12 +11,23 @@ nonisolated struct AppPaths: Sendable {
             support = root.appending(path: "support", directoryHint: .isDirectory)
             caches = root.appending(path: "caches", directoryHint: .isDirectory)
         } else {
-            support = URL.applicationSupportDirectory.appending(path: "TCGCollection2", directoryHint: .isDirectory)
-            caches = URL.cachesDirectory.appending(path: "TCGCollection2", directoryHint: .isDirectory)
+            (support, caches) = Self.systemFolders()
         }
         for dir in [support, caches] {
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+    }
+
+    /// The folders used with no root. A Debug build has its own, so a Debug run without `-store` never opens
+    /// the installed app's store.
+    static func systemFolders() -> (support: URL, caches: URL) {
+        #if DEBUG
+        let name = "TCGCollection2-Debug"
+        #else
+        let name = "TCGCollection2"
+        #endif
+        return (URL.applicationSupportDirectory.appending(path: name, directoryHint: .isDirectory),
+                URL.cachesDirectory.appending(path: name, directoryHint: .isDirectory))
     }
 
     var catalogStore: URL { support.appending(path: "catalog.store") }

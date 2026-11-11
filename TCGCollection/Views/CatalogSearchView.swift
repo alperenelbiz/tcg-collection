@@ -44,15 +44,19 @@ struct CatalogSearchView: View {
 
     @ViewBuilder private var content: some View {
         if let cards, cards.isEmpty {
-            if catalogEmpty {
-                emptyCatalog
-            } else {
-                ContentUnavailableView {
-                    Text(text.trimmingCharacters(in: .whitespaces).isEmpty
-                         ? "No card matches these filters."
-                         : "No card matches \"\(text)\".")
+            Group {
+                if catalogEmpty {
+                    emptyCatalog
+                } else {
+                    ContentUnavailableView {
+                        Text(text.trimmingCharacters(in: .whitespaces).isEmpty
+                             ? "No card matches these filters."
+                             : "No card matches \"\(text)\".")
+                    }
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("empty-state")
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 20) {
@@ -60,6 +64,7 @@ struct CatalogSearchView: View {
                 }
                 .padding(20)
             }
+            .accessibilityIdentifier("gallery")
         }
     }
 
@@ -141,5 +146,6 @@ private struct FilterMenu<Value: Hashable>: View {
         } label: {
             Text(choices.first { $0.value == selection }?.name ?? title)
         }
+        .accessibilityIdentifier("filter-\(title.lowercased())")
     }
 }

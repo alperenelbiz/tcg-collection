@@ -26,6 +26,7 @@ struct CardCell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("card-cell-\(summary.id)")
     }
 
     private var priceText: String {

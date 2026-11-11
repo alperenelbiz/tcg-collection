@@ -23,11 +23,9 @@ targets:
     sources: [TCGCollection]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2
         PRODUCT_NAME: TCGCollection2
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -38,6 +36,15 @@ targets:
         DEVELOPMENT_LANGUAGE: en
         SWIFT_OBJC_BRIDGING_HEADER: TCGCollection/Prices/libarchive-shim.h
         OTHER_LDFLAGS: -larchive
+      # The Debug build is another app to macOS: XCUITest and a Debug run never touch the installed app,
+      # its preferences or its window state. Release is the app that scripts/install-mac.sh installs.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.debug
+          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2 (Debug)
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2
+          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2
   TCGCollectionTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]
@@ -54,6 +61,22 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.tests
         # XcodeGen sets the iOS app layout; a Mac app keeps its binary in Contents/MacOS.
         "TEST_HOST[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/TCGCollection2.app/Contents/MacOS/TCGCollection2
+  # Mac UI tests: they click the Debug app, which runs on a temporary store and the fixture network.
+  TCGCollectionUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [macOS]
+    sources:
+      - TCGCollectionUITests
+      # The unit test fixtures, shared: the app under test reads them through `-fixtures`.
+      - path: TCGCollectionTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: TCGCollection
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.uitests
 schemes:
   TCGCollection:
     build:
@@ -62,3 +85,11 @@ schemes:
         TCGCollectionTests: [test]
     test:
       targets: [TCGCollectionTests]
+  # Only the UI tests: they take the pointer, so the unit scheme never runs them.
+  TCGCollectionUI:
+    build:
+      targets:
+        TCGCollection: all
+        TCGCollectionUITests: [test]
+    test:
+      targets: [TCGCollectionUITests]

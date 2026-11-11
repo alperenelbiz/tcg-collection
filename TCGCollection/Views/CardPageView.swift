@@ -42,6 +42,7 @@ struct CardPageView: View {
                         if let url = shown.flatMap({ URL(string: $0.url) }) { openURL(url) }
                     }
                     .disabled(shown.flatMap { URL(string: $0.url) } == nil)
+                    .accessibilityIdentifier("open-tcgplayer")
                 }
             }
             .task(id: cardKey) { await load() }
@@ -56,6 +57,7 @@ struct CardPageView: View {
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .accessibilityIdentifier("card-page")
         } else {
             // A view with no content gets no lifecycle events, and the lookup starts from `task`.
             Color.clear
@@ -82,9 +84,11 @@ struct CardPageView: View {
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(shown.cardName).font(.title.bold()).textSelection(.enabled)
+                    .accessibilityIdentifier("card-title")
                 Text(CardFacts.line(setName: setNames[shown.groupID] ?? "", product: shown))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+                    .accessibilityIdentifier("card-facts-line")
                 if !shown.cardType.isEmpty { Text(shown.cardType).textSelection(.enabled) }
             }
             if !stats.isEmpty {
@@ -131,6 +135,7 @@ struct CardPageView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("printing-row-\(printing.productID)")
             }
         }
     }

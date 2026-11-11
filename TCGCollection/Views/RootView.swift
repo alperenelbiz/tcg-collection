@@ -38,6 +38,7 @@ private struct CatalogStack: View {
                             Button("Rebuild catalog…") { confirmRebuild = true }
                         }
                         .disabled(model.options.offline || model.status.isSyncing)
+                        .accessibilityIdentifier("catalog-menu")
                     }
                 }
         }
@@ -66,8 +67,10 @@ private struct Sidebar: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            .accessibilityIdentifier("game-picker")
             Section("Catalog") {
                 Label("All cards", systemImage: "square.grid.2x2").tag(Item.allCards)
+                    .accessibilityIdentifier("sidebar-all-cards")
             }
         }
         .safeAreaInset(edge: .bottom) { StatusLine(status: model.status) }
@@ -87,6 +90,7 @@ private struct StatusLine: View {
             Text(status.text)
                 .lineLimit(2)
                 .truncationMode(.tail)
+                .accessibilityIdentifier("status-line")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
