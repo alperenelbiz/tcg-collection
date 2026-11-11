@@ -9,7 +9,10 @@ nonisolated struct SyncProgress: Sendable, Equatable {
 
 nonisolated struct SyncResult: Sendable, Equatable {
     let fetched: Int
+    /// Sets whose products could not be fetched or stored.
     let failed: Int
+    /// Games whose set list could not be loaded (no network at first launch fails here). Not counted in `failed`.
+    var failedSetLists = 0
     /// gameID: sets fetched for the first time.
     let newSets: [String: Int]
 }
@@ -43,13 +46,13 @@ actor CatalogSync {
 
     func run(games: [GameDefinition], now: Date, rebuild: Bool,
              progress: @Sendable (SyncProgress) -> Void) async -> SyncResult {
-        var fetched = 0, failed = 0
+        var fetched = 0, failed = 0, failedSetLists = 0
         var newSets: [String: Int] = [:]
         for game in games {
             // A cancelled sync stops: the sets it did not reach are not failed, only not fetched yet.
             if Task.isCancelled { break }
             guard let plan = await plan(for: game, now: now, rebuild: rebuild) else {
-                failed += 1
+                failedSetLists += 1
                 continue
             }
             var done = 0, gameFailed = 0
@@ -89,7 +92,7 @@ actor CatalogSync {
                 }
             }
         }
-        return SyncResult(fetched: fetched, failed: failed, newSets: newSets)
+        return SyncResult(fetched: fetched, failed: failed, failedSetLists: failedSetLists, newSets: newSets)
     }
 
     /// Fetches and stores the set list of one game. Nil when that fails.

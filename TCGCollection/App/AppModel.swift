@@ -26,11 +26,18 @@ nonisolated enum StatusText {
     }
 
     static func done(result: SyncResult, priceDay: String?) -> String {
-        let catalog = switch result.failed {
-        case 0: "Catalog up to date"
-        case 1: "Catalog: 1 set failed, it is tried again next time"
-        default: "Catalog: \(result.failed) sets failed, they are tried again next time"
+        var problems: [String] = []
+        switch result.failedSetLists {
+        case 0: break
+        case 1: problems.append("the set list of 1 game could not be loaded")
+        default: problems.append("the set list of \(result.failedSetLists) games could not be loaded")
         }
+        switch result.failed {
+        case 0: break
+        case 1: problems.append("1 set failed, it is tried again next time")
+        default: problems.append("\(result.failed) sets failed, they are tried again next time")
+        }
+        let catalog = problems.isEmpty ? "Catalog up to date" : "Catalog: " + problems.joined(separator: "; ")
         return catalog + " · " + priceLine(priceDay)
     }
 
@@ -156,9 +163,12 @@ final class AppModel {
         pendingCard = CardTarget(gameID: game.id, cardKey: CardName.searchKey(product.cardName), startProductID: product.productID)
     }
 
-    /// Does nothing offline, with a broken store, or while a sync runs.
+    /// False offline and with a store that cannot be opened: then nothing is downloaded.
+    var canSync: Bool { !options.offline && storeFailure == nil }
+
+    /// Does nothing when the app cannot sync, or while a sync runs.
     func refresh(rebuild: Bool) async {
-        guard !options.offline, storeFailure == nil else { return }
+        guard canSync else { return }
         await sync(rebuild: rebuild)
     }
 
@@ -173,12 +183,17 @@ final class AppModel {
         let priceFailure = await syncPrices(now: now)
         let rest = await syncCatalog(of: Games.all.filter { $0.id != chosen.id }, now: now, rebuild: rebuild)
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
+                                failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 newSets: first.newSets.merging(rest.newSets, uniquingKeysWith: +))
         let indexFailure = await refreshYGOIndexIfNeeded(newSets: result.newSets["yu-gi-oh", default: 0], now: now)
-        if let failure = priceFailure ?? indexFailure {
+        let done = StatusText.done(result: result, priceDay: prices.day(game: gameID))
+        if result.failedSetLists > 0 {
+            // The catalog failure first: with no network at first launch it is the one that matters.
+            status = .failed([done, priceFailure ?? indexFailure].compactMap { $0 }.joined(separator: " · "))
+        } else if let failure = priceFailure ?? indexFailure {
             status = .failed(failure)
         } else {
-            status = .idle(StatusText.done(result: result, priceDay: prices.day(game: gameID)))
+            status = .idle(done)
         }
     }
 

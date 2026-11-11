@@ -37,6 +37,21 @@ struct AppModelTests {
         #expect(StatusText.pricesLoaded(day: nil) == "No prices yet")
     }
 
+    /// I2: a set list that could not be loaded is counted apart from failed sets, and named.
+    @Test func statusLineNamesTheSetListsThatCouldNotBeLoaded() {
+        #expect(StatusText.done(result: .init(fetched: 0, failed: 0, failedSetLists: 4, newSets: [:]), priceDay: nil) == "Catalog: the set list of 4 games could not be loaded · no prices yet")
+        #expect(StatusText.done(result: .init(fetched: 3, failed: 0, failedSetLists: 1, newSets: [:]), priceDay: "2026-11-10") == "Catalog: the set list of 1 game could not be loaded · prices of 2026-11-10")
+        #expect(StatusText.done(result: .init(fetched: 3, failed: 2, failedSetLists: 1, newSets: [:]), priceDay: nil) == "Catalog: the set list of 1 game could not be loaded; 2 sets failed, they are tried again next time · no prices yet")
+    }
+
+    /// I2: no network at first launch. Every set list fails; the final status is a failure that names the catalog first.
+    @MainActor @Test func aStartWhoseSetListsAllFailEndsInAFailureThatNamesTheCatalog() async {
+        await fakeCatalog.failGroups(true)
+        let model = model(["app", "-store", tempRoot().path])
+        await model.start()
+        #expect(model.status == .failed("Catalog: the set list of 4 games could not be loaded · prices of 2026-01-02"))
+    }
+
     @MainActor @Test func startFillsCatalogPricesAndTheIndex() async throws {
         let model = model(["app", "-store", tempRoot().path])
         await model.start()

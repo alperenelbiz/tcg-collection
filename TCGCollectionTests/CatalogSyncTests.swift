@@ -100,7 +100,7 @@ struct CatalogSyncTests {
         let rig = try await Rig()
         await rig.fake.failGroups(true)
         let result = await rig.run()
-        #expect(result == SyncResult(fetched: 0, failed: 1, newSets: [:]))
+        #expect(result == SyncResult(fetched: 0, failed: 0, failedSetLists: 1, newSets: [:]))   // I2: apart from sets
         #expect(await rig.fake.productCalls == 0)
     }
 

@@ -45,11 +45,7 @@ struct CatalogSearchView: View {
     @ViewBuilder private var content: some View {
         if let cards, cards.isEmpty {
             if catalogEmpty {
-                ContentUnavailableView {
-                    Text("Downloading the catalog…")
-                } description: {
-                    Text(model.status.text)
-                }
+                emptyCatalog
             } else {
                 ContentUnavailableView {
                     Text(text.trimmingCharacters(in: .whitespaces).isEmpty
@@ -63,6 +59,32 @@ struct CatalogSearchView: View {
                     ForEach(cards ?? []) { CardCell(summary: $0) }
                 }
                 .padding(20)
+            }
+        }
+    }
+
+    /// The game has no card at all. "Downloading" only while a sync runs; otherwise the reason, and a way to try again.
+    @ViewBuilder private var emptyCatalog: some View {
+        if model.status.isSyncing {
+            ContentUnavailableView {
+                Text("Downloading the catalog…")
+            } description: {
+                Text(model.status.text)
+            }
+        } else if model.options.offline {
+            ContentUnavailableView {
+                Text("Offline. The catalog is empty.")
+            }
+        } else {
+            ContentUnavailableView {
+                Text("The catalog could not be downloaded.")
+            } description: {
+                Text(model.status.text)
+            } actions: {
+                // Not with a store that cannot be opened: a sync would do nothing there.
+                if model.canSync {
+                    Button("Try again") { Task { await model.refresh(rebuild: false) } }
+                }
             }
         }
     }
