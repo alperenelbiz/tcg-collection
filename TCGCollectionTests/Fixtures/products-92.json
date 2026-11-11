@@ -1,0 +1,211 @@
+{
+ "totalItems": 3,
+ "success": true,
+ "errors": [],
+ "results": [
+  {
+   "productId": 719684,
+   "name": "Kerry Eurodyne - The Last Rockerboy",
+   "cleanName": "Kerry Eurodyne The Last Rockerboy",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719684_200w.jpg",
+   "categoryId": 92,
+   "groupId": 24884,
+   "url": "https://www.tcgplayer.com/product/719684/cyberpunk-tcg-night-city-brawl-season-1-kerry-eurodyne-the-last-rockerboy",
+   "modifiedOn": "2026-11-06T05:10:24.397",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-11-06T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "NR"
+    },
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "001"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "[Spend Icon:] If you control a Gig with 8+ value, draw 2."
+    },
+    {
+     "name": "Color",
+     "displayName": "Color",
+     "value": "Red"
+    },
+    {
+     "name": "CardType",
+     "displayName": "Card Type",
+     "value": "Unit"
+    },
+    {
+     "name": "Tags",
+     "displayName": "Tags",
+     "value": "Rocker;Samurai"
+    },
+    {
+     "name": "Cost",
+     "displayName": "Cost",
+     "value": "04"
+    },
+    {
+     "name": "Power",
+     "displayName": "Power",
+     "value": "05"
+    },
+    {
+     "name": "RAM",
+     "displayName": "RAM",
+     "value": "x1"
+    },
+    {
+     "name": "Eddies",
+     "displayName": "Eddies",
+     "value": "FALSE"
+    }
+   ]
+  },
+  {
+   "productId": 719686,
+   "name": "Satori - Sword of Saburo",
+   "cleanName": "Satori Sword of Saburo",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719686_200w.jpg",
+   "categoryId": 92,
+   "groupId": 24884,
+   "url": "https://www.tcgplayer.com/product/719686/cyberpunk-tcg-night-city-brawl-season-1-satori-sword-of-saburo",
+   "modifiedOn": "2026-11-06T05:10:24.397",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-11-06T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "NR"
+    },
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "003"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "<em>(Equip to a friendly Unit or face-up Legend.)</em><br>When this Unit wins a fight against a rival Unit, draw 1."
+    },
+    {
+     "name": "Color",
+     "displayName": "Color",
+     "value": "Red"
+    },
+    {
+     "name": "CardType",
+     "displayName": "Card Type",
+     "value": "Gear"
+    },
+    {
+     "name": "Tags",
+     "displayName": "Tags",
+     "value": "Arasaka;Weapon"
+    },
+    {
+     "name": "Cost",
+     "displayName": "Cost",
+     "value": "02"
+    },
+    {
+     "name": "Power",
+     "displayName": "Power",
+     "value": "2"
+    },
+    {
+     "name": "RAM",
+     "displayName": "RAM",
+     "value": "x1"
+    },
+    {
+     "name": "Eddies",
+     "displayName": "Eddies",
+     "value": "TRUE"
+    }
+   ]
+  },
+  {
+   "productId": 719687,
+   "name": "Jackie Welles - Ride or Die Choom",
+   "cleanName": "Jackie Welles Ride or Die Choom",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719687_200w.jpg",
+   "categoryId": 92,
+   "groupId": 24884,
+   "url": "https://www.tcgplayer.com/product/719687/cyberpunk-tcg-night-city-brawl-season-1-jackie-welles-ride-or-die-choom",
+   "modifiedOn": "2026-11-06T05:10:24.397",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-11-06T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "NR"
+    },
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "004"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "[ATTACK] Give this Unit +2 power this turn for each friendly Gig with an even value.<br>[DEFEATED] Draw 1 for each friendly Gig with an odd value."
+    },
+    {
+     "name": "Color",
+     "displayName": "Color",
+     "value": "Yellow"
+    },
+    {
+     "name": "CardType",
+     "displayName": "Card Type",
+     "value": "Unit"
+    },
+    {
+     "name": "Tags",
+     "displayName": "Tags",
+     "value": "Merc;Valentino"
+    },
+    {
+     "name": "Cost",
+     "displayName": "Cost",
+     "value": "06"
+    },
+    {
+     "name": "Power",
+     "displayName": "Power",
+     "value": "8+"
+    },
+    {
+     "name": "RAM",
+     "displayName": "RAM",
+     "value": "x2"
+    },
+    {
+     "name": "Eddies",
+     "displayName": "Eddies",
+     "value": "FALSE"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,207 @@
+{
+ "totalItems": 5,
+ "success": true,
+ "errors": [],
+ "results": [
+  {
+   "productId": 692977,
+   "name": "Reality Fracture - Prerelease Pack",
+   "cleanName": "Reality Fracture Prerelease Pack",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/692977_200w.jpg",
+   "categoryId": 1,
+   "groupId": 24684,
+   "url": "https://www.tcgplayer.com/product/692977/magic-reality-fracture-reality-fracture-prerelease-pack",
+   "modifiedOn": "2026-09-25T04:10:14.767",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-09-25T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "OracleText",
+     "displayName": "Rules Text Contains",
+     "value": "Prerelease is your players' first opportunity to get their hands on the newest Magic: The Gathering release and explore what the set has to offer. Prerelease Packs contain everything a player needs to be guided through deck building and begin facing off in epic one-on-one matches.\r\n<br>\r\nMore about Reality Fracture\r\n<br>\r\nMastermind mage Jace Beleren has pushed reality to its breaking point. An alternate Multiverse of his own creation threatens to overtake the current one, and just one brave team of heroes stands in the path of oblivion. Be on the lookout for twisted new reflections of Magic' legends as you explore Jace's Echoverse and his inner sanctum within the dystopian school of Hexhaven.\r\n<br>\r\nContents:\r\n<br>• 6 Magic: Reality Fracture Play Boosters\r\n<br>• 1 traditional foil rare/mythic rare card\r\n<br>• Spindown™ life counter"
+    },
+    {
+     "name": "UPC",
+     "displayName": "UPC",
+     "value": "195166337241"
+    }
+   ]
+  },
+  {
+   "productId": 692993,
+   "name": "Chandra, Chill of Compliance",
+   "cleanName": "Chandra Chill of Compliance",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/692993_200w.jpg",
+   "categoryId": 1,
+   "groupId": 24684,
+   "url": "https://www.tcgplayer.com/product/692993/magic-reality-fracture-chandra-chill-of-compliance",
+   "modifiedOn": "2026-10-02T04:11:08.62",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-02T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "M"
+    },
+    {
+     "name": "Number",
+     "displayName": "#",
+     "value": "212"
+    },
+    {
+     "name": "SubType",
+     "displayName": "Creature Type or Sub Type",
+     "value": "Legendary Planeswalker — Chandra"
+    },
+    {
+     "name": "OracleText",
+     "displayName": "Rules Text Contains",
+     "value": "[+1]: Surveil 1. If you put a noncreature, nonland card into your graveyard this way, put that card into your hand.\r\n<br>[+1]: Add U. Spend this mana only to cast a noncreature spell.\r\n<br>[-X]: Tap target artifact or creature. Put X stun counters on it.\r\n<br>[-6]: You get an emblem with \"Whenever you cast a spell, draw a card.\""
+    }
+   ]
+  },
+  {
+   "productId": 692994,
+   "name": "Bloodline Recollector",
+   "cleanName": "Bloodline Recollector",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/692994_200w.jpg",
+   "categoryId": 1,
+   "groupId": 24684,
+   "url": "https://www.tcgplayer.com/product/692994/magic-reality-fracture-bloodline-recollector",
+   "modifiedOn": "2026-10-02T04:11:08.62",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-02T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "M"
+    },
+    {
+     "name": "Number",
+     "displayName": "#",
+     "value": "49"
+    },
+    {
+     "name": "SubType",
+     "displayName": "Creature Type or Sub Type",
+     "value": "Creature — Vampire Warlock"
+    },
+    {
+     "name": "P",
+     "displayName": "P",
+     "value": "2"
+    },
+    {
+     "name": "T",
+     "displayName": "T",
+     "value": "2"
+    },
+    {
+     "name": "OracleText",
+     "displayName": "Rules Text Contains",
+     "value": "At the beginning of each end step, if three or more creatures died this turn, this creature becomes prepared. <em>(While it's prepared, you may cast a copy of its spell. Doing so unprepares it.)</em>\r\n<br><strong>Ancestral Craving</strong> B\r\n<br>Instant\r\n<br>Target player draws three cards and loses 3 life."
+    }
+   ]
+  },
+  {
+   "productId": 692997,
+   "name": "Stingcaster Mage (Borderless) (0329)",
+   "cleanName": "Stingcaster Mage Borderless 0329",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/692997_200w.jpg",
+   "categoryId": 1,
+   "groupId": 24684,
+   "url": "https://www.tcgplayer.com/product/692997/magic-reality-fracture-stingcaster-mage-borderless-0329",
+   "modifiedOn": "2026-10-02T04:11:08.62",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-02T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "M"
+    },
+    {
+     "name": "Number",
+     "displayName": "#",
+     "value": "329"
+    },
+    {
+     "name": "SubType",
+     "displayName": "Creature Type or Sub Type",
+     "value": "Creature — Human Wizard"
+    },
+    {
+     "name": "P",
+     "displayName": "P",
+     "value": "2"
+    },
+    {
+     "name": "T",
+     "displayName": "T",
+     "value": "1"
+    },
+    {
+     "name": "OracleText",
+     "displayName": "Rules Text Contains",
+     "value": "Haste\r\n<br>When this creature enters, target instant or sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost."
+    }
+   ]
+  },
+  {
+   "productId": 706970,
+   "name": "Ajani Resolute (Borderless)",
+   "cleanName": "Ajani Resolute Borderless",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/706970_200w.jpg",
+   "categoryId": 1,
+   "groupId": 24684,
+   "url": "https://www.tcgplayer.com/product/706970/magic-reality-fracture-ajani-resolute-borderless",
+   "modifiedOn": "2026-10-20T04:24:42.573",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": null,
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "M"
+    },
+    {
+     "name": "Number",
+     "displayName": "#",
+     "value": "291"
+    },
+    {
+     "name": "SubType",
+     "displayName": "Creature Type or Sub Type",
+     "value": "Legendary Planeswalker — Ajani"
+    },
+    {
+     "name": "OracleText",
+     "displayName": "Rules Text Contains",
+     "value": "Whenever you gain life, put a loyalty counter on Ajani.<br>\r\n[0]: You gain 1 life.<br>\r\n[-4]: Create a 2/2 white Cat Soldier creature token named Ajani's Pridemate with \"Whenever you gain life, put a +1/+1 counter on this token.\"<br>\r\n[-10]: You get an emblem with \"Creatures you control get +2/+2.\""
+    }
+   ]
+  }
+ ]
+}

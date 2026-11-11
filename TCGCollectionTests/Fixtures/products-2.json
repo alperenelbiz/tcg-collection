@@ -1,0 +1,189 @@
+{
+ "totalItems": 4,
+ "success": true,
+ "errors": [],
+ "results": [
+  {
+   "productId": 711263,
+   "name": "Beyond the Brave Booster Box [1st Edition]",
+   "cleanName": "Beyond the Brave Booster Box 1st Edition",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/711263_200w.jpg",
+   "categoryId": 2,
+   "groupId": 24815,
+   "url": "https://www.tcgplayer.com/product/711263/yugioh-beyond-the-brave-beyond-the-brave-booster-box-1st-edition",
+   "modifiedOn": "2026-10-27T20:49:26.153",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-09T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "Step into the duel with Beyond the Brave, a core booster set that puts fan-favorite icon Joey Wheeler right on the cover. This expansion introduces exciting new cards centered around Dark Time Wizard and the mighty Red-Eyes Black Dragon Exceed. Whether you are hunting for high-end collector rarities or fresh support for classic archetypes like Destiny HERO, this set gives you everything you need to risk it all.<br>\r\nBeyond the Brave Booster Box contains twenty-four, 9 card booster packs."
+    },
+    {
+     "name": "UPC",
+     "displayName": "UPC",
+     "value": "083717872719"
+    }
+   ]
+  },
+  {
+   "productId": 719829,
+   "name": "Token: Joey and Red-Eyes Black Dragon",
+   "cleanName": "Token Joey and Red Eyes Black Dragon",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719829_200w.jpg",
+   "categoryId": 2,
+   "groupId": 24815,
+   "url": "https://www.tcgplayer.com/product/719829/yugioh-beyond-the-brave-token-joey-and-red-eyes-black-dragon",
+   "modifiedOn": "2026-10-09T04:10:22.04",
+   "imageCount": 0,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-09T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "TKN5-EN052"
+    },
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "Super Rare"
+    },
+    {
+     "name": "Card Type",
+     "displayName": "Card Type",
+     "value": "Token"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "This card can be used as any Token."
+    }
+   ]
+  },
+  {
+   "productId": 719834,
+   "name": "Swiftwind Panther Warrior",
+   "cleanName": "Swiftwind Panther Warrior",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719834_200w.jpg",
+   "categoryId": 2,
+   "groupId": 24815,
+   "url": "https://www.tcgplayer.com/product/719834/yugioh-beyond-the-brave-swiftwind-panther-warrior",
+   "modifiedOn": "2026-10-09T04:10:22.04",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-09T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "BETB-EN001"
+    },
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "Super Rare"
+    },
+    {
+     "name": "Attribute",
+     "displayName": "Attribute",
+     "value": "EARTH"
+    },
+    {
+     "name": "MonsterType",
+     "displayName": "Monster Type",
+     "value": "Beast-Warrior"
+    },
+    {
+     "name": "Card Type",
+     "displayName": "Card Type",
+     "value": "Effect Monster"
+    },
+    {
+     "name": "Attack",
+     "displayName": "Attack",
+     "value": "2000"
+    },
+    {
+     "name": "Defense",
+     "displayName": "Defense",
+     "value": "1600"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "Cannot declare an attack unless a monster was Tributed this turn. During the Main Phase, if this card is on the field (Quick Effect): You can Tribute 1 other monster from your hand or field, then activate 1 of these effects;<br />• Special Summon 1 monster that mentions \"Dark Time Wizard\" from your hand or Deck, except \"Swiftwind Panther Warrior\".<br />• Send 1 Spell/Trap that mentions \"Dark Time Wizard\" from your Deck to the GY.<br />You can only use this effect of \"Swiftwind Panther Warrior\" once per turn."
+    }
+   ]
+  },
+  {
+   "productId": 719835,
+   "name": "Swiftwind Panther Warrior (Starlight Rare)",
+   "cleanName": "Swiftwind Panther Warrior Starlight Rare",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719835_200w.jpg",
+   "categoryId": 2,
+   "groupId": 24815,
+   "url": "https://www.tcgplayer.com/product/719835/yugioh-beyond-the-brave-swiftwind-panther-warrior-starlight-rare",
+   "modifiedOn": "2026-10-09T04:10:22.04",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2026-10-09T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "BETB-EN001"
+    },
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "Starlight Rare"
+    },
+    {
+     "name": "Attribute",
+     "displayName": "Attribute",
+     "value": "EARTH"
+    },
+    {
+     "name": "MonsterType",
+     "displayName": "Monster Type",
+     "value": "Beast-Warrior"
+    },
+    {
+     "name": "Card Type",
+     "displayName": "Card Type",
+     "value": "Effect Monster"
+    },
+    {
+     "name": "Attack",
+     "displayName": "Attack",
+     "value": "2000"
+    },
+    {
+     "name": "Defense",
+     "displayName": "Defense",
+     "value": "1600"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "Cannot declare an attack unless a monster was Tributed this turn. During the Main Phase, if this card is on the field (Quick Effect): You can Tribute 1 other monster from your hand or field, then activate 1 of these effects;<br />• Special Summon 1 monster that mentions \"Dark Time Wizard\" from your hand or Deck, except \"Swiftwind Panther Warrior\".<br />• Send 1 Spell/Trap that mentions \"Dark Time Wizard\" from your Deck to the GY.<br />You can only use this effect of \"Swiftwind Panther Warrior\" once per turn."
+    }
+   ]
+  }
+ ]
+}
