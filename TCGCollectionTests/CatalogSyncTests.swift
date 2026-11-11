@@ -77,10 +77,16 @@ struct CatalogSyncTests {
         await rig.fake.failEveryCall(after: 5)                                      // "the network drops"
         let first = await rig.run()
         #expect(first.fetched == 5 && first.failed == 9)
+        // I7: the progress line counts the whole game: sets with products / all sets of the game.
+        #expect(rig.progressLog.last == SyncProgress(gameID: "riftbound", done: 5, total: 14, failed: 9))
+        let firstRunEvents = rig.progressLog.all.count
         await rig.fake.failEveryCall(after: nil); await rig.fake.resetCounts()
         let second = await rig.run()
         #expect(second.fetched == 9); #expect(await rig.fake.productCalls == 9)
         #expect(second.newSets == ["riftbound": 9])
+        let resumed = rig.progressLog.all.dropFirst(firstRunEvents)                 // continues, it does not start at 0
+        #expect(resumed.first == SyncProgress(gameID: "riftbound", done: 6, total: 14, failed: 0))
+        #expect(resumed.last == SyncProgress(gameID: "riftbound", done: 14, total: 14, failed: 0))
     }
 
     @Test func aSetWithAWrongBodyIsSkippedAndCounted() async throws {
