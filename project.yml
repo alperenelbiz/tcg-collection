@@ -1,0 +1,64 @@
+name: TCGCollection
+options:
+  bundleIdPrefix: com.alperenelbiz
+  deploymentTarget:
+    iOS: "27.0"
+    macOS: "27.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+# The signing team comes from the gitignored Config/Local.xcconfig.
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  TCGCollection:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [TCGCollection]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2
+        PRODUCT_NAME: TCGCollection2
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        TARGETED_DEVICE_FAMILY: "1"
+        # The Mac build reads the iCloud Drive folder the user picks; no sandbox keeps that one grant simple.
+        ENABLE_APP_SANDBOX: NO
+        DEVELOPMENT_LANGUAGE: en
+        SWIFT_OBJC_BRIDGING_HEADER: TCGCollection/Prices/libarchive-shim.h
+        OTHER_LDFLAGS: -larchive
+  TCGCollectionTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - TCGCollectionTests
+      - path: TCGCollectionTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: TCGCollection
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.tests
+        # XcodeGen sets the iOS app layout; a Mac app keeps its binary in Contents/MacOS.
+        "TEST_HOST[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/TCGCollection2.app/Contents/MacOS/TCGCollection2
+schemes:
+  TCGCollection:
+    build:
+      targets:
+        TCGCollection: all
+        TCGCollectionTests: [test]
+    test:
+      targets: [TCGCollectionTests]
