@@ -27,9 +27,11 @@ nonisolated enum CatalogReport {
         }
     }
 
-    /// The whole report. Timings come first, before any step reads a whole game.
+    /// The whole report. Timings come first, before any step reads a whole game. They use a store of their
+    /// own on the same container: the open window reads through `store` at the same time, and a serial
+    /// store would put those reads in front of a timed call.
     static func text(store: CatalogStore, prices: [String: GamePrices], ygo: YGOPictureIndex?) async throws -> String {
-        let timings = try await timings(store: store)
+        let timings = try await timings(store: CatalogStore(modelContainer: store.modelContainer))
         var lines: [String] = []
         for game in Games.all {
             // A store of its own per game, so the rows of one game leave memory after its section.

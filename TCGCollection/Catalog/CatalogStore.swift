@@ -25,8 +25,60 @@ nonisolated struct SetProgress: Sendable, Equatable {
     let failed: Int
 }
 
-@ModelActor
-actor CatalogStore {
+/// Runs every job of one `CatalogStore` on that store's own serial queue.
+/// SwiftData's `DefaultSerialModelExecutor` (what `@ModelActor` uses) runs a job on the thread that
+/// calls the store, so a view's call ran on the main thread and froze the window (Task 10 report).
+nonisolated final class CatalogExecutor: SerialModelExecutor, @unchecked Sendable {
+    // Unchecked: `context` is made and used only on `queue`, where every job of the store runs.
+    private let container: ModelContainer
+    private let queue = DispatchSerialQueue(label: "CatalogStore", qos: .userInitiated)
+    private var context: ModelContext?
+
+    init(modelContainer: ModelContainer) {
+        container = modelContainer
+    }
+
+    /// Made on first use, on the queue, so no part of it belongs to the thread that made the store.
+    var modelContext: ModelContext {
+        dispatchPrecondition(condition: .onQueue(queue))
+        if let context { return context }
+        let made = ModelContext(container)
+        context = made
+        return made
+    }
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedSerialExecutor()
+        queue.async { job.runSynchronously(on: executor) }
+    }
+
+    func asUnownedSerialExecutor() -> UnownedSerialExecutor {
+        UnownedSerialExecutor(ordinary: self)
+    }
+
+    func checkIsolated() {
+        dispatchPrecondition(condition: .onQueue(queue))
+    }
+}
+
+/// The catalog in SwiftData. A `ModelActor` written by hand (not `@ModelActor`) so that it can use
+/// `CatalogExecutor`: its work never runs on the caller's thread.
+actor CatalogStore: ModelActor {
+    nonisolated let modelContainer: ModelContainer
+    nonisolated let modelExecutor: any ModelExecutor
+    private nonisolated let executor: CatalogExecutor
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
+
+    /// A store on an existing container: the reader of `AppModel` shares the writer's container.
+    init(modelContainer: ModelContainer) {
+        let executor = CatalogExecutor(modelContainer: modelContainer)
+        self.executor = executor
+        modelExecutor = executor
+        self.modelContainer = modelContainer
+    }
+
     init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let schema = Schema([CatalogSet.self, CatalogProduct.self])

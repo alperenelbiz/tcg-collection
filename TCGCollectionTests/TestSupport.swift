@@ -113,3 +113,8 @@ actor FakeArchive: ArchiveFetching {
         return true
     }
 }
+
+extension CatalogStore {
+    /// True when this store's work runs on the main thread. It must never do (the views call it from the main actor).
+    func runsOnMainThread() -> Bool { Thread.isMainThread }
+}

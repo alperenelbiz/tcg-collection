@@ -153,6 +153,14 @@ struct CatalogStoreTests {
         #expect(try await reader.progress(game: "riftbound") == SetProgress(total: 1, fetched: 1, failed: 0))
     }
 
+    /// The views call the stores from the main actor; the work must still run on each store's own queue.
+    @MainActor @Test func aStoreNeverRunsOnTheMainThread() async throws {
+        let writer = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
+        let reader = CatalogStore(modelContainer: writer.modelContainer)
+        #expect(await writer.runsOnMainThread() == false)
+        #expect(await reader.runsOnMainThread() == false)
+    }
+
     /// The writer is busy with one long set; a read through the reader ends before that write does.
     @Test func aLongWriteDoesNotHoldUpTheReader() async throws {
         let writer = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
