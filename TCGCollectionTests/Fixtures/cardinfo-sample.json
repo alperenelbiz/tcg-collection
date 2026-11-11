@@ -1,0 +1,89 @@
+{
+ "data": [
+  {
+   "id": 80181649,
+   "name": "\"A Case for K9\"",
+   "card_sets": [
+    {
+     "set_code": "JUSH-EN040"
+    },
+    {
+     "set_code": "JUSH-EN040"
+    },
+    {
+     "set_code": "26LP-EN011"
+    },
+    {
+     "set_code": "26LP-EN011"
+    }
+   ],
+   "card_images": [
+    {
+     "id": 80181649
+    }
+   ]
+  },
+  {
+   "id": 46986414,
+   "name": "Dark Magician",
+   "card_sets": [
+    {
+     "set_code": "CT13-EN003"
+    },
+    {
+     "set_code": "CT14-EN001"
+    },
+    {
+     "set_code": "25TH-EN001"
+    },
+    {
+     "set_code": "BPT-001"
+    },
+    {
+     "set_code": "BPT-007"
+    },
+    {
+     "set_code": "DB1-EN102"
+    }
+   ],
+   "card_images": [
+    {
+     "id": 46986414
+    },
+    {
+     "id": 46986415
+    },
+    {
+     "id": 46986416
+    },
+    {
+     "id": 46986417
+    },
+    {
+     "id": 46986418
+    },
+    {
+     "id": 46986419
+    },
+    {
+     "id": 36996508
+    },
+    {
+     "id": 46986420
+    },
+    {
+     "id": 46986421
+    }
+   ]
+  },
+  {
+   "id": 99999001,
+   "name": "Hand Written Promo",
+   "card_images": [
+    {
+     "id": 99999001
+    }
+   ]
+  }
+ ]
+}
