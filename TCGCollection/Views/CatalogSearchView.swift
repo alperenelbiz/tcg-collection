@@ -28,6 +28,8 @@ struct CatalogSearchView: View {
             .navigationTitle(model.game.name)
             .navigationSubtitle(subtitle)
             .searchable(text: $text)
+            .navigationDestination(for: CardSummary.self) { CardPageView(cardKey: $0.id, startProductID: nil) }
+            .navigationDestination(for: CardTarget.self) { CardPageView(cardKey: $0.cardKey, startProductID: $0.startProductID) }
             .toolbar {
                 ToolbarItemGroup {
                     FilterMenu(title: "Set", selection: $filter.groupID, choices: sets.map { ($0.groupID, $0.name) })

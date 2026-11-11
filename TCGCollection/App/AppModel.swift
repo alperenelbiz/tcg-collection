@@ -76,6 +76,9 @@ final class AppModel {
     /// It does not follow the periodic steps of `catalogVersion`: those values come from every product of a game.
     private(set) var filtersVersion = 0
 
+    /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
+    var pendingCard: CardTarget?
+
     private static let gameKey = "game"
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -119,6 +122,7 @@ final class AppModel {
     func start() async {
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
+        await openLaunchCard()
         if let storeFailure {
             status = .failed(storeFailure)
             return
@@ -128,6 +132,14 @@ final class AppModel {
             return
         }
         await sync(rebuild: false)
+    }
+
+    /// `-card <productId>`: switches to the product's game and asks the window to open its card page.
+    private func openLaunchCard() async {
+        guard let id = options.card, let product = try? await store.product(id),
+              let game = Games.game(product.gameID) else { return }
+        gameID = game.id
+        pendingCard = CardTarget(gameID: game.id, cardKey: CardName.searchKey(product.cardName), startProductID: product.productID)
     }
 
     /// Does nothing offline, with a broken store, or while a sync runs.

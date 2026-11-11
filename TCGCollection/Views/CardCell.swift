@@ -28,10 +28,7 @@ struct CardCell: View {
         .buttonStyle(.plain)
     }
 
-    /// `$4.12`; `~$9.50` when only a low price exists; `—` with no price.
     private var priceText: String {
-        guard let shown = model.prices.cheapest(game: summary.cover.gameID, productIDs: summary.productIDs) else { return "—" }
-        let amount = shown.amount.formatted(.currency(code: "USD").locale(Locale(identifier: "en_US")))
-        return shown.isLow ? "~" + amount : amount
+        CardFacts.priceText(model.prices.cheapest(game: summary.cover.gameID, productIDs: summary.productIDs))
     }
 }

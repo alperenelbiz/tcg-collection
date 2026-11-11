@@ -9,24 +9,43 @@ struct RootView: View {
             Sidebar()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
-            NavigationStack {
-                CatalogSearchView(search: model.options.search ?? "")
-                    .toolbar {
-                        ToolbarItem {
-                            Menu("Catalog") {
-                                Button("Refresh") { Task { await model.refresh(rebuild: false) } }
-                                Button("Rebuild catalog…") { confirmRebuild = true }
-                            }
-                            .disabled(model.options.offline || model.status.isSyncing)
-                        }
-                    }
-            }
-            // Search text and filters belong to one game.
-            .id(model.gameID)
+            CatalogStack(gameID: model.gameID, confirmRebuild: $confirmRebuild)
+                // Search text, filters and the open card page belong to one game.
+                .id(model.gameID)
         }
         .confirmationDialog("Download every set again? About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
+        }
+    }
+}
+
+/// The catalog gallery and the card pages pushed on it.
+private struct CatalogStack: View {
+    /// The game this stack belongs to; `RootView` makes a new stack when the game changes.
+    let gameID: String
+    @Binding var confirmRebuild: Bool
+    @Environment(AppModel.self) private var model
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            CatalogSearchView(search: model.options.search ?? "")
+                .toolbar {
+                    ToolbarItem {
+                        Menu("Catalog") {
+                            Button("Refresh") { Task { await model.refresh(rebuild: false) } }
+                            Button("Rebuild catalog…") { confirmRebuild = true }
+                        }
+                        .disabled(model.options.offline || model.status.isSyncing)
+                    }
+                }
+        }
+        .task(id: model.pendingCard) {
+            // The stack of the old game is still alive for a moment: only the new one takes the card.
+            guard let card = model.pendingCard, card.gameID == gameID else { return }
+            model.pendingCard = nil
+            path.append(card)
         }
     }
 }
