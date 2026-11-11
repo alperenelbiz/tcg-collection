@@ -34,4 +34,27 @@ struct GameDefinitionTests {
         #expect(Games.all.map(\.keptBrackets) == [[], ["Skill Card"], [], []])
         #expect(Games.all.map(\.wholeNames) == [["Erase (Not the Urza's Legacy One)"], [], [], []])
     }
+    @Test func enchantCreatureIsOnlyAnEnchantment() {
+        #expect(Games.game("magic-the-gathering")!.typeFacets("Enchant Creature") == ["Enchantment"])
+    }
+    @Test func basics() {
+        let m = Games.game("magic-the-gathering")!, r = Games.game("riftbound")!, y = Games.game("yu-gi-oh")!
+        #expect(m.isBasicCard(cardKey: "forest 0276 full art", cardType: "Basic Land — Forest"))
+        #expect(m.isBasicCard(cardKey: "snow covered island", cardType: "Basic Snow Land — Island"))
+        #expect(!m.isBasicCard(cardKey: "dryad arbor", cardType: "Land Creature — Forest Dryad"))
+        #expect(m.isBasicPrinting(product(game: "magic-the-gathering", name: "Forest (0276) - Full Art", cardType: "Basic Land — Forest")))
+        #expect(r.isBasicCard(cardKey: "calm rune", cardType: "Rune")); #expect(!r.isBasicCard(cardKey: "rune prison", cardType: "Spell"))
+        #expect(r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune", cardType: "Rune")))
+        #expect(!r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune (R02a)", cardType: "Rune")))
+        #expect(!r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune (A)", cardType: "Rune")))
+        #expect(!y.isBasicCard(cardKey: "forest", cardType: "Basic Land — Forest"))
+    }
+    @Test func noFacetsForAnEmptyType() {
+        for game in Games.all { #expect(game.typeFacets("").isEmpty); #expect(game.typeFacets("  ").isEmpty) }
+    }
+    @Test func basicSettingsPerGame() {
+        #expect(Games.all.map(\.altArtBasicsAreNormal) == [false, false, true, false])
+        #expect(Games.all.map(\.basicNames.count) == [0, 0, 6, 0])
+        #expect(Games.game("riftbound")!.basicNames.contains("body rune"))
+    }
 }

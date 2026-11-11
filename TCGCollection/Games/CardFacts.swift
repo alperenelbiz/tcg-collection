@@ -18,24 +18,17 @@ nonisolated enum CardFacts {
             let value = (product.fields[name] ?? "").trimmingCharacters(in: .whitespaces)
             return value.isEmpty ? nil : value
         }
-        func stat(_ label: String, _ name: String) -> CardStat? {
-            field(name).map { CardStat(label: label, value: $0) }
-        }
-        switch game.id {
-        case "magic-the-gathering":
-            guard field("P") != nil || field("T") != nil else { return [] }
-            return [CardStat(label: "P/T", value: "\(field("P") ?? "–")/\(field("T") ?? "–")")]
-        case "yu-gi-oh":
-            return [stat("Attribute", "Attribute"), stat("Type", "MonsterType"), stat("ATK", "Attack"),
-                    stat("DEF", "Defense"), stat("Link", "LinkRating")].compactMap { $0 }
-        case "riftbound":
-            return [stat("Domain", "Domain"), stat("Energy", "Energy Cost"), stat("Power", "Power Cost"),
-                    stat("Might", "Might"), stat("Tag", "Tag")].compactMap { $0 }
-        case "cyberpunk":
-            let eddies = field("Eddies").map { CardStat(label: "Eddies", value: $0.lowercased() == "true" ? "Yes" : "No") }
-            return [stat("Color", "Color"), stat("Cost", "Cost"), stat("Power", "Power"), stat("RAM", "RAM"), eddies].compactMap { $0 }
-        default:
-            return []
+        return game.stats.compactMap { stat in
+            let values = stat.fields.map(field)
+            switch stat.format {
+            case .text:
+                return values[0].map { CardStat(label: stat.label, value: $0) }
+            case .pair:
+                guard values.contains(where: { $0 != nil }) else { return nil }
+                return CardStat(label: stat.label, value: values.map { $0 ?? "–" }.joined(separator: "/"))
+            case .yesNo:
+                return values[0].map { CardStat(label: stat.label, value: $0.lowercased() == "true" ? "Yes" : "No") }
+            }
         }
     }
 
