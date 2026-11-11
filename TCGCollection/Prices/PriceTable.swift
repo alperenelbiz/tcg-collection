@@ -49,4 +49,9 @@ final class PriceTable {
     }
 
     func day(game: String) -> String? { games[game]?.day }
+
+    #if DEBUG
+    /// Every game's table, for the catalog report.
+    var allGames: [String: GamePrices] { games }
+    #endif
 }

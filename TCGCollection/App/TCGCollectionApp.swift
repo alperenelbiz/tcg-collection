@@ -19,7 +19,12 @@ struct TCGCollectionApp: App {
                 RootView()
                     .environment(model)
                     .preferredColorScheme(.dark)
-                    .task { await model.start() }
+                    .task {
+                        await model.start()
+                        #if DEBUG
+                        if model.options.catalogReport { await Self.printCatalogReport(model) }
+                        #endif
+                    }
                     .task {
                         #if DEBUG && os(macOS)
                         await DebugSnapshot.runIfAsked(model.options)
@@ -28,4 +33,18 @@ struct TCGCollectionApp: App {
             }
         }
     }
+
+    #if DEBUG
+    /// `-catalogReport YES`: the report goes to standard output, then the app quits.
+    private static func printCatalogReport(_ model: AppModel) async {
+        let text: String
+        do {
+            text = try await CatalogReport.text(store: model.reader, prices: model.prices.allGames, ygo: model.ygoIndex)
+        } catch {
+            text = "catalog report failed: \(error)\n"
+        }
+        FileHandle.standardOutput.write(Data(text.utf8))
+        exit(0)
+    }
+    #endif
 }
