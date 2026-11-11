@@ -22,17 +22,20 @@ actor CallLog {
 }
 
 /// Answers every request with one body, or with a body chosen per URL; counts the calls.
+/// The first `networkErrors` calls throw a transport error instead, as with no network.
 actor FakeFetcher: DataFetching {
     private let body: Data
     private let status: Int
     private let bodies: [URL: Data]
     private let log: CallLog?
+    private var networkErrors: Int
     private(set) var calls = 0
 
-    init(body: Data = Data(), status: Int = 200, bodies: [URL: Data] = [:], log: CallLog? = nil) {
+    init(body: Data = Data(), status: Int = 200, bodies: [URL: Data] = [:], networkErrors: Int = 0, log: CallLog? = nil) {
         self.body = body
         self.status = status
         self.bodies = bodies
+        self.networkErrors = networkErrors
         self.log = log
     }
 
@@ -40,6 +43,10 @@ actor FakeFetcher: DataFetching {
         calls += 1
         await log?.add("fetch \(url.lastPathComponent)")
         try await Task.sleep(for: .milliseconds(50))
+        if networkErrors > 0 {
+            networkErrors -= 1
+            throw URLError(.notConnectedToInternet)
+        }
         return (bodies[url] ?? body, status)
     }
 }

@@ -19,6 +19,16 @@ struct PictureStoreTests {
         #expect(await store.data(for: url) == nil); #expect(await store.data(for: url) == nil); #expect(await fake.calls == 1)
     }
 
+    /// I3: Wi-Fi off, then on again. A thrown error is not remembered: the next call tries again and gets the picture.
+    @Test func aNetworkErrorIsNotRemembered() async {
+        let fake = FakeFetcher(body: Data(repeating: 7, count: 5000), networkErrors: 1)
+        let store = PictureStore(directory: tempDir(), fetcher: fake)
+        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/3_200w.jpg")!
+        #expect(await store.data(for: url) == nil)
+        #expect(await store.data(for: url)?.count == 5000)
+        #expect(await fake.calls == 2)
+    }
+
     @Test func aTinyBodyIsRejected() async {
         let fake = FakeFetcher(body: Data(repeating: 1, count: 500)); let store = PictureStore(directory: tempDir(), fetcher: fake)
         #expect(await store.data(for: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/2_200w.jpg")!) == nil)

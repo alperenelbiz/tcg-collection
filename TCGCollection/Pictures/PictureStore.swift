@@ -20,7 +20,9 @@ nonisolated struct URLSessionFetcher: DataFetching {
 actor PictureStore {
     nonisolated let directory: URL
     private let fetcher: any DataFetching
-    private var inFlight: [URL: Task<Data?, Never>] = [:]
+    /// A task's value is nil for a bad HTTP answer; it throws when no answer came (no network).
+    private var inFlight: [URL: Task<Data?, any Error>] = [:]
+    /// URLs with a bad HTTP answer: not asked again in this run. A thrown error is not remembered.
     private var failed: Set<URL> = []
 
     init(directory: URL, fetcher: any DataFetching) {
@@ -32,21 +34,26 @@ actor PictureStore {
         let file = fileURL(for: url)
         if let cached = try? Data(contentsOf: file) { return cached }
         if failed.contains(url) { return nil }
-        if let running = inFlight[url] { return await running.value }
+        if let running = inFlight[url] { return try? await running.value }
         let fetcher = fetcher
         let directory = directory
-        let task = Task<Data?, Never> {
-            guard let (body, status) = try? await fetcher.data(from: url),
-                  status == 200, body.count > 1_000 else { return nil }
+        let task = Task<Data?, any Error> {
+            let (body, status) = try await fetcher.data(from: url)
+            guard status == 200, body.count > 1_000 else { return nil }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? body.write(to: file, options: .atomic)
             return body
         }
         inFlight[url] = task
-        let result = await task.value
+        let result = await task.result
         inFlight[url] = nil
-        if result == nil { failed.insert(url) }
-        return result
+        switch result {
+        case .success(let body):
+            if body == nil { failed.insert(url) }
+            return body
+        case .failure:
+            return nil
+        }
     }
 
     /// `<host>-<last two path components>`, so `cards_small/1.jpg` and `cards/1.jpg` differ.
