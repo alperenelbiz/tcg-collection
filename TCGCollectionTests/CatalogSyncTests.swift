@@ -104,6 +104,18 @@ struct CatalogSyncTests {
         #expect(await rig.fake.productCalls == 0)
     }
 
+    /// I1: a cancelled run stops starting sets and marks none failed: a cancelled fetch says nothing about the set.
+    @Test(.timeLimit(.minutes(1))) func aCancelledRunMarksNoSetFailed() async throws {
+        let rig = try await Rig()
+        let run = Task { await rig.run() }
+        while await rig.fake.productCalls == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        run.cancel()
+        let result = await run.value
+        #expect(try await rig.store.progress(game: "riftbound").failed == 0)
+        #expect(result.failed == 0)
+        #expect(await rig.fake.productCalls < 14)                                   // no set was started after the cancel
+    }
+
     @Test func neverMoreThanFourRequestsAtOnce() async throws {
         let rig = try await Rig()
         _ = await rig.run()

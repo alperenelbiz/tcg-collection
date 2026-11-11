@@ -55,6 +55,19 @@ struct AppModelTests {
         #expect(await log.entries == ["groups 89", "archive 2026-01-02", "groups 1", "groups 2", "groups 92", "fetch cardinfo.php"])
     }
 
+    /// I1: the sync belongs to the model, not to a window. The first window closes while the sync runs (its task is
+    /// cancelled); a new window's `start()` waits for that same sync instead of starting a second one.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSecondStartWhileOneRunsStartsNoSecondSync() async throws {
+        let model = model(["app", "-store", tempRoot().path])
+        let firstWindow = Task { await model.start() }
+        while await fakeCatalog.groupCalls == 0 { try await Task.sleep(for: .milliseconds(2)) }
+        firstWindow.cancel()                                                         // the window closes
+        await model.start()                                                          // a new window opens
+        #expect(await fakeCatalog.groupCalls == 4)                                   // one set list per game: one sync
+        #expect(try await model.store.progress(game: "riftbound") == SetProgress(total: 14, fetched: 14, failed: 0))
+        #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()
@@ -68,7 +81,7 @@ struct AppModelTests {
         await model.start()
         #expect(model.prices.day(game: "riftbound") == "2026-01-02")
         today = Self.day2                                                            // the fake hands out not-an-archive.7z
-        await model.start()
+        await model.refresh(rebuild: false)                                          // start() runs once per app run
         #expect(await fakeArchive.calls == ["2026-01-02", "2026-01-03"])
         #expect(model.prices.day(game: "riftbound") == "2026-01-02")
         if case .failed(let text) = model.status { #expect(text.hasPrefix("Prices:")) } else { Issue.record("no failure shown") }

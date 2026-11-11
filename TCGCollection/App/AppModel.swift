@@ -93,6 +93,9 @@ final class AppModel {
     /// Set when the catalog store could not be opened: the app then runs on an empty temporary store and downloads nothing.
     @ObservationIgnored private let storeFailure: String?
     @ObservationIgnored private var isRunning = false
+    /// The launch steps and the first sync, made by the first `start()`. The model owns it, not a window: a window
+    /// that closes cancels its own `.task`, not this one.
+    @ObservationIgnored private var launchTask: Task<Void, Never>?
 
     init(options: LaunchOptions, catalogClient: any TCGCSVFetching, archiveClient: any ArchiveFetching,
          fetcher: any DataFetching, now: @escaping () -> Date = { Date() }) {
@@ -123,8 +126,14 @@ final class AppModel {
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
     }
 
-    /// Loads prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`).
+    /// Loads prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`). Once per app run:
+    /// every window calls it, and a later call waits for the same work.
     func start() async {
+        if launchTask == nil { launchTask = Task { await launch() } }
+        await launchTask?.value
+    }
+
+    private func launch() async {
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()

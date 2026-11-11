@@ -20,6 +20,7 @@ struct TCGCollectionApp: App {
                     .environment(model)
                     .preferredColorScheme(.dark)
                     .task {
+                        // Every window calls it; the model runs the sync once, and a closing window does not stop it.
                         await model.start()
                         #if DEBUG
                         if model.options.catalogReport { await Self.printCatalogReport(model) }

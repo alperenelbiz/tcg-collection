@@ -46,6 +46,8 @@ actor CatalogSync {
         var fetched = 0, failed = 0
         var newSets: [String: Int] = [:]
         for game in games {
+            // A cancelled sync stops: the sets it did not reach are not failed, only not fetched yet.
+            if Task.isCancelled { break }
             guard let plan = await plan(for: game, now: now, rebuild: rebuild) else {
                 failed += 1
                 continue
@@ -54,17 +56,23 @@ actor CatalogSync {
             let total = plan.due.count
             // At most `maxConcurrent` child tasks are alive: a new one starts when one ends.
             // Fetch and parse run in the children; the store is written here, one set at a time.
-            await withTaskGroup(of: (Int, [ProductRecord]?).self) { group in
+            // A cancelled group (the sync's task was cancelled) starts no new child.
+            await withTaskGroup(of: (Int, Fetch).self) { group in
                 var pending = plan.due.makeIterator()
                 func startNext() {
                     guard let groupID = pending.next() else { return }
                     let client = self.client
-                    group.addTask { (groupID, await Self.fetchCards(groupID, game: game, client: client)) }
+                    _ = group.addTaskUnlessCancelled { (groupID, await Self.fetchCards(groupID, game: game, client: client)) }
                 }
                 for _ in 0..<Self.maxConcurrent { startNext() }
-                while let (groupID, cards) = await group.next() {
+                while let (groupID, fetch) = await group.next() {
+                    if case .cancelled = fetch {
+                        // The set stays as it was: a cancelled fetch says nothing about it.
+                        group.cancelAll()
+                        continue
+                    }
                     var stored = false
-                    if let cards {
+                    if case .cards(let cards) = fetch {
                         stored = (try? await store.replaceProducts(of: groupID, with: cards, at: now)) != nil
                     }
                     if !stored { try? await store.markFailed(groupID) }
@@ -98,13 +106,26 @@ actor CatalogSync {
         }
     }
 
-    /// The cards of one set, or nil when the fetch or the parse fails. Zero cards is a success.
-    private static func fetchCards(_ groupID: Int, game: GameDefinition, client: any TCGCSVFetching) async -> [ProductRecord]? {
+    /// What the fetch of one set gave.
+    private enum Fetch: Sendable {
+        /// Zero cards is a success.
+        case cards([ProductRecord])
+        /// The fetch or the parse failed: the set is marked failed.
+        case failed
+        /// The task was cancelled (`CancellationError`, `URLError.cancelled`).
+        case cancelled
+    }
+
+    private static func fetchCards(_ groupID: Int, game: GameDefinition, client: any TCGCSVFetching) async -> Fetch {
         do {
             let body = try await client.products(category: game.categoryID, group: groupID)
-            return try ProductParser.products(body, game: game).cards
+            return .cards(try ProductParser.products(body, game: game).cards)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as URLError where error.code == .cancelled {
+            return .cancelled
         } catch {
-            return nil
+            return .failed
         }
     }
 }
