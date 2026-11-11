@@ -6,3 +6,4 @@ xcuserdata/
 *.xcodeproj/
 Config/Local.xcconfig
 .superpowers/
+.taste-skill/
