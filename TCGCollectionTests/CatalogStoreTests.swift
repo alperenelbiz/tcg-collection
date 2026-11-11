@@ -31,6 +31,7 @@ struct CatalogStoreTests {
         let s = try await filledStore()
         let hits = try await s.search(game: "yu-gi-oh", text: "swiftwind panther", filter: .init(), limit: 50)
         #expect(hits.count == 1); #expect(hits[0].printings == 2)
+        #expect(Set(hits[0].productIDs) == [719834, 719835])
         let printings = try await s.printings(game: "yu-gi-oh", cardKey: hits[0].id)
         #expect(printings.count == hits[0].printings)
         #expect(Set(printings.map(\.productID)) == [719834, 719835])

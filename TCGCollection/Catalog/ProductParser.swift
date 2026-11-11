@@ -8,7 +8,7 @@ nonisolated struct SetRecord: Sendable, Equatable {
     let publishedOn: Date?
 }
 
-nonisolated struct ProductRecord: Sendable, Equatable {
+nonisolated struct ProductRecord: Sendable, Hashable {
     let productID: Int
     let gameID: String
     let groupID: Int

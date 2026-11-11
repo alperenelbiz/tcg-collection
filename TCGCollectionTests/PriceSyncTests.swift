@@ -2,19 +2,12 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
-actor FakeArchive: ArchiveFetching {
-    private(set) var calls: [String] = []
-    func download(day: String, to file: URL) async throws -> Bool {
-        calls.append(day)
-        guard day == "2026-01-02" else { return false }
-        try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"), to: file)
-        return true
-    }
-}
-
 struct PriceSyncTests {
-    let fake = FakeArchive()
+    let fake: FakeArchive
     let paths = AppPaths(root: tempRoot())
+    // An actor made in a stored-property initializer, when the actor is declared in another file, breaks the
+    // module emit of Xcode 27.0 ("'nonisolated' modifier cannot be applied to this declaration").
+    init() { fake = FakeArchive() }
     var sync: PriceSync { PriceSync(paths: paths, client: fake) }
 
     @Test func wantedDayFollowsThePublishTime() {

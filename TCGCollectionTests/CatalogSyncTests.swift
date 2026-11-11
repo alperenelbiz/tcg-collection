@@ -2,44 +2,6 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
-private actor FakeClient: TCGCSVFetching {
-    private let groupsBody: Data
-    private let productsBody: Data
-    private var bodies: [Int: Data] = [:]
-    private var failAfter: Int?
-    private var started = 0
-    private var running = 0
-    private(set) var productCalls = 0
-    private(set) var maxConcurrent = 0
-    private(set) var groupCalls = 0
-    private var groupsFail = false
-
-    init(groups: Data, products: Data) { groupsBody = groups; productsBody = products }
-
-    func failEveryCall(after count: Int?) { failAfter = count; started = 0 }
-    func resetCounts() { productCalls = 0; started = 0; maxConcurrent = 0 }
-    func setBody(_ data: Data, forGroup group: Int) { bodies[group] = data }
-    func failGroups(_ fail: Bool) { groupsFail = fail }
-
-    func groups(category: Int) async throws -> Data {
-        groupCalls += 1
-        if groupsFail { throw TCGCSVClientError(status: 500) }
-        return groupsBody
-    }
-
-    func products(category: Int, group: Int) async throws -> Data {
-        productCalls += 1
-        started += 1
-        let index = started
-        running += 1
-        maxConcurrent = max(maxConcurrent, running)
-        defer { running -= 1 }
-        try await Task.sleep(for: .milliseconds(5))
-        if let failAfter, index > failAfter { throw TCGCSVClientError(status: 503) }
-        return bodies[group] ?? productsBody
-    }
-}
-
 private final class ProgressLog: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [SyncProgress] = []
@@ -51,7 +13,7 @@ private final class ProgressLog: @unchecked Sendable {
 private struct Rig {
     let sync: CatalogSync
     let store: CatalogStore
-    let fake: FakeClient
+    let fake: FakeCatalog
     let riftbound = Games.game("riftbound")!
     let now = TCGDate.date("2026-11-11T10:00:00")!
     let progressLog = ProgressLog()
@@ -59,7 +21,7 @@ private struct Rig {
     init(products: Data? = nil) async throws {
         let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
         store = try CatalogStore(url: url)
-        fake = FakeClient(groups: try fixture("groups-89.json"), products: try products ?? fixture("products-89.json"))
+        fake = FakeCatalog(groups: try fixture("groups-89.json"), products: try products ?? fixture("products-89.json"))
         sync = CatalogSync(store: store, client: fake)
     }
 

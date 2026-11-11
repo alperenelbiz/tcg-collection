@@ -7,13 +7,16 @@ nonisolated struct CardFilter: Sendable, Equatable {
     var typeFacet: String?
 }
 
-nonisolated struct CardSummary: Sendable, Identifiable, Equatable {
+nonisolated struct CardSummary: Sendable, Identifiable, Hashable {
     /// The card key: all printings of one card share it.
     let id: String
     let name: String
     /// The printing from the newest set.
     let cover: ProductRecord
-    let printings: Int
+    /// Every printing that passed the filter, for the cheapest price.
+    let productIDs: [Int]
+
+    var printings: Int { productIDs.count }
 }
 
 nonisolated struct SetProgress: Sendable, Equatable {
@@ -128,7 +131,8 @@ actor CatalogStore {
         var offset = 0
         func closeCard() {
             guard let cover = currentPrintings.max(by: { Self.older($0, than: $1, dates: publishDates) }) else { return }
-            cards.append(CardSummary(id: currentKey, name: cover.cardName, cover: cover, printings: currentPrintings.count))
+            cards.append(CardSummary(id: currentKey, name: cover.cardName, cover: cover,
+                                     productIDs: currentPrintings.map(\.productID)))
             currentPrintings = []
         }
         scan: while true {
