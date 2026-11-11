@@ -41,7 +41,17 @@ struct CatalogSyncTests {
         let today = TCGDate.date("2026-11-11T01:00:00")!, yesterday = TCGDate.date("2026-11-10T23:00:00")!
         let dates = [1: yesterday, 2: yesterday, 3: today, 5: yesterday]            // 4 was never fetched
         #expect(SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: false) == [2, 4, 5])
-        #expect(SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: true) == [1, 2, 3, 4, 5])
+        #expect(SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: true) == [1, 2, 4, 5])   // 3: fetched today
+    }
+
+    /// I4: "Rebuild catalog" fetches every set that was not fetched today (UTC), so a second rebuild that day fetches none.
+    @Test func aSecondRebuildTheSameDayFetchesNoSetAgain() async throws {
+        let rig = try await Rig()
+        _ = await rig.run(rebuild: true)
+        await rig.fake.resetCounts()
+        let second = await rig.run(rebuild: true, at: rig.now.addingTimeInterval(3600))
+        #expect(await rig.fake.productCalls == 0)
+        #expect(second == SyncResult(fetched: 0, failed: 0, newSets: [:]))
     }
 
     @Test func firstRunFillsTheStoreAndReportsProgress() async throws {
@@ -85,7 +95,7 @@ struct CatalogSyncTests {
         let rig = try await Rig()
         _ = await rig.run()
         await rig.fake.setBody(Data(#"{"success":false,"errors":["x"],"results":[]}"#.utf8), forGroup: 24819)
-        let result = await rig.run(rebuild: true)
+        let result = await rig.run(rebuild: true, at: rig.now.addingTimeInterval(86_400))   // the next day: every set is due
         #expect(result.fetched == 13 && result.failed == 1)
         #expect(try await rig.store.product(721334) != nil)                         // the old products stay
     }

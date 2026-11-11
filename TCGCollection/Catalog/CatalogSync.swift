@@ -20,15 +20,16 @@ nonisolated struct SyncResult: Sendable, Equatable {
 nonisolated enum SyncPlan {
     private static let recentDays = 90.0
 
-    /// The group ids to fetch, in the order of `sets` (D5).
+    /// The group ids to fetch, in the order of `sets` (D5). No set is fetched twice in one day (UTC), not even by a
+    /// rebuild: `rebuild` fetches every set that was not fetched today.
     static func due(sets: [SetRecord], fetchDates: [Int: Date], now: Date, rebuild: Bool) -> [Int] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return sets.filter { set in
-            if rebuild { return true }
             guard let fetched = fetchDates[set.groupID] else { return true }
-            let isRecent = set.publishedOn.map { now.timeIntervalSince($0) < recentDays * 86_400 } ?? true
-            return isRecent && !calendar.isDate(fetched, inSameDayAs: now)
+            if calendar.isDate(fetched, inSameDayAs: now) { return false }
+            if rebuild { return true }
+            return set.publishedOn.map { now.timeIntervalSince($0) < recentDays * 86_400 } ?? true
         }.map(\.groupID)
     }
 }

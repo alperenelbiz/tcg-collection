@@ -13,7 +13,7 @@ struct RootView: View {
                 // Search text, filters and the open card page belong to one game.
                 .id(model.gameID)
         }
-        .confirmationDialog("Download every set again? About 1,100 requests and 190 MB.",
+        .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
         }
