@@ -109,23 +109,43 @@ final class CatalogFlowTests: UITestCase {
         shot("12-card-after-scroll")
     }
 
-    /// Final review I1: the sync belongs to the model, so closing the window does not stop it. The fixture sync often
-    /// ends before Cmd+W (the log line "status line at close" says which); then this checks only that a new window shows
-    /// the model's finished sync. `AppModelTests.aSecondStartWhileOneRunsStartsNoSecondSync` covers a close during a sync.
+    /// Final review I1: the sync belongs to the model, so closing the window during a download does not stop it.
+    /// `-fixtureDelay 1200`: each set answers after 1.2 s, 4 at a time. Riftbound (14 sets, 4 rounds) comes first,
+    /// then the prices, then Magic, Yu-Gi-Oh! and Cyberpunk (1 set, 1 round each): about 8.4 s in all.
     func testWindowCloseKeepsTheSync() {
-        let app = launch(game: "riftbound")
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
-        // The fixture sync is short: the log says whether it still ran when the window closed.
-        XCTContext.runActivity(named: "status line at close: \(text(app.staticTexts["status-line"]))") { _ in }
-        app.typeKey("w", modifierFlags: .command)
+        let app = launch(game: "riftbound", extra: ["-fixtureDelay", "1200"])
+        let status = app.staticTexts["status-line"]
+        // Every status line read, in order: none may say "failed" or "cancelled".
+        var seen: [String] = []
+        func read() -> String {
+            let line = status.exists ? text(status) : ""
+            if seen.last != line { seen.append(line) }
+            return line
+        }
+        // A running download shows a set count, for example "Riftbound: 4 / 14 sets".
+        let counting = { (line: String) in line.range(of: #"\d+ / \d+ sets"#, options: .regularExpression) != nil }
+        XCTAssertTrue(waitUntil(timeout: 15) { counting(read()) }, "no download seen: \(seen)")
+        let atClose = read()
+        XCTContext.runActivity(named: "close the window at \"\(atClose)\"") { _ in
+            XCTAssertTrue(counting(atClose), "the sync was not running at Cmd+W: \(atClose)")
+            app.typeKey("w", modifierFlags: .command)
+        }
         XCTAssertTrue(waitUntil { app.windows.count == 0 })
         app.menuBars.menuBarItems["File"].click()
         app.menuBars.menuItems["New Window"].click()
-        let status = app.staticTexts["status-line"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
-        XCTAssertTrue(waitUntilSynced(app), text(status))
-        XCTAssertFalse(text(status).contains("failed")); XCTAssertFalse(text(status).contains("cancelled"))
-        shot("13-new-window")
+        shot("13-new-window-during-sync")
+        let ended = waitUntil(timeout: 30) { read().hasPrefix("Catalog up to date") }
+        XCTContext.runActivity(named: "status lines seen: \(seen)") { _ in
+            XCTAssertTrue(ended, "the sync did not end")
+            XCTAssertFalse(seen.contains { $0.contains("failed") || $0.contains("cancelled") })
+        }
+        // Cyberpunk was downloaded after the window had closed.
+        element(app, "game-picker").click()
+        XCTAssertTrue(app.menuItems["Cyberpunk TCG"].firstMatch.waitForExistence(timeout: 5))
+        app.menuItems["Cyberpunk TCG"].firstMatch.click()
+        XCTAssertTrue(element(app, "card-cell-kerry eurodyne the last rockerboy").waitForExistence(timeout: 10))
+        shot("13-new-window-synced")
     }
 
     func testEmptyOfflineCatalog() {

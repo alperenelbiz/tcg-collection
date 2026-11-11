@@ -18,6 +18,11 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-fixtures", "/tmp/f"]).fixtures?.path == "/tmp/f")
         #expect(LaunchOptions(arguments: ["app"]).fixtures == nil)
     }
+    @Test func parsesTheFixtureDelayFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "1200"]).fixtureDelay == 1200)
+        #expect(LaunchOptions(arguments: ["app"]).fixtureDelay == nil)
+        #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "soon"]).fixtureDelay == nil)
+    }
     /// A Debug run without `-store` uses its own folders, never the installed app's store.
     @Test func aDebugBuildWithoutARootHasItsOwnFolders() {
         let folders = AppPaths.systemFolders()

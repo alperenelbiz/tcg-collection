@@ -12,6 +12,9 @@ nonisolated struct LaunchOptions: Sendable {
     var catalogReport = false
     /// `-fixtures <dir>` (DEBUG): the network is served from the files in this folder.
     var fixtures: URL?
+    /// `-fixtureDelay <milliseconds>` (DEBUG): every fixture products answer waits this long, so a UI test can act
+    /// during a sync.
+    var fixtureDelay: Int?
 
     init(arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -26,5 +29,6 @@ nonisolated struct LaunchOptions: Sendable {
         snapshot = value("-snapshot").map { URL(fileURLWithPath: $0) }
         catalogReport = value("-catalogReport") == "YES"
         fixtures = value("-fixtures").map { URL(fileURLWithPath: $0, isDirectory: true) }
+        fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
     }
 }

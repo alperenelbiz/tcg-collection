@@ -17,7 +17,8 @@ struct TCGCollectionApp: App {
         if let fixtures = options.fixtures {
             // Fixture data goes only into a store of its own, never into the default one.
             if options.storeRoot != nil {
-                return AppModel(options: options, catalogClient: FileCatalogClient(directory: fixtures),
+                let catalog = FileCatalogClient(directory: fixtures, productsDelay: .milliseconds(options.fixtureDelay ?? 0))
+                return AppModel(options: options, catalogClient: catalog,
                                 archiveClient: FileArchiveClient(directory: fixtures), fetcher: FileFetcher(directory: fixtures))
             }
             FileHandle.standardOutput.write(Data("-fixtures is ignored: it needs -store <dir>\n".utf8))

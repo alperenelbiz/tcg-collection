@@ -9,13 +9,16 @@ import Foundation
 /// of that category. A missing file throws.
 nonisolated struct FileCatalogClient: TCGCSVFetching {
     let directory: URL
+    /// `-fixtureDelay`: each products answer waits this long first (a cancelled task stops waiting and throws).
+    var productsDelay: Duration = .zero
 
     func groups(category: Int) async throws -> Data {
         try Data(contentsOf: directory.appending(path: "groups-\(category).json"))
     }
 
     func products(category: Int, group: Int) async throws -> Data {
-        try Data(contentsOf: directory.appending(path: "products-\(category).json"))
+        if productsDelay > .zero { try await Task.sleep(for: productsDelay) }
+        return try Data(contentsOf: directory.appending(path: "products-\(category).json"))
     }
 }
 

@@ -14,6 +14,21 @@ struct FixtureNetworkTests {
         }
     }
 
+    /// `-fixtureDelay`: only the products answer waits, and the wait ends when its task is cancelled.
+    @Test func aDelayHoldsOnlyTheProductsAnswerAndIsCancellable() async throws {
+        let client = FileCatalogClient(directory: fixturesDirectory(), productsDelay: .milliseconds(300))
+        let clock = ContinuousClock()
+        var start = clock.now
+        _ = try await client.groups(category: 92)
+        #expect(clock.now - start < .milliseconds(300))
+        start = clock.now
+        _ = try await client.products(category: 92, group: 24884)
+        #expect(clock.now - start >= .milliseconds(300))
+        let cancelled = Task { try await client.products(category: 92, group: 24884) }
+        cancelled.cancel()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+    }
+
     @Test func archiveClientAnswersAnyDayWithItsFile() async throws {
         let file = URL.temporaryDirectory.appending(path: UUID().uuidString + ".7z")
         #expect(try await FileArchiveClient(directory: fixturesDirectory()).download(day: "2030-05-05", to: file))
