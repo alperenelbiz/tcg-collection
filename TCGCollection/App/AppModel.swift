@@ -17,6 +17,8 @@ nonisolated enum Status: Equatable, Sendable {
 
 nonisolated enum StatusText {
     static let checking = "Checking the catalog…"
+    /// The store file could not be opened; it was moved aside and the sync fills a fresh one.
+    static let storeRecovered = "The catalog could not be read and is downloaded again."
     static let prices = "Updating prices…"
     static let ygoIndex = "Updating Yu-Gi-Oh! pictures…"
 
@@ -97,8 +99,11 @@ final class AppModel {
     @ObservationIgnored private let priceSync: PriceSync
     @ObservationIgnored private let ygoLoader: YGOIndexLoader
     @ObservationIgnored private let now: () -> Date
-    /// Set when the catalog store could not be opened: the app then runs on an empty temporary store and downloads nothing.
+    /// Set when no catalog store could be opened, not even a fresh one: the app then runs on an empty store in memory
+    /// and downloads nothing.
     @ObservationIgnored private let storeFailure: String?
+    /// The status of the first catalog check. After a store was moved aside it says so, until the first set is in.
+    @ObservationIgnored private var checkingText = StatusText.checking
     @ObservationIgnored private var isRunning = false
     /// The launch steps and the first sync, made by the first `start()`. The model owns it, not a window: a window
     /// that closes cancels its own `.task`, not this one.
@@ -110,15 +115,9 @@ final class AppModel {
         self.now = now
         let paths = AppPaths(root: options.storeRoot)
         self.paths = paths
-        do {
-            store = try CatalogStore(url: paths.catalogStore)
-            storeFailure = nil
-        } catch {
-            // Phase 1 has no error screen: the status line says it, and nothing is downloaded into the temporary store.
-            let temporary = URL.temporaryDirectory.appending(path: "TCGCollection2-\(UUID().uuidString)/catalog.store")
-            store = try! CatalogStore(url: temporary)
-            storeFailure = "Catalog: the store cannot be opened (\(Self.describe(error)))"
-        }
+        let opened = Self.openStore(paths: paths, now: now())
+        store = opened.store
+        storeFailure = opened.failure
         reader = CatalogStore(modelContainer: store.modelContainer)
         pictures = PictureStore(directory: paths.pictures, fetcher: options.offline ? NoNetwork() : fetcher)
         ygoLoader = YGOIndexLoader(paths: paths, fetcher: fetcher)
@@ -131,6 +130,39 @@ final class AppModel {
             : UserDefaults(suiteName: paths.support.appending(path: "preferences").path) ?? .standard
         let saved = defaults.string(forKey: Self.gameKey)
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
+        if opened.movedAside {
+            status = .idle(StatusText.storeRecovered)
+            checkingText = StatusText.storeRecovered
+        }
+    }
+
+    /// Opens the catalog store. A store that cannot be opened is moved aside into `unreadable-<date>` and a fresh one
+    /// is made at the normal path. When that fails too, the store lives in memory and `failure` says why.
+    private nonisolated static func openStore(paths: AppPaths, now: Date)
+        -> (store: CatalogStore, movedAside: Bool, failure: String?) {
+        if let store = try? CatalogStore(url: paths.catalogStore) { return (store, false, nil) }
+        do {
+            try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
+            return (try CatalogStore(url: paths.catalogStore), true, nil)
+        } catch {
+            do {
+                return (try CatalogStore.inMemory(), false, "Catalog: the store cannot be opened (\(describe(error)))")
+            } catch {
+                // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
+                fatalError("The catalog schema cannot be loaded: \(error)")
+            }
+        }
+    }
+
+    /// Moves a SwiftData store file and its `-wal` and `-shm` files (those that exist) into `folder`.
+    private nonisolated static func moveAside(_ file: URL, into folder: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        for suffix in ["", "-wal", "-shm"] {
+            let part = URL(fileURLWithPath: file.path + suffix)
+            guard fm.fileExists(atPath: part.path) else { continue }
+            try fm.moveItem(at: part, to: folder.appending(path: part.lastPathComponent))
+        }
     }
 
     /// Loads prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`). Once per app run:
@@ -198,7 +230,8 @@ final class AppModel {
     }
 
     private func syncCatalog(of games: [GameDefinition], now: Date, rebuild: Bool) async -> SyncResult {
-        status = .syncing(StatusText.checking)
+        status = .syncing(checkingText)
+        checkingText = StatusText.checking
         // A stream keeps the progress lines in order and ends before the step's result is used.
         let (updates, sink) = AsyncStream.makeStream(of: SyncProgress.self)
         async let result = Self.run(catalogSync, games: games, now: now, rebuild: rebuild, reportingTo: sink)

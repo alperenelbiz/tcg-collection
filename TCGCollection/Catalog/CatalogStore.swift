@@ -86,6 +86,13 @@ actor CatalogStore: ModelActor {
         self.init(modelContainer: container)
     }
 
+    /// An empty store that lives in memory only: the last fallback when no store file can be opened. It needs no disk.
+    static func inMemory() throws -> CatalogStore {
+        let schema = Schema([CatalogSet.self, CatalogProduct.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        return CatalogStore(modelContainer: try ModelContainer(for: schema, configurations: configuration))
+    }
+
     // MARK: Sets
 
     /// Adds new sets and updates the others. A set keeps its `fetchedAt` and `failed`.

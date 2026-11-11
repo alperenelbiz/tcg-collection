@@ -102,6 +102,40 @@ struct AppModelTests {
         if case .failed(let text) = model.status { #expect(text.hasPrefix("Prices:")) } else { Issue.record("no failure shown") }
     }
 
+    /// I6: a store file that cannot be read is moved aside into `unreadable-<date>`; a fresh store at the normal path
+    /// is filled by the sync.
+    @MainActor @Test func anUnreadableStoreIsMovedAsideAndDownloadedAgain() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try Data("not a database".utf8).write(to: paths.catalogStore)
+        let model = model(["app", "-store", root.path])
+        #expect(model.status == .idle("The catalog could not be read and is downloaded again."))
+        let aside = try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }
+        let folder = try #require(aside.first)
+        #expect(aside.count == 1)
+        #expect(try String(contentsOf: paths.support.appending(path: "\(folder)/catalog.store"), encoding: .utf8) == "not a database")
+        await model.start()
+        #expect(try await model.store.progress(game: "riftbound").fetched == 14)
+        #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
+    }
+
+    /// I6: when no fresh store can be made either (here: the support folder cannot be written), the store lives in
+    /// memory, the status says so, and nothing is downloaded.
+    @MainActor @Test func aStoreThatCannotBeMadeRunsInMemoryWithTheSyncOff() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try Data("not a database".utf8).write(to: paths.catalogStore)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: paths.support.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.support.path) }
+        let model = model(["app", "-store", root.path])
+        #expect(model.canSync == false)
+        await model.start()
+        if case .failed(let text) = model.status { #expect(text.hasPrefix("Catalog: the store cannot be opened")) } else { Issue.record("no failure shown") }
+        #expect(await fakeCatalog.groupCalls == 0)
+        try await model.store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)   // the store in memory works
+        #expect(try await model.reader.product(1) != nil)
+    }
+
     @MainActor @Test func theChosenGameIsRemembered() {
         let root = tempRoot().path
         let first = model(["app", "-store", root])
