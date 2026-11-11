@@ -1,10 +1,10 @@
 import Foundation
 @testable import TCGCollection2
 
-func product(id: Int = 1, game: String = "riftbound", name: String = "Card", number: String = "",
+func product(id: Int = 1, game: String = "riftbound", groupID: Int = 1, name: String = "Card", number: String = "",
              rarity: String = "", cardType: String = "", fields: [String: String] = [:]) -> ProductRecord {
     let cardName = CardName.base(name)
-    return ProductRecord(productID: id, gameID: game, groupID: 1, name: name, cardName: cardName,
+    return ProductRecord(productID: id, gameID: game, groupID: groupID, name: name, cardName: cardName,
                          searchKey: CardName.searchKey(cardName), number: number, rarity: rarity,
                          cardType: cardType, typeFacets: [], rulesText: "", url: "", fields: fields)
 }

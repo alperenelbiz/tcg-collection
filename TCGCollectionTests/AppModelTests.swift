@@ -41,6 +41,8 @@ struct AppModelTests {
         let model = model(["app", "-store", tempRoot().path])
         await model.start()
         #expect(try await model.store.progress(game: "riftbound").fetched == 14)
+        #expect(model.reader !== model.store)                                    // the views read through their own store
+        #expect(try await model.reader.progress(game: "riftbound").fetched == 14)
         #expect(model.prices.day(game: "riftbound") == "2026-01-02"); #expect(model.ygoIndex != nil)
         #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
         #expect(model.catalogVersion > 0)

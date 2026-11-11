@@ -136,7 +136,7 @@ struct CardPageView: View {
     }
 
     private func load() async {
-        let store = model.store, game = model.gameID, key = cardKey
+        let store = model.reader, game = model.gameID, key = cardKey
         let found = (try? await store.printings(game: game, cardKey: key)) ?? []
         let sets = (try? await store.sets(game: game)) ?? []
         setNames = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })

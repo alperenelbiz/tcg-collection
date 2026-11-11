@@ -135,6 +135,42 @@ struct CatalogStoreTests {
         #expect(try await s.progress(game: "riftbound").failed == 1)
     }
 
+    /// The views read through a second store on the writer's container (AppModel.reader).
+    @Test func aReaderOnTheWritersContainerSeesWhatTheWriterSavedLater() async throws {
+        let writer = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
+        let reader = CatalogStore(modelContainer: writer.modelContainer)
+        func set(_ name: String) -> SetRecord {
+            SetRecord(groupID: 7, gameID: "riftbound", name: name, abbreviation: "", publishedOn: nil)
+        }
+        #expect(try await reader.product(1) == nil)                        // the reader has read before the writer saves
+        try await writer.upsertSets([set("Old name")])
+        #expect(try await reader.sets(game: "riftbound").map(\.name) == ["Old name"])
+        try await writer.replaceProducts(of: 7, with: [product(id: 1, groupID: 7, name: "Calm Rune", cardType: "Rune")], at: .now)
+        try await writer.upsertSets([set("New name")])
+        #expect(try await reader.product(1)?.cardName == "Calm Rune")
+        #expect(try await reader.search(game: "riftbound", text: "calm", filter: .init(), limit: 5).map(\.name) == ["Calm Rune"])
+        #expect(try await reader.sets(game: "riftbound").map(\.name) == ["New name"])   // a row read before is not stale
+        #expect(try await reader.progress(game: "riftbound") == SetProgress(total: 1, fetched: 1, failed: 0))
+    }
+
+    /// The writer is busy with one long set; a read through the reader ends before that write does.
+    @Test func aLongWriteDoesNotHoldUpTheReader() async throws {
+        let writer = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
+        try await writer.replaceProducts(of: 1, with: [product(id: 1, name: "Calm Rune", cardType: "Rune")], at: .now)
+        let reader = CatalogStore(modelContainer: writer.modelContainer)
+        let many = (2...20_001).map { product(id: $0, groupID: 2, name: "Card \($0)", cardType: "Unit") }
+        let write = Task {
+            try await writer.replaceProducts(of: 2, with: many, at: .now)
+            return ContinuousClock.now
+        }
+        try await Task.sleep(for: .milliseconds(20))                       // the write has started
+        let found = try await reader.product(1)
+        let readEnded = ContinuousClock.now
+        let writeEnded = try await write.value
+        #expect(found?.cardName == "Calm Rune")
+        #expect(readEnded < writeEnded)
+    }
+
     @Test func eraseAllEmptiesTheStore() async throws {
         let s = try await filledStore()
         try await s.eraseAll()

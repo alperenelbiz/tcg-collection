@@ -53,7 +53,11 @@ nonisolated enum StatusText {
 final class AppModel {
     let options: LaunchOptions
     let paths: AppPaths
+    /// The sync writes through this store.
     let store: CatalogStore
+    /// The views read through this store: a second actor on the same container, so a running download
+    /// does not hold up a search or a card page.
+    let reader: CatalogStore
     let prices = PriceTable()
     let pictures: PictureStore
     var ygoIndex: YGOPictureIndex?
@@ -105,6 +109,7 @@ final class AppModel {
             store = try! CatalogStore(url: temporary)
             storeFailure = "Catalog: the store cannot be opened (\(Self.describe(error)))"
         }
+        reader = CatalogStore(modelContainer: store.modelContainer)
         pictures = PictureStore(directory: paths.pictures, fetcher: options.offline ? NoNetwork() : fetcher)
         ygoLoader = YGOIndexLoader(paths: paths, fetcher: fetcher)
         priceSync = PriceSync(paths: paths, client: archiveClient)
@@ -136,7 +141,7 @@ final class AppModel {
 
     /// `-card <productId>`: switches to the product's game and asks the window to open its card page.
     private func openLaunchCard() async {
-        guard let id = options.card, let product = try? await store.product(id),
+        guard let id = options.card, let product = try? await reader.product(id),
               let game = Games.game(product.gameID) else { return }
         gameID = game.id
         pendingCard = CardTarget(gameID: game.id, cardKey: CardName.searchKey(product.cardName), startProductID: product.productID)

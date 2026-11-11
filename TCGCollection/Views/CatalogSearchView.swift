@@ -79,8 +79,8 @@ struct CatalogSearchView: View {
         guard !Task.isCancelled else { return }
         let game = model.gameID
         // One card more than shown tells whether there are more.
-        let found = (try? await model.store.search(game: game, text: text, filter: filter, limit: Self.limit + 1)) ?? []
-        let empty = found.isEmpty ? (try? await model.store.progress(game: game))?.fetched == 0 : false
+        let found = (try? await model.reader.search(game: game, text: text, filter: filter, limit: Self.limit + 1)) ?? []
+        let empty = found.isEmpty ? (try? await model.reader.progress(game: game))?.fetched == 0 : false
         guard !Task.isCancelled else { return }
         cards = Array(found.prefix(Self.limit))
         hasMore = found.count > Self.limit
@@ -88,7 +88,7 @@ struct CatalogSearchView: View {
     }
 
     private func loadFilterChoices() async {
-        let game = model.gameID, store = model.store
+        let game = model.gameID, store = model.reader
         sets = (try? await store.sets(game: game)) ?? []
         rarities = (try? await store.rarities(game: game)) ?? []
         types = (try? await store.typeFacets(game: game)) ?? []
