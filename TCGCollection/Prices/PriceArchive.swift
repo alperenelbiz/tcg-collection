@@ -60,7 +60,8 @@ nonisolated enum PriceArchive {
         var buffer = [UInt8](repeating: 0, count: 1 << 16)
         var code = archive_read_next_header(archive, &entry)
         while code == 0 {
-            let path = String(cString: archive_entry_pathname(entry))
+            // An entry with no path (NULL) matches nothing and is skipped below.
+            let path = archive_entry_pathname(entry).map { String(cString: $0) } ?? ""
             let parts = path.split(separator: "/")
             if parts.count == 4, parts[3] == "prices",
                let category = Int(parts[1]), categories.contains(category), let group = Int(parts[2]) {
@@ -95,8 +96,8 @@ nonisolated enum PriceArchive {
         _ = archive_read_support_filter_all(archive)
         guard archive_read_open_filename(archive, file.path, 1 << 16) == 0 else { return nil }
         var entry: OpaquePointer?
-        guard archive_read_next_header(archive, &entry) == 0 else { return nil }
-        let first = String(cString: archive_entry_pathname(entry)).split(separator: "/").first.map(String.init)
+        guard archive_read_next_header(archive, &entry) == 0, let pathname = archive_entry_pathname(entry) else { return nil }
+        let first = String(cString: pathname).split(separator: "/").first.map(String.init)
         guard let first, first.count == 10, first.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) != nil else { return nil }
         return first
     }
