@@ -22,4 +22,16 @@ struct GameDefinitionTests {
         #expect(y.typeFacets("Counter Trap") == ["Trap"]); #expect(y.typeFacets("Token") == ["Token"])
         #expect(r.typeFacets("Champion Unit") == ["Champion Unit"]); #expect(m.typeFacets("") == [])
     }
+    @Test func aCardHasATypeOrANumberAndARarity() {
+        let y = Games.game("yu-gi-oh")!
+        #expect(y.isCard(fields: ["Card Type": "Effect Monster"]))
+        #expect(y.isCard(fields: ["Number": "TP3-001", "Rarity": "Ultra Rare"]))
+        #expect(!y.isCard(fields: ["Number": "TP3-001"])); #expect(!y.isCard(fields: ["Rarity": "Ultra Rare"]))
+        #expect(!y.isCard(fields: ["Number": " ", "Rarity": "Ultra Rare"])); #expect(!y.isCard(fields: ["UPC": "123"]))
+        #expect(!y.isCard(fields: [:]))
+    }
+    @Test func bracketExceptionsPerGame() {
+        #expect(Games.all.map(\.keptBrackets) == [[], ["Skill Card"], [], []])
+        #expect(Games.all.map(\.wholeNames) == [["Erase (Not the Urza's Legacy One)"], [], [], []])
+    }
 }

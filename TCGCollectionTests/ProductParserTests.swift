@@ -59,6 +59,19 @@ struct ProductParserTests {
         #expect(cards.first { $0.productID == 706970 }?.cardName == "Ajani Resolute")
     }
 
+    @Test func aProductWithNumberAndRarityButNoTypeIsKept() throws {
+        let inlineBody = Data("""
+        {"success":true,"errors":[],"results":[
+        {"productId":1,"name":"Promo Dragon","groupId":7,"url":"https://example.test/1","imageUrl":null,
+         "extendedData":[{"name":"Number","value":"TP3-001"},{"name":"Rarity","value":"Ultra Rare"}]},
+        {"productId":2,"name":"Sealed Box","groupId":7,"url":"https://example.test/2","imageUrl":null,
+         "extendedData":[{"name":"UPC","value":"123"}]}
+        ],"totalItems":2}
+        """.utf8)
+        let (cards, dropped) = try ProductParser.products(inlineBody, game: Games.game("yu-gi-oh")!)
+        #expect(cards.count == 1 && dropped == 1); #expect(cards[0].cardType == "" && cards[0].typeFacets.isEmpty)
+        #expect(cards[0].number == "TP3-001")
+    }
     @Test func everyFieldIsKept() throws {
         let (cards, _) = try ProductParser.products(fixture("products-1.json"), game: Games.game("magic-the-gathering")!)
         let creature = try #require(cards.first { $0.productID == 692994 })

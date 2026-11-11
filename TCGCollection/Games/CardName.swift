@@ -1,11 +1,17 @@
 import Foundation
 
 nonisolated enum CardName {
-    /// The product name without every trailing bracket group, such as `(Borderless) (0329)` or
-    /// `[1st Edition]`. A name that is only a bracket, or has the bracket in the middle, stays whole.
-    static func base(_ productName: String) -> String {
+    /// The product name without its trailing bracket groups, such as `(Borderless) (0329)` or
+    /// `[1st Edition]`. Removal stops at a group whose text is in `game.keptBrackets` (any case).
+    /// A name in `game.wholeNames`, a name that is only a bracket, or a bracket in the middle stays whole.
+    static func base(_ productName: String, game: GameDefinition) -> String {
         var name = productName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !game.wholeNames.contains(name) else { return name }
+        let kept = game.keptBrackets.map { $0.lowercased() }
         while let start = trailingGroupStart(name) {
+            let inner = name[name.index(after: start)..<name.index(before: name.endIndex)]
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            if kept.contains(inner) { break }
             let rest = name[..<start].trimmingCharacters(in: .whitespaces)
             guard !rest.isEmpty else { break }
             name = rest

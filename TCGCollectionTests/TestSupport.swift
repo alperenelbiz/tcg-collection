@@ -3,7 +3,7 @@ import Foundation
 
 func product(id: Int = 1, game: String = "riftbound", groupID: Int = 1, name: String = "Card", number: String = "",
              rarity: String = "", cardType: String = "", fields: [String: String] = [:]) -> ProductRecord {
-    let cardName = CardName.base(name)
+    let cardName = CardName.base(name, game: Games.game(game)!)
     return ProductRecord(productID: id, gameID: game, groupID: groupID, name: name, cardName: cardName,
                          searchKey: CardName.searchKey(cardName), number: number, rarity: rarity,
                          cardType: cardType, typeFacets: [], rulesText: "", url: "", fields: fields)

@@ -43,7 +43,7 @@ nonisolated enum ProductParser {
         }
     }
 
-    /// Keeps the products that have a card type. Every other product (boxes, packs, bundles) counts in `dropped`.
+    /// Keeps the products that are cards (see `GameDefinition.isCard`). Every other product (boxes, packs, bundles) counts in `dropped`.
     static func products(_ data: Data, game: GameDefinition) throws -> (cards: [ProductRecord], dropped: Int) {
         let products = try results(TCGProduct.self, in: data)
         var cards: [ProductRecord] = []
@@ -52,11 +52,11 @@ nonisolated enum ProductParser {
             // When a field name appears twice, the first one wins.
             let fields = Dictionary(product.extendedData.map { ($0.name, $0.value) }, uniquingKeysWith: { first, _ in first })
             let cardType = (fields[game.typeField] ?? "").trimmingCharacters(in: .whitespaces)
-            guard !cardType.isEmpty else {
+            guard game.isCard(fields: fields) else {
                 dropped += 1
                 continue
             }
-            let cardName = CardName.base(product.name)
+            let cardName = CardName.base(product.name, game: game)
             cards.append(ProductRecord(
                 productID: product.productId, gameID: game.id, groupID: product.groupId,
                 name: product.name, cardName: cardName, searchKey: CardName.searchKey(cardName),
