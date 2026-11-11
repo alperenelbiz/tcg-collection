@@ -105,7 +105,8 @@ struct CardPageView: View {
             }
             if printings.count > 1 {
                 Divider()
-                otherPrintings(printings, game: game)
+                // Text selection would take the touches of the rows from their buttons.
+                otherPrintings(printings, game: game).textSelection(.disabled)
             }
         }
         .textSelection(.enabled)
