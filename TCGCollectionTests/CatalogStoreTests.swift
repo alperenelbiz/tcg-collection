@@ -82,6 +82,31 @@ struct CatalogStoreTests {
         #expect(try await s.printings(game: "riftbound", cardKey: "twin").first?.groupID == newest.groupID)
     }
 
+    @Test func searchPagesAcrossBatches() async throws {
+        let s = try await filledStore()
+        func record(_ id: Int, _ name: String) -> ProductRecord {
+            ProductRecord(productID: id, gameID: "riftbound", groupID: 24819, name: name, cardName: name,
+                          searchKey: CardName.searchKey(name), number: "", rarity: "", cardType: "Unit",
+                          typeFacets: ["Unit"], rulesText: "", url: "", fields: [:])
+        }
+        // Key order with productID: ant(1) ant(2) ant(3) | bee(4) bee(5) | cat red(6) cat red(7) | dog(8)
+        // With batchSize 2 the batches are [1,2] [3,4] [5,6] [7,8]: ant and bee and cat red all straddle a boundary.
+        let rows = [record(1, "Zz Ant"), record(2, "Zz Ant"), record(3, "Zz Ant"), record(4, "Zz Bee"),
+                    record(5, "Zz Bee"), record(6, "Zz Cat Red"), record(7, "Zz Cat Red"), record(8, "Zz Dog")]
+        try await s.replaceProducts(of: 24819, with: rows, at: .now)
+
+        let all = try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 50, batchSize: 2)
+        #expect(all.map(\.name) == ["Zz Ant", "Zz Bee", "Zz Cat Red", "Zz Dog"])
+        #expect(all.map(\.printings) == [3, 2, 2, 1])
+
+        let two = try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 2, batchSize: 2)   // stops mid-scan
+        #expect(two.map(\.name) == ["Zz Ant", "Zz Bee"]); #expect(two.map(\.printings) == [3, 2])
+
+        let words = try await s.search(game: "riftbound", text: "zz red", filter: .init(), limit: 50, batchSize: 2)   // extra word in memory
+        #expect(words.map(\.name) == ["Zz Cat Red"]); #expect(words[0].printings == 2)
+        #expect(try await s.search(game: "riftbound", text: "zz", filter: .init(), limit: 50) == all)   // same as default batch
+    }
+
     @Test func productLookupKeepsEveryField() async throws {
         let s = try await filledStore()
         let (cards, _) = try ProductParser.products(fixture("products-1.json"), game: Games.game("magic-the-gathering")!)

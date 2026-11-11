@@ -24,9 +24,6 @@ nonisolated struct SetProgress: Sendable, Equatable {
 
 @ModelActor
 actor CatalogStore {
-    /// How many products one search fetch reads. Search stops reading once it has `limit` complete cards.
-    private static let batchSize = 400
-
     init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let schema = Schema([CatalogSet.self, CatalogProduct.self])
@@ -99,8 +96,9 @@ actor CatalogStore {
 
     /// Cards that match every word of `text`, sorted by card key (the folded name), `limit` cards at most.
     /// A card's printings are only those that pass `filter`.
-    func search(game: String, text: String, filter: CardFilter, limit: Int) throws -> [CardSummary] {
-        guard limit > 0 else { return [] }
+    /// `batchSize` is how many products one fetch reads; search stops reading once it has `limit` complete cards.
+    func search(game: String, text: String, filter: CardFilter, limit: Int, batchSize: Int = 400) throws -> [CardSummary] {
+        guard limit > 0, batchSize > 0 else { return [] }
         let words = CardName.searchKey(text).split(separator: " ").map(String.init)
         let first = words.first ?? ""
         let others = Array(words.dropFirst())
@@ -118,7 +116,7 @@ actor CatalogStore {
                     && (!useFacet || $0.facetText.contains(facet))
             },
             sortBy: [SortDescriptor(\.cardKey), SortDescriptor(\.productID)])
-        descriptor.fetchLimit = Self.batchSize
+        descriptor.fetchLimit = batchSize
 
         let publishDates = Dictionary(
             try setRows(game: game).compactMap { row in row.publishedOn.map { (row.groupID, $0) } },
@@ -145,7 +143,7 @@ actor CatalogStore {
                 }
                 currentPrintings.append(product.record)
             }
-            if batch.count < Self.batchSize { break }
+            if batch.count < batchSize { break }
             offset += batch.count
         }
         if cards.count < limit { closeCard() }
