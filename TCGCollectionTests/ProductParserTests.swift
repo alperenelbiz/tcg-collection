@@ -96,4 +96,12 @@ struct ProductParserTests {
         #expect(throws: (any Error).self) { try ProductParser.products(xml, game: Games.game("riftbound")!) }
         #expect(throws: (any Error).self) { try ProductParser.products(Data(), game: Games.game("riftbound")!) }
     }
+
+    @Test func aBodyWithSuccessFalseThrows() throws {
+        let body = Data(#"{"success":false,"errors":["boom"],"results":[]}"#.utf8)
+        #expect(throws: ProductParserError.unsuccessful) { try ProductParser.sets(body, game: Games.game("riftbound")!) }
+        #expect(throws: ProductParserError.unsuccessful) { try ProductParser.products(body, game: Games.game("riftbound")!) }
+        let fine = Data(#"{"success":true,"errors":[],"results":[],"totalItems":0}"#.utf8)
+        #expect(try ProductParser.products(fine, game: Games.game("riftbound")!).cards.isEmpty)
+    }
 }

@@ -2,6 +2,8 @@ import Foundation
 
 /// A tcgcsv response: `{"success":…,"errors":[…],"results":[…],"totalItems":…}`.
 nonisolated struct TCGResults<T: Decodable & Sendable>: Decodable, Sendable {
+    /// Absent counts as fine; `false` means the body is an error answer.
+    let success: Bool?
     let results: [T]
 }
 

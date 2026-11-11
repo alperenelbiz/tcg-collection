@@ -24,9 +24,20 @@ nonisolated struct ProductRecord: Sendable, Equatable {
     let fields: [String: String]
 }
 
+nonisolated enum ProductParserError: Error, Equatable {
+    /// The body says `"success":false`: its `results` cannot be trusted, even when empty.
+    case unsuccessful
+}
+
 nonisolated enum ProductParser {
+    private static func results<T: Decodable & Sendable>(_ type: T.Type, in data: Data) throws -> [T] {
+        let body = try JSONDecoder().decode(TCGResults<T>.self, from: data)
+        guard body.success != false else { throw ProductParserError.unsuccessful }
+        return body.results
+    }
+
     static func sets(_ data: Data, game: GameDefinition) throws -> [SetRecord] {
-        try JSONDecoder().decode(TCGResults<TCGGroup>.self, from: data).results.map {
+        try results(TCGGroup.self, in: data).map {
             SetRecord(groupID: $0.groupId, gameID: game.id, name: $0.name,
                       abbreviation: $0.abbreviation ?? "", publishedOn: TCGDate.date($0.publishedOn))
         }
@@ -34,7 +45,7 @@ nonisolated enum ProductParser {
 
     /// Keeps the products that have a card type. Every other product (boxes, packs, bundles) counts in `dropped`.
     static func products(_ data: Data, game: GameDefinition) throws -> (cards: [ProductRecord], dropped: Int) {
-        let products = try JSONDecoder().decode(TCGResults<TCGProduct>.self, from: data).results
+        let products = try results(TCGProduct.self, in: data)
         var cards: [ProductRecord] = []
         var dropped = 0
         for product in products {
