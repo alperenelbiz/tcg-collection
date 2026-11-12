@@ -24,4 +24,15 @@ struct CSVTextTests {
         #expect(CSVText.text(Data([0x63, 0x61, 0x66, 0xE9])) == "café")          // Windows-1252 é
         #expect(CSVText.text(Data()) == "")
     }
+
+    @Test func textFallsBackToLatin1ForUndefinedWindows1252Bytes() {
+        #expect(CSVText.text(Data([0x61, 0x81, 0x62])) == "a\u{81}b")
+    }
+
+    @Test func anUnterminatedQuoteIsReportedWithItsLine() {
+        let scan = CSVText.scan("h\n1,\"abc\n2,x\n3,y")
+        #expect(scan.records.map(\.cells) == [["h"]] && scan.unterminatedQuoteAt == 2)
+        let ok = CSVText.scan("h\n1,\"a\"\"b\" c\n2,x")
+        #expect(ok.unterminatedQuoteAt == nil && ok.records.count == 3)
+    }
 }

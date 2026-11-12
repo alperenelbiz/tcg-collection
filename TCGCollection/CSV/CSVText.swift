@@ -14,14 +14,19 @@ nonisolated enum CSVText {
         records(text).map(\.cells)
     }
 
-    /// The text of a file: UTF-8 (with or without a BOM), else Windows-1252. Nil when neither fits.
+    /// The text of a file: UTF-8 (with or without a BOM), then Windows-1252, then ISO Latin-1 (which fits every byte).
     static func text(_ data: Data) -> String? {
         String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252)
+            ?? String(data: data, encoding: .isoLatin1)
     }
 
     /// Like `rows`, with the physical line each record starts on (a quoted line break counts as a line).
     /// One pass over the UTF-8 bytes.
-    static func records(_ text: String) -> [Record] {
+    static func records(_ text: String) -> [Record] { scan(text).records }
+
+    /// The records, and the physical line where a quote was opened and never closed (nil when every quote closes).
+    /// The record with the open quote is not in `records`: it would swallow the rest of the file.
+    static func scan(_ text: String) -> (records: [Record], unterminatedQuoteAt: Int?) {
         let bytes = Array(text.utf8)
         let quote = UInt8(ascii: "\""), comma = UInt8(ascii: ","), lf = UInt8(ascii: "\n"), cr = UInt8(ascii: "\r")
         var records: [Record] = []
@@ -31,6 +36,7 @@ nonisolated enum CSVText {
         var cellQuoted = false          // the current cell opened with a quote
         var rowQuoted = false           // any cell of the record used quotes
         var line = 1
+        var quoteLine = 1
         var recordLine = 1
         var i = 0
         if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { i = 3 }
@@ -60,7 +66,7 @@ nonisolated enum CSVText {
                     if b == lf { line += 1 } else if b == cr, !(i + 1 < bytes.count && bytes[i + 1] == lf) { line += 1 }
                 }
             } else if b == quote, cell.isEmpty, !cellQuoted {
-                inQuotes = true; cellQuoted = true; rowQuoted = true
+                inQuotes = true; cellQuoted = true; rowQuoted = true; quoteLine = line
             } else if b == comma {
                 endCell()
             } else if b == lf || b == cr {
@@ -72,7 +78,8 @@ nonisolated enum CSVText {
             }
             i += 1
         }
+        if inQuotes { return (records, quoteLine) }
         if !cell.isEmpty || !cells.isEmpty || rowQuoted { endRecord(nextLine: line) }
-        return records
+        return (records, nil)
     }
 }

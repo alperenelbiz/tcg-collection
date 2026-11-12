@@ -52,10 +52,24 @@ nonisolated enum CollectionImport {
 
     private static func compare(game: GameDefinition, lines: [CSVLine], rows: [CollectionRow],
                                 known: (Int) -> ProductRecord?) -> ImportComparison {
+        var owned: [PrintingKey: CollectionRow] = [:]
+        for row in rows where owned[row.key] == nil { owned[row.key] = row }
+        // Finish spellings per product: the collection's first, then the first one seen in the file (case-insensitive).
+        var spellings: [Int: [String]] = [:]
+        for row in rows { spellings[row.productID, default: []].append(row.finish) }
+        func finish(_ line: CSVLine) -> String {
+            if let same = spellings[line.productID]?.first(where: { $0.caseInsensitiveCompare(line.finish) == .orderedSame }) { return same }
+            spellings[line.productID, default: []].append(line.finish)
+            return line.finish
+        }
+
+        var listed: Set<PrintingKey> = []           // every printing the file names, imported or not
         var notRecognised: [SkippedLine] = []
         var ignoredBasics: [SkippedLine] = []
         var printings: [PrintingKey: Printing] = [:]
         for line in lines {
+            let key = PrintingKey(productID: line.productID, finish: finish(line))
+            listed.insert(key)
             guard let product = known(line.productID), product.gameID == game.id else {
                 notRecognised.append(SkippedLine(line: line.line, name: line.name, reason: "not in the catalog"))
                 continue
@@ -64,28 +78,26 @@ nonisolated enum CollectionImport {
                 ignoredBasics.append(SkippedLine(line: line.line, name: line.name, reason: "basic rune"))
                 continue
             }
-            let key = PrintingKey(productID: line.productID, finish: line.finish)
             var entry = printings[key] ?? Printing(name: product.name)
-            entry.count += line.quantity
+            entry.count = min(entry.count + min(line.quantity, CollectionCSV.maxQuantity), CollectionCSV.maxQuantity)
             if !line.condition.isEmpty, !entry.conditions.contains(line.condition) { entry.conditions.append(line.condition) }
             printings[key] = entry
         }
-
-        var owned: [PrintingKey: CollectionRow] = [:]
-        for row in rows where owned[row.key] == nil { owned[row.key] = row }
 
         var new: [ImportComparison.Change] = [], changed: [ImportComparison.Change] = []
         for (key, entry) in printings {
             let condition = entry.conditions.joined(separator: ", ")
             if let row = owned[key] {
                 if row.count != entry.count {
-                    changed.append(.init(key: key, name: entry.name, old: row.count, new: entry.count, condition: condition))
+                    changed.append(.init(key: key, name: entry.name, old: row.count, new: entry.count,
+                                         condition: condition.isEmpty ? row.condition : condition))
                 }
             } else {
                 new.append(.init(key: key, name: entry.name, old: 0, new: entry.count, condition: condition))
             }
         }
-        let missing = owned.values.filter { printings[$0.key] == nil }
+        // A file the catalog cannot read (nothing imported) never offers to remove anything.
+        let missing = printings.isEmpty ? [] : owned.values.filter { !listed.contains($0.key) }
             .map { ImportComparison.Change(key: $0.key, name: $0.name, old: $0.count, new: 0, condition: $0.condition) }
 
         return ImportComparison(gameID: game.id, new: sorted(new), changed: sorted(changed), missing: sorted(missing),

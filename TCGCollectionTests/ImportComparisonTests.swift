@@ -85,12 +85,12 @@ struct ImportComparisonTests {
         #expect(comparisons.count == 1 && comparisons[0].new.isEmpty && comparisons[0].notRecognised.count == 1)
     }
 
-    @Test func theSameCountIsInNoGroupAndFinishIsExact() {
+    @Test func theSameCountIsInNoGroup() {
         let rows = ["riftbound": [CollectionRow(productID: 721334, finish: "Foil", count: 2, condition: "", name: "Dockside Lock-Up"),
                                   CollectionRow(productID: 721337, finish: "normal", count: 1, condition: "", name: "Kai'Sa, Rebel")]]
         let lines = [line(id: 721334, finish: "Foil", quantity: 2), line(id: 721337, finish: "Normal", quantity: 1)]
         let c = CollectionImport.compare(lines: lines, current: rows, known: knownFixtureProducts, games: Games.all).comparisons[0]
-        #expect(c.changed.isEmpty && c.new.map(\.key.finish) == ["Normal"] && c.missing.map(\.key.finish) == ["normal"])
+        #expect(c.changed.isEmpty && c.new.isEmpty && c.missing.isEmpty)      // ruling 4: finish matches ignoring case
     }
 
     @Test func conditionsAreDistinctInFirstSeenOrder() {
@@ -104,5 +104,52 @@ struct ImportComparisonTests {
         let lines = [line(id: 721337, finish: "Normal"), line(id: 721334, finish: "Normal"), line(id: 721334, finish: "Foil"), line(id: 722282)]
         let c = CollectionImport.compare(lines: lines, current: [:], known: knownFixtureProducts, games: Games.all).comparisons[0]
         #expect(c.new.map { "\($0.key.productID) \($0.key.finish)" } == ["722282 Normal", "721334 Foil", "721334 Normal", "721337 Normal"])
+    }
+
+    private func compared(_ lines: [CSVLine], rows: [CollectionRow]) -> ImportComparison {
+        CollectionImport.compare(lines: lines, current: ["riftbound": rows], known: knownFixtureProducts, games: Games.all).comparisons[0]
+    }
+
+    @Test func aRowTheFileListsButDoesNotImportIsNotMissing() {
+        let basic = CollectionRow(productID: 900001, finish: "Normal", count: 2, condition: "", name: "Calm Rune")
+        let unknown = CollectionRow(productID: 999999, finish: "Normal", count: 1, condition: "", name: "Unknown")
+        let gone = CollectionRow(productID: 555, finish: "Normal", count: 1, condition: "", name: "Gone")
+        let c = compared([line(id: 721337), line(id: 900001), line(id: 999999)], rows: [basic, unknown, gone])
+        #expect(c.missing.map(\.key.productID) == [555])
+        #expect(c.ignoredBasics.count == 1 && c.notRecognised.count == 1)
+    }
+
+    @Test func aFileTheCatalogCannotReadNeverOffersToRemoveAnything() {
+        let rows = [CollectionRow(productID: 721334, finish: "Foil", count: 1, condition: "", name: "Dockside Lock-Up"),
+                    CollectionRow(productID: 555, finish: "Normal", count: 2, condition: "", name: "Only Here")]
+        let c = compared([line(id: 999998), line(id: 999999), line(id: 900001)], rows: rows)
+        #expect(c.new.isEmpty && c.changed.isEmpty && c.missing.isEmpty)
+        #expect(c.notRecognised.count == 2 && c.ignoredBasics.count == 1)
+    }
+
+    @Test func hugeQuantitiesDoNotOverflow() {
+        let c = compared([line(id: 721334, quantity: .max), line(id: 721334, quantity: .max)], rows: [])
+        #expect(c.new.map(\.new) == [1_000_000])
+    }
+
+    @Test func aFinishDifferingOnlyByCaseUsesTheCollectionsRow() {
+        let rows = [CollectionRow(productID: 721334, finish: "Foil", count: 1, condition: "", name: "Dockside Lock-Up")]
+        let c = compared([line(id: 721334, finish: "foil", quantity: 3)], rows: rows)
+        #expect(c.changed.map { "\($0.key.finish) \($0.old)->\($0.new)" } == ["Foil 1->3"] && c.new.isEmpty && c.missing.isEmpty)
+        let both = compared([line(id: 721334, finish: "foil", quantity: 1), line(id: 721334, finish: "Foil", quantity: 2)], rows: [])
+        #expect(both.new.map { "\($0.key.finish) \($0.new)" } == ["foil 3"])
+    }
+
+    @Test func aChangedRowKeepsItsConditionWhenTheFileHasNone() {
+        let rows = [CollectionRow(productID: 721334, finish: "Foil", count: 1, condition: "Mint", name: "Dockside Lock-Up")]
+        let c = compared([line(id: 721334, condition: "", finish: "Foil", quantity: 2)], rows: rows)
+        #expect(c.changed.map(\.condition) == ["Mint"])
+        #expect(CollectionImport.apply(c, to: rows, remove: [])[0].condition == "Mint")
+    }
+
+    @Test func aNewKeyAlreadyInTheRowsIsLeftUntouched() throws {
+        let c = compared([line(id: 721337, quantity: 3)], rows: [])
+        let existing = [CollectionRow(productID: 721337, finish: "Normal", count: 9, condition: "Mint", name: "Mine")]
+        #expect(CollectionImport.apply(c, to: existing, remove: []) == existing)
     }
 }

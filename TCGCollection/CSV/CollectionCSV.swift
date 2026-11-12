@@ -29,12 +29,15 @@ nonisolated struct SkippedLine: Sendable, Equatable {
 }
 
 nonisolated enum CollectionCSV {
+    /// A larger quantity is not believable: the row is skipped as not a number.
+    static let maxQuantity = 1_000_000
+
     /// Reads a TCGplayer collection export. Columns are found by header name (trimmed, any case, any order).
     /// Quantity: `Add to Quantity` when it is not empty, else `Total Quantity`; it must be a whole number above 0.
     /// `lines` and `skipped` are in file order.
     static func parse(_ data: Data) throws -> (lines: [CSVLine], skipped: [SkippedLine]) {
         guard let text = CSVText.text(data) else { throw CollectionCSVError.notATCGplayerExport }
-        let records = CSVText.records(text)
+        let (records, unterminatedQuoteAt) = CSVText.scan(text)
         guard let header = records.first else { throw CollectionCSVError.notATCGplayerExport }
 
         var index: [String: Int] = [:]
@@ -64,7 +67,7 @@ nonisolated enum CollectionCSV {
             }
             let add = cell(cells, addColumn)
             let quantityText = add.isEmpty ? cell(cells, totalColumn) : add
-            guard !quantityText.hasPrefix("+"), let quantity = Int(quantityText) else {      // "2.0" and "+2" are not whole numbers here
+            guard !quantityText.hasPrefix("+"), let quantity = Int(quantityText), quantity <= maxQuantity else {      // "2.0" and "+2" are not whole numbers here
                 skip("quantity is not a number"); continue
             }
             guard quantity > 0 else { skip("quantity is 0"); continue }
@@ -74,6 +77,9 @@ nonisolated enum CollectionCSV {
                                  name: name, setName: cell(cells, index["set name"]), number: cell(cells, index["number"]),
                                  rarity: cell(cells, index["rarity"]), condition: cell(cells, index["condition"]),
                                  finish: printing.isEmpty ? "Normal" : printing, quantity: quantity))
+        }
+        if let line = unterminatedQuoteAt {
+            skipped.append(SkippedLine(line: line, name: "", reason: "a quote is not closed; the rest of the file was not read"))
         }
         return (lines, skipped)
     }

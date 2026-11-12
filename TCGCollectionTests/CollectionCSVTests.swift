@@ -60,4 +60,20 @@ struct CollectionCSVTests {
         #expect(try CollectionCSV.parse(Data(csv.utf8)).lines.count == 20_000)
         #expect(ContinuousClock.now - start < .seconds(5))
     }
+
+    @Test func anUnclosedQuoteKeepsTheRowsBeforeIt() throws {
+        let csv = "Product ID,Product Name,Add to Quantity\n1,A,1\n2,\"B,1\n3,C,1\n"
+        let (lines, skipped) = try CollectionCSV.parse(Data(csv.utf8))
+        #expect(lines.map(\.productID) == [1])
+        #expect(skipped == [SkippedLine(line: 3, name: "", reason: "a quote is not closed; the rest of the file was not read")])
+        let fine = "Product ID,Product Name,Add to Quantity\n1,\"A\"\" x\",1\n2,B,1\n"
+        let result = try CollectionCSV.parse(Data(fine.utf8))
+        #expect(result.lines.count == 2 && result.skipped.isEmpty)
+    }
+
+    @Test func aHugeQuantityIsNotANumber() throws {
+        let csv = "Product ID,Add to Quantity\n1,1000000\n2,1000001\n3,9223372036854775807\n4,99999999999999999999\n"
+        let (lines, skipped) = try CollectionCSV.parse(Data(csv.utf8))
+        #expect(lines.map(\.productID) == [1]); #expect(skipped.map(\.reason) == Array(repeating: "quantity is not a number", count: 3))
+    }
 }
