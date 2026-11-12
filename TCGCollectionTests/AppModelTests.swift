@@ -480,6 +480,25 @@ struct AppModelTests {
         #expect(!FileManager.default.fileExists(atPath: root.appending(path: "icloud").path))
     }
 
+    /// Item 3: the stored folder is gone. The sheet names where it was, and the stored bookmark is kept until a choice.
+    @MainActor @Test func aStoredFolderThatIsGoneIsNamedAndItsBookmarkKept() async throws {
+        let root = tempRoot(), gone = root.appending(path: "icloud").appending(path: "TCG Collection")
+        try FileManager.default.createDirectory(at: gone, withIntermediateDirectories: true)
+        let mark = try UserFolder.bookmark(for: gone)
+        try FileManager.default.removeItem(at: gone)
+        let preferences = try #require(UserDefaults(suiteName: AppPaths(root: root).support.appending(path: "preferences").path))
+        preferences.set(mark, forKey: AppModel.userFolderBookmarkKey)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES"])
+        #expect(model.needsUserFolder); #expect(model.library.folder == nil)
+        guard case .gone(let path) = model.userFolderSetup.lost else {
+            Issue.record("lost: \(String(describing: model.userFolderSetup.lost))"); return
+        }
+        #expect(UserFolder.isSameFolder(URL(fileURLWithPath: path), gone), "\(path)")
+        await model.start()
+        #expect(preferences.data(forKey: AppModel.userFolderBookmarkKey) == mark)
+        #expect(!FileManager.default.fileExists(atPath: gone.path))
+    }
+
     /// `-askUserFolder YES`: the sheet is needed; a folder outside the root is refused; "Use iCloud Drive" makes
     /// `<root>/icloud/TCG Collection` with its settings file and keeps a bookmark that the next launch resolves.
     @MainActor @Test func askingForTheFolderStaysInTheRoot() async throws {

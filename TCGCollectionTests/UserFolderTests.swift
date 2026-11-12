@@ -106,6 +106,48 @@ struct UserFolderTests {
         #expect(asked == 1)
     }
 
+    /// Item 3: a bookmark whose folder was deleted does not resolve, but its path is read from the bookmark data. The
+    /// Release setup then opens the sheet and says where the folder was.
+    @Test func theOldPathOfAFolderThatIsGone() throws {
+        let gone = tempDir().appending(path: "TCG Collection")
+        try FileManager.default.createDirectory(at: gone, withIntermediateDirectories: true)
+        let mark = try UserFolder.bookmark(for: gone)
+        try FileManager.default.removeItem(at: gone)
+        #expect(UserFolder.url(fromBookmark: mark) == nil)
+        let path = try #require(UserFolder.path(ofBookmark: mark))
+        #expect(UserFolder.isSameFolder(URL(fileURLWithPath: path), gone), "\(path)")
+        #expect(UserFolder.path(ofBookmark: Data("junk".utf8)) == nil)
+        let setup = UserFolder.setup(storeRoot: nil, isDebugBuild: false, askUserFolder: false, bookmark: mark) { nil }
+        #expect(setup.choice == .none); #expect(setup.lost == .gone(path: path))
+        #expect(setup.lost?.sentence == "Your collection folder was at \(path). It is not there now. Choose it again, or choose another folder.")
+        // No bookmark, or one that cannot be read: the plain first run.
+        #expect(UserFolder.setup(storeRoot: nil, isDebugBuild: false, askUserFolder: false, bookmark: nil) { nil }.lost == nil)
+        #expect(UserFolder.setup(storeRoot: nil, isDebugBuild: false, askUserFolder: false, bookmark: Data("junk".utf8)) { nil }.lost == nil)
+        // A fixed folder says nothing about a bookmark.
+        #expect(UserFolder.setup(storeRoot: nil, isDebugBuild: true, askUserFolder: false, bookmark: mark) { nil }.lost == nil)
+    }
+
+    /// Item 7: a folder in a Trash (the user's, iCloud Drive's `.Trash`, a volume's `.Trashes`) is not the collection folder.
+    @Test func aFolderInATrashIsNotTheCollectionFolder() throws {
+        let trash = URL(fileURLWithPath: "/Users/x/.Trash")
+        #expect(UserFolder.isInTrash(URL(fileURLWithPath: "/Users/x/.Trash/TCG Collection"), trash: trash))
+        #expect(UserFolder.isInTrash(URL(fileURLWithPath: "/Users/x/Library/Mobile Documents/com~apple~CloudDocs/.Trash/TCG Collection"), trash: nil))
+        #expect(UserFolder.isInTrash(URL(fileURLWithPath: "/Volumes/Disk/.Trashes/501/TCG Collection"), trash: nil))
+        #expect(UserFolder.isInTrash(URL(fileURLWithPath: "/elsewhere/bin/TCG Collection"), trash: URL(fileURLWithPath: "/elsewhere/bin")))
+        #expect(!UserFolder.isInTrash(URL(fileURLWithPath: "/Users/x/Documents/TCG Collection"), trash: trash))
+        #expect(!UserFolder.isInTrash(URL(fileURLWithPath: "/Users/x/my.Trash/TCG Collection"), trash: trash))
+        // A real bookmark into a folder named `.Trash`: it resolves, but counts as not resolving, and the sheet says where.
+        let inTrash = tempDir().appending(path: ".Trash").appending(path: "TCG Collection")
+        try FileManager.default.createDirectory(at: inTrash, withIntermediateDirectories: true)
+        let mark = try UserFolder.bookmark(for: inTrash)
+        #expect(UserFolder.resolve(storeRoot: nil, isDebugBuild: false, bookmark: mark, iCloudDrive: nil) == .none)
+        let setup = UserFolder.setup(storeRoot: nil, isDebugBuild: false, askUserFolder: false, bookmark: mark) { nil }
+        #expect(setup.choice == .none)
+        guard case .inTrash(let path) = setup.lost else { Issue.record("lost: \(String(describing: setup.lost))"); return }
+        #expect(UserFolder.isSameFolder(URL(fileURLWithPath: path), inTrash), "\(path)")
+        #expect(setup.lost?.sentence == "Your collection folder is in the Trash (\(path)). Put it back, or choose another folder.")
+    }
+
     @Test func choiceURLs() {
         let u = URL(fileURLWithPath: "/tmp/x")
         #expect(UserFolderChoice.testRoot(u).url == u); #expect(UserFolderChoice.debugLocal(u).url == u)

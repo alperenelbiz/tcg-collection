@@ -17,6 +17,10 @@ struct UserFolderSheet: View {
             Text("Where to keep your collection")
                 .font(.title2.weight(.semibold))
             Text("Your collection is a few small files. In iCloud Drive they reach your other devices.")
+            if firstRun, let lost = setup.lost {
+                Text(lost.sentence)
+                    .accessibilityIdentifier("user-folder-lost")
+            }
             if !firstRun, let folder = model.library.folder {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Current folder")

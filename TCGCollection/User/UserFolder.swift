@@ -21,6 +21,21 @@ nonisolated enum UserFolderChoice: Equatable, Sendable {
     }
 }
 
+/// Why the folder of the stored bookmark is not used. The first-run sheet says it; the bookmark is kept until a choice.
+nonisolated enum LostUserFolder: Equatable, Sendable {
+    /// The bookmark does not resolve; `path` is read from the bookmark itself.
+    case gone(path: String)
+    /// The bookmark resolves into a Trash.
+    case inTrash(path: String)
+
+    var sentence: String {
+        switch self {
+        case .gone(let path): "Your collection folder was at \(path). It is not there now. Choose it again, or choose another folder."
+        case .inTrash(let path): "Your collection folder is in the Trash (\(path)). Put it back, or choose another folder."
+        }
+    }
+}
+
 /// What the folder sheet may do in this run. Made once at launch (`UserFolder.setup`).
 nonisolated struct UserFolderSetup: Equatable, Sendable {
     /// The folder at launch; `.none` means the first-run sheet decides.
@@ -32,6 +47,8 @@ nonisolated struct UserFolderSetup: Equatable, Sendable {
     var canChoose: Bool
     /// A chosen folder must be inside this one (a Debug build with `-askUserFolder`: the store root). Nil: anywhere.
     var boundary: URL?
+    /// The stored folder that is gone or in the Trash, when the sheet opens because of it.
+    var lost: LostUserFolder? = nil
 }
 
 nonisolated enum UserFolderError: LocalizedError, Equatable {
@@ -67,40 +84,70 @@ nonisolated enum UserFolder {
     static let iCloudFolderName = "TCG Collection"
 
     static func resolve(storeRoot: URL?, isDebugBuild: Bool, bookmark: Data?, iCloudDrive: URL?,
-                        askUserFolder: Bool = false) -> UserFolderChoice {
+                        askUserFolder: Bool = false, trash: URL? = userTrash) -> UserFolderChoice {
         if let storeRoot {
             guard isDebugBuild, askUserFolder else { return .testRoot(AppPaths.userTestRoot(storeRoot)) }
-            guard let choice = chosen(bookmark, iCloudDrive: iCloudDrive), let url = choice.url,
+            guard let choice = chosen(bookmark, iCloudDrive: iCloudDrive, trash: trash), let url = choice.url,
                   isInside(url, storeRoot) else { return .none }
             return choice
         }
         if isDebugBuild { return .debugLocal(debugLocalFolder) }
-        return chosen(bookmark, iCloudDrive: iCloudDrive) ?? .none
+        return chosen(bookmark, iCloudDrive: iCloudDrive, trash: trash) ?? .none
     }
 
     /// The setup of a run. `iCloudDrive` is called only in a Release build without `-store`; `-askUserFolder` gets
     /// `<root>/icloud` as its stand-in, so a test never reaches the real iCloud Drive.
-    static func setup(storeRoot: URL?, isDebugBuild: Bool, askUserFolder: Bool, bookmark: Data?,
+    static func setup(storeRoot: URL?, isDebugBuild: Bool, askUserFolder: Bool, bookmark: Data?, trash: URL? = userTrash,
                       iCloudDrive: () -> URL?) -> UserFolderSetup {
         if let storeRoot, isDebugBuild, askUserFolder {
             let drive = storeRoot.appending(path: "icloud")
-            let choice = resolve(storeRoot: storeRoot, isDebugBuild: true, bookmark: bookmark, iCloudDrive: drive, askUserFolder: true)
-            return UserFolderSetup(choice: choice, iCloudDrive: drive, canChoose: true, boundary: storeRoot)
+            let choice = resolve(storeRoot: storeRoot, isDebugBuild: true, bookmark: bookmark, iCloudDrive: drive,
+                                 askUserFolder: true, trash: trash)
+            return UserFolderSetup(choice: choice, iCloudDrive: drive, canChoose: true, boundary: storeRoot,
+                                   lost: choice == .none ? lostFolder(bookmark, trash: trash) : nil)
         }
         if storeRoot == nil, !isDebugBuild {
             let drive = iCloudDrive()
-            let choice = resolve(storeRoot: nil, isDebugBuild: false, bookmark: bookmark, iCloudDrive: drive)
-            return UserFolderSetup(choice: choice, iCloudDrive: drive, canChoose: true, boundary: nil)
+            let choice = resolve(storeRoot: nil, isDebugBuild: false, bookmark: bookmark, iCloudDrive: drive, trash: trash)
+            return UserFolderSetup(choice: choice, iCloudDrive: drive, canChoose: true, boundary: nil,
+                                   lost: choice == .none ? lostFolder(bookmark, trash: trash) : nil)
         }
         let choice = resolve(storeRoot: storeRoot, isDebugBuild: isDebugBuild, bookmark: nil, iCloudDrive: nil)
         return UserFolderSetup(choice: choice, iCloudDrive: nil, canChoose: false, boundary: nil)
     }
 
-    /// The bookmark's folder, as `.iCloud` when it is inside `iCloudDrive`, else `.picked`. Nil when it does not resolve.
-    private static func chosen(_ bookmark: Data?, iCloudDrive: URL?) -> UserFolderChoice? {
-        guard let bookmark, let url = url(fromBookmark: bookmark)?.url else { return nil }
+    /// The bookmark's folder, as `.iCloud` when it is inside `iCloudDrive`, else `.picked`. Nil when it does not resolve,
+    /// and when it resolves into a Trash (item 7).
+    private static func chosen(_ bookmark: Data?, iCloudDrive: URL?, trash: URL?) -> UserFolderChoice? {
+        guard let bookmark, let url = url(fromBookmark: bookmark)?.url, !isInTrash(url, trash: trash) else { return nil }
         if let iCloudDrive, isInside(url, iCloudDrive) { return .iCloud(url) }
         return .picked(url)
+    }
+
+    /// Why a stored bookmark gives no folder: it resolves into a Trash, or it does not resolve (its path is read from the
+    /// bookmark data). Nil without a bookmark, when it resolves elsewhere, or when its data cannot be read.
+    static func lostFolder(_ bookmark: Data?, trash: URL?) -> LostUserFolder? {
+        guard let bookmark else { return nil }
+        if let url = url(fromBookmark: bookmark)?.url {
+            return isInTrash(url, trash: trash) ? .inTrash(path: url.path) : nil
+        }
+        return path(ofBookmark: bookmark).map { .gone(path: $0) }
+    }
+
+    /// The path a bookmark was made for, read from the bookmark data without resolving it (so also for a folder that is gone).
+    static func path(ofBookmark data: Data) -> String? {
+        URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: data)?.path
+    }
+
+    /// The user's Trash folder (nil where there is none).
+    static var userTrash: URL? {
+        try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+    }
+
+    /// True when `url` is inside `trash`, or inside any folder named `.Trash` (iCloud Drive's) or `.Trashes` (a volume's).
+    static func isInTrash(_ url: URL, trash: URL?) -> Bool {
+        if let trash, isInside(url, trash) { return true }
+        return url.standardizedFileURL.pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
     }
 
     /// A Debug build's folder without `-store`, also when this code runs in a Release build (it then never returns it).
