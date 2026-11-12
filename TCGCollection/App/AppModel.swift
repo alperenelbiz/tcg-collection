@@ -443,8 +443,21 @@ final class AppModel {
     }
 }
 
-/// The picture fetcher of an `-offline YES` run: every request fails, so only pictures on disk show.
-private nonisolated struct NoNetwork: DataFetching {
+/// No network: every request fails. The picture fetcher of an `-offline YES` run (only pictures on disk show), and all
+/// three clients of a run whose `-fixtures` cannot be honoured (I3).
+nonisolated struct NoNetwork: TCGCSVFetching, ArchiveFetching, DataFetching {
+    func groups(category: Int) async throws -> Data {
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func products(category: Int, group: Int) async throws -> Data {
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func download(day: String, to file: URL) async throws -> Bool {
+        throw URLError(.notConnectedToInternet)
+    }
+
     func data(from url: URL) async throws -> (Data, Int) {
         throw URLError(.notConnectedToInternet)
     }

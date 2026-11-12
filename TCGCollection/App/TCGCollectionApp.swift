@@ -11,21 +11,33 @@ struct TCGCollectionApp: App {
         _model = State(initialValue: Self.makeModel(LaunchOptions(arguments: CommandLine.arguments)))
     }
 
+    #if DEBUG
+    private static let isDebugBuild = true
+    #else
+    private static let isDebugBuild = false
+    #endif
+
+    /// The model on the network `LaunchNetwork.choose` picks. The real clients are made only when no `-fixtures` was
+    /// given: a `-fixtures` run is on files, or it has no network at all (I3).
     private static func makeModel(_ options: LaunchOptions) -> AppModel {
+        let network = LaunchNetwork.choose(options, isDebugBuild: isDebugBuild)
+        if network == .internet {
+            return AppModel(options: options, catalogClient: TCGCSVClient(), archiveClient: ArchiveClient(),
+                            fetcher: URLSessionFetcher())
+        }
         #if DEBUG
         // `-fixtures <dir>`: the UI tests run the app on files, never on the network.
-        if let fixtures = options.fixtures {
-            // Fixture data goes only into a store of its own, never into the default one.
-            if options.storeRoot != nil {
-                let catalog = FileCatalogClient(directory: fixtures, productsDelay: .milliseconds(options.fixtureDelay ?? 0))
-                return AppModel(options: options, catalogClient: catalog,
-                                archiveClient: FileArchiveClient(directory: fixtures), fetcher: FileFetcher(directory: fixtures))
-            }
-            FileHandle.standardOutput.write(Data("-fixtures is ignored: it needs -store <dir>\n".utf8))
+        if case .fixtures(let fixtures) = network {
+            let catalog = FileCatalogClient(directory: fixtures, productsDelay: .milliseconds(options.fixtureDelay ?? 0))
+            return AppModel(options: options, catalogClient: catalog,
+                            archiveClient: FileArchiveClient(directory: fixtures), fetcher: FileFetcher(directory: fixtures))
         }
         #endif
-        return AppModel(options: options, catalogClient: TCGCSVClient(), archiveClient: ArchiveClient(),
-                        fetcher: URLSessionFetcher())
+        // A `-fixtures` that cannot be honoured (and, in a build without the fixture network, any `-fixtures`): offline.
+        if case .offline(let notice) = network { FileHandle.standardOutput.write(Data((notice + "\n").utf8)) }
+        var offline = options
+        offline.offline = true
+        return AppModel(options: offline, catalogClient: NoNetwork(), archiveClient: NoNetwork(), fetcher: NoNetwork())
     }
 
     var body: some Scene {

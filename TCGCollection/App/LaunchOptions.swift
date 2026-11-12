@@ -32,3 +32,23 @@ nonisolated struct LaunchOptions: Sendable {
         fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
     }
 }
+
+/// The network a launch uses (I3). It fails closed: `-fixtures` never falls back to the real network.
+nonisolated enum LaunchNetwork: Equatable, Sendable {
+    /// tcgcsv, the price archive and the picture servers.
+    case internet
+    /// `-fixtures <dir>` in a Debug build with `-store`: every request is answered from the files of the folder.
+    case fixtures(URL)
+    /// `-fixtures` that cannot be honoured (not a Debug build, or no `-store`): no network at all, as `-offline YES`.
+    /// `notice` is the one line the app prints.
+    case offline(notice: String)
+
+    static func choose(_ options: LaunchOptions, isDebugBuild: Bool) -> LaunchNetwork {
+        guard let fixtures = options.fixtures else { return .internet }
+        // A Release build has no fixture network; its bundle id is the installed app's.
+        guard isDebugBuild else { return .offline(notice: "-fixtures works only in a Debug build: this run is offline") }
+        // Fixture data goes only into a store of its own, never into the default one.
+        guard options.storeRoot != nil else { return .offline(notice: "-fixtures needs -store <dir>: this run is offline") }
+        return .fixtures(fixtures)
+    }
+}

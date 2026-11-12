@@ -11,6 +11,10 @@ class UITestCase: XCTestCase {
         return (bundle.resourceURL ?? bundle.bundleURL).appending(path: "Fixtures", directoryHint: .isDirectory)
     }
 
+    /// The Debug app (project.yml). The tests launch, and XCUITest quits, only the app with this id: never the installed
+    /// app, which is the Release build (`com.alperenelbiz.tcgcollection2`).
+    nonisolated static let debugBundleID = "com.alperenelbiz.tcgcollection2.debug"
+
     private var app: XCUIApplication?
     /// The store root of the running test (`-store`).
     private(set) var root: URL?
@@ -20,6 +24,11 @@ class UITestCase: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         continueAfterFailure = false
+        #if !DEBUG
+        // This bundle and the app under test are built in one configuration. Outside Debug the app under test is the
+        // Release build, not the app with `debugBundleID`, and it has no fixture network: stop before any launch.
+        throw NotTheDebugApp()
+        #endif
     }
 
     override func tearDown() async throws {
@@ -64,7 +73,7 @@ class UITestCase: XCTestCase {
         var arguments = ["-store", root.path]
         if fixtures { arguments += ["-fixtures", Self.fixturesDirectory.path] }
         if let game { arguments += ["-game", game] }
-        let app = XCUIApplication()
+        let app = XCUIApplication(bundleIdentifier: Self.debugBundleID)
         app.launchArguments = arguments + extra
         self.root = root
         self.app = app
@@ -114,5 +123,14 @@ class UITestCase: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
         return condition()
+    }
+}
+
+/// `UITestCase.setUp` outside a Debug build: the app under test is not the Debug app.
+private struct NotTheDebugApp: LocalizedError {
+    var errorDescription: String? {
+        "The UI tests run only on the Debug app (\(UITestCase.debugBundleID)). This run was built in another "
+            + "configuration, whose app has the installed app's bundle id, so nothing is launched. "
+            + "Run scripts/ui-test.sh, which passes -configuration Debug."
     }
 }

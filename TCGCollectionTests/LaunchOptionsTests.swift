@@ -23,12 +23,33 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app"]).fixtureDelay == nil)
         #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "soon"]).fixtureDelay == nil)
     }
-    /// A Debug run without `-store` uses its own folders, never the installed app's store.
+    /// I3: `-fixtures` is honoured only in a Debug build with `-store`. Otherwise the run is offline (as `-offline YES`),
+    /// never on the real network, and the app prints one line that says why. Without `-fixtures` the network is real.
+    @Test func theFixtureNetworkFailsClosed() {
+        let fixtures = URL(fileURLWithPath: "/tmp/f", isDirectory: true)
+        let withStore = LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-fixtures", "/tmp/f"])
+        let withoutStore = LaunchOptions(arguments: ["app", "-fixtures", "/tmp/f"])
+        let release = LaunchNetwork.offline(notice: "-fixtures works only in a Debug build: this run is offline")
+        let noStore = LaunchNetwork.offline(notice: "-fixtures needs -store <dir>: this run is offline")
+        #expect(LaunchNetwork.choose(withStore, isDebugBuild: true) == .fixtures(fixtures))
+        #expect(LaunchNetwork.choose(withStore, isDebugBuild: false) == release)
+        #expect(LaunchNetwork.choose(withoutStore, isDebugBuild: true) == noStore)
+        #expect(LaunchNetwork.choose(withoutStore, isDebugBuild: false) == release)
+        for debug in [true, false] {
+            #expect(LaunchNetwork.choose(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]), isDebugBuild: debug) == .internet)
+            #expect(LaunchNetwork.choose(LaunchOptions(arguments: ["app"]), isDebugBuild: debug) == .internet)
+        }
+    }
+
+    #if DEBUG
+    /// A Debug run without `-store` uses its own folders, never the installed app's store. (A Release build uses the
+    /// installed app's folders: this test runs only in Debug.)
     @Test func aDebugBuildWithoutARootHasItsOwnFolders() {
         let folders = AppPaths.systemFolders()
         #expect(folders.support == URL.applicationSupportDirectory.appending(path: "TCGCollection2-Debug", directoryHint: .isDirectory))
         #expect(folders.caches == URL.cachesDirectory.appending(path: "TCGCollection2-Debug", directoryHint: .isDirectory))
     }
+    #endif
     @Test func pathsUnderARootStayUnderIt() {
         let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
         let p = AppPaths(root: root)
