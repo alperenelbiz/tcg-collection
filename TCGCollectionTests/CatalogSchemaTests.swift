@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import SwiftData
 import Testing
@@ -54,6 +55,17 @@ struct CatalogSchemaTests {
         for card in cards { #expect(try await store.product(card.productID) == card) }
         try await store.replaceProducts(of: 24819, with: cards, at: .now)
         #expect(try await store.rulesVersions(game: "riftbound") == [24819: CatalogRules.version])
+    }
+
+    /// Drift guard: SwiftData recognises a phase 1 store as V1 by its entity hashes. The constants are the hashes Core Data
+    /// wrote into a real phase 1 store: the copy of Alperen's store of 2026-11-12, `Z_METADATA` →
+    /// `NSStoreModelVersionHashes` (base64), version identifier 1.0.0.
+    @Test func theV1SchemaIsTheOnePhase1Shipped() throws {
+        let phase1 = ["CatalogProduct": "C50zuZ0OB9ziI/7MZ5vwBq1C/PYm+mp1JG3pZ7zYMWM=",
+                      "CatalogSet": "OAhj7vYbSaKWf8DNPxTjn2upit3NH90x0fkzDpjxDVY="]
+        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV1.models))
+        #expect(model.entityVersionHashesByName.mapValues { $0.base64EncodedString() } == phase1,
+                "V1 must stay exactly as phase 1 shipped it; a real store would not be recognised")
     }
 
     /// Fix round 1, item 3: a store that needs a migration is opened only when the volume has 2 × its size + 100 MB free.
@@ -179,6 +191,7 @@ struct CatalogSchemaTests {
         try await writeClosedStore(at: corrupt, products: (1...500).map { product(id: $0, name: "Card \($0)") })
         let handle = try FileHandle(forUpdating: corrupt)
         let size = try handle.seekToEnd()
+        try #require(size > 8192)                                           // pages after the header page exist
         try handle.seek(toOffset: 4096)                                     // the header page stays, the rest is noise
         try handle.write(contentsOf: Data(repeating: 0xAB, count: Int(size) - 4096))
         try handle.close()
