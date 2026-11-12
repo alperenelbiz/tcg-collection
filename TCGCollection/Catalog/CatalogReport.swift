@@ -53,6 +53,8 @@ nonisolated enum CatalogReport {
         let sets = try await store.sets(game: game.id)
         let fetched = try await store.fetchDates(game: game.id)
         let products = try await store.allProducts(game: game.id)
+        // A1 keeps a product with a number and a rarity but no card type: these are the printings it added.
+        let typeless = products.filter { $0.cardType.isEmpty }.sorted { $0.productID < $1.productID }
         var lines = ["== \(game.name) (\(game.id))"]
 
         lines.append("sets: \(progress.total) total, \(progress.fetched) fetched, \(progress.failed) failed")
@@ -74,6 +76,8 @@ nonisolated enum CatalogReport {
         let odd = facets.keys.filter { !$0.allSatisfy { $0.isLetter || $0 == "-" || $0 == "'" } }.sorted()
         lines.append("type facets: \(facets.count); with a character that is not a letter: \(odd.count) \(odd)")
         lines += facets.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map { "  \($0.key): \($0.value)" }
+        lines += unfacetedLines(products)
+        lines += try await menuLines(game, store: store)
 
         let found = collisions(products)
         lines.append("collisions: \(found.count)")
@@ -94,7 +98,8 @@ nonisolated enum CatalogReport {
         }
 
         if game.pictures == .ygoprodeck {
-            lines += pictureLines(products, ygo: ygo)
+            lines += pictureLines(products, ygo: ygo, label: "pictures")
+            lines += pictureLines(typeless, ygo: ygo, label: "pictures of the printings with an empty card type")
         }
 
         // Spec 4.1 keeps a product when it has a card type. These samples show what that lets through.
@@ -107,11 +112,66 @@ nonisolated enum CatalogReport {
         let sealed = fewest.filter(looksSealed)
         lines.append("kept products with a sealed-product word in the name: \(sealed.count)")
         lines += sealed.prefix(40).map { "  \($0.name) — \($0.cardType) — \($0.number.isEmpty ? "no number" : $0.number)" }
+
+        lines.append("cards with an empty card type: \(typeless.count)")
+        lines += typeless.prefix(40).map { "  \($0.name) — \($0.number) — \($0.rarity)" }
+        let sealedNames = sealedLooking(typeless.map(\.name))
+        lines.append("of those, with a sealed word in the name: \(sealedNames.count)")
+        lines += sealedNames.map { "  \($0)" }
+        lines += basicLines(game, products: products)
         return lines
     }
 
-    private static func pictureLines(_ products: [ProductRecord], ygo: YGOPictureIndex?) -> [String] {
-        guard let ygo else { return ["pictures: no Yu-Gi-Oh! index"] }
+    /// Printings the Type menu cannot find (no stored type facet), and the words of their type lines (before the dash).
+    private static func unfacetedLines(_ products: [ProductRecord]) -> [String] {
+        let unfaceted = products.filter { $0.typeFacets.isEmpty }
+        var lines = ["printings with no type facet: \(unfaceted.count) (\(unfaceted.count { $0.cardType.isEmpty }) with an empty card type)"]
+        var words: [String: Int] = [:]
+        for product in unfaceted where !product.cardType.isEmpty {
+            for word in Set(product.cardType.components(separatedBy: " // ").flatMap(MagicTypes.typeWords)) {
+                words[word, default: 0] += 1
+            }
+        }
+        if !words.isEmpty {
+            let top = words.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.prefix(20)
+            lines.append("words of the type lines with no type facet (20 most common): "
+                         + top.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
+        }
+        return lines
+    }
+
+    /// The Type menu as the store computes it (`facetLists`), and whether the game's facets file holds the same lists.
+    private static func menuLines(_ game: GameDefinition, store: CatalogStore) async throws -> [String] {
+        let menu = try await store.facetLists(game: game.id)
+        let name = "facets-\(game.id).json"
+        let file: String
+        if let support = supportFolder(store), case let url = facetsFile(game.id, in: support),
+           FileManager.default.fileExists(atPath: url.path) {
+            switch FacetLists.read(url) {
+            case menu?: file = "the same lists"
+            case let lists?: file = "differs from the store: rarities \(lists.rarities.count), types \(lists.types)"
+            case nil: file = "cannot be decoded"
+            }
+        } else {
+            file = "no file"
+        }
+        return ["type menu (\(menu.types.count)): \(menu.types.joined(separator: ", "))", "\(name): \(file)"]
+    }
+
+    /// Basic cards (distinct card keys, the first 40 listed) and basic printings (`GameDefinition.isBasicPrinting`).
+    private static func basicLines(_ game: GameDefinition, products: [ProductRecord]) -> [String] {
+        var keys = Set<String>()
+        var printings = 0
+        for product in products {
+            let key = CardName.searchKey(product.cardName)
+            if game.isBasicCard(cardKey: key, cardType: product.cardType) { keys.insert(key) }
+            if game.isBasicPrinting(product) { printings += 1 }
+        }
+        return ["basic cards: \(keys.count), basic printings: \(printings)"] + keys.sorted().prefix(40).map { "  \($0)" }
+    }
+
+    private static func pictureLines(_ products: [ProductRecord], ygo: YGOPictureIndex?, label: String) -> [String] {
+        guard let ygo else { return ["\(label): no Yu-Gi-Oh! index"] }
         var byCode = 0, byName = 0
         var missing: [ProductRecord] = []
         for product in products {
@@ -124,12 +184,22 @@ nonisolated enum CatalogReport {
                 missing.append(product)
             }
         }
-        return ["pictures: \(byCode) by set code, \(byName) by name, \(missing.count) not matched"]
+        return ["\(label): \(byCode) by set code, \(byName) by name, \(missing.count) not matched"]
             + missing.prefix(40).map { "  \($0.name) (\($0.number)) — \($0.cardType)" }
     }
 
+    /// The phase 1 check over every kept product: a wider list than `sealedProductWords`.
     private static let sealedWords: Set<String> = ["booster", "box", "pack", "bundle", "display", "case", "tin", "kit",
                                                    "sleeves", "playmat", "binder", "starter", "collection", "lot", "deck"]
+
+    /// Words that name a sealed product. The check of the products A1 added (phase 2A, Review Focus 4).
+    private static let sealedProductWords: Set<String> = ["box", "pack", "booster", "deck", "display", "bundle", "tin", "kit",
+                                                          "case", "sleeves", "playmat"]
+
+    /// The names that contain a word of `sealedProductWords` as a whole word, in any case, in their order.
+    static func sealedLooking(_ names: [String]) -> [String] {
+        names.filter { CardName.searchKey($0).split(separator: " ").contains { sealedProductWords.contains(String($0)) } }
+    }
 
     private static func looksSealed(_ product: ProductRecord) -> Bool {
         CardName.searchKey(product.name).split(separator: " ").contains { sealedWords.contains(String($0)) }
@@ -145,7 +215,7 @@ nonisolated enum CatalogReport {
         guard let url = store.modelContainer.configurations.first?.url else { return ["== Files: no store file"] }
         let support = url.deletingLastPathComponent()
         let storeSizes = ["", "-wal", "-shm"].map { size(URL(fileURLWithPath: url.path + $0)) }
-        var lines = ["== Files (MB = 1,000,000 bytes)",
+        var lines = ["== Files (MB = 1,000,000 bytes, KB = 1,000 bytes)",
                      "catalog.store: \(megabytes(storeSizes[0])) (+ -wal \(megabytes(storeSizes[1])), -shm \(megabytes(storeSizes[2])))"]
         for game in Games.all {
             // The file name of `AppPaths.prices`. The decode is the work `PriceTable.load` does on the main actor.
@@ -154,7 +224,28 @@ nonisolated enum CatalogReport {
             lines.append("prices-\(game.id).json: \(megabytes(size(file))), read and decode \(milliseconds(decode)) (median of 3)")
         }
         lines.append("ygo-index.json: \(megabytes(size(support.appending(path: "ygo-index.json"))))")
+        for game in Games.all {
+            // The filter menus' values: `AppModel` reads these files at launch instead of scanning the store (P4).
+            let file = facetsFile(game.id, in: support)
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                lines.append("facets-\(game.id).json: no file")
+                continue
+            }
+            let read = median(3) { _ = FacetLists.read(file) }
+            lines.append("facets-\(game.id).json: \(kilobytes(size(file))), read and decode \(preciseMilliseconds(read)) (median of 3)")
+        }
         return lines
+    }
+
+    /// The folder of the store file (`AppPaths.support`); nil for a store in memory.
+    private static func supportFolder(_ store: CatalogStore) -> URL? {
+        guard let url = store.modelContainer.configurations.first?.url, url.path != "/dev/null" else { return nil }
+        return url.deletingLastPathComponent()
+    }
+
+    /// The file name of `AppPaths.facets`.
+    private static func facetsFile(_ gameID: String, in support: URL) -> URL {
+        support.appending(path: "facets-\(gameID).json")
     }
 
     private static func timings(store: CatalogStore) async throws -> [String] {
@@ -197,6 +288,14 @@ nonisolated enum CatalogReport {
 
     private static func megabytes(_ bytes: Int) -> String {
         String(format: "%.1f MB", Double(bytes) / 1_000_000)
+    }
+
+    private static func kilobytes(_ bytes: Int) -> String {
+        String(format: "%.1f KB", Double(bytes) / 1_000)
+    }
+
+    private static func preciseMilliseconds(_ duration: Duration) -> String {
+        String(format: "%.2f ms", duration / .milliseconds(1))
     }
 
     private static func milliseconds(_ duration: Duration) -> String {
