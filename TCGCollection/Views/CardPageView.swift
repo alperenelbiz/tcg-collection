@@ -25,8 +25,6 @@ struct CardPageView: View {
         _shownID = State(initialValue: startProductID)
     }
 
-    private static let ground = Color(white: 0.075)
-
     private var shown: ProductRecord? {
         printings?.first { $0.productID == shownID } ?? printings?.first
     }
@@ -34,7 +32,7 @@ struct CardPageView: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { Self.ground.ignoresSafeArea() }
+            .background { Theme.ground.ignoresSafeArea() }
             .navigationTitle(shown?.cardName ?? "")
             .toolbar {
                 ToolbarItem {
@@ -50,11 +48,12 @@ struct CardPageView: View {
 
     @ViewBuilder private var content: some View {
         if let printings, printings.isEmpty {
-            ContentUnavailableView { Text("This card is not in the catalog.") }
+            EmptyMessage(sentence: "This card is not in the catalog.")
         } else if let shown, let game = Games.game(shown.gameID), let printings {
             ScrollView {
                 layout(shown: shown, game: game, printings: printings)
-                    .padding(20)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityIdentifier("card-page")
@@ -66,7 +65,7 @@ struct CardPageView: View {
 
     @ViewBuilder private func layout(shown: ProductRecord, game: GameDefinition, printings: [ProductRecord]) -> some View {
         #if os(macOS)
-        HStack(alignment: .top, spacing: 32) {
+        HStack(alignment: .top, spacing: 28) {
             CardImage(product: shown, size: .large).frame(width: 280)
             details(shown: shown, game: game, printings: printings)
         }
@@ -78,39 +77,56 @@ struct CardPageView: View {
         #endif
     }
 
+    /// Groups are separated by 1 px rules, never boxed: the title block (with the stats), the prices, the rules text,
+    /// the other printings.
     private func details(shown: ProductRecord, game: GameDefinition, printings: [ProductRecord]) -> some View {
         let stats = CardFacts.stats(shown, game: game)
         let finishes = model.prices.prices(game: game.id, productID: shown.productID)
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(shown.cardName).font(.title.bold()).textSelection(.enabled)
+                Text(shown.cardName)
+                    .font(Theme.pageTitleFont)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
                     .accessibilityIdentifier("card-title")
                 Text(CardFacts.line(setName: setNames[shown.groupID] ?? "", product: shown))
-                    .foregroundStyle(.secondary)
+                    .font(Theme.bodyFont)
+                    .foregroundStyle(Theme.muted)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("card-facts-line")
-                if !shown.cardType.isEmpty { Text(shown.cardType).textSelection(.enabled) }
+                if !shown.cardType.isEmpty {
+                    Text(shown.cardType)
+                        .font(Theme.bodyFont)
+                        .foregroundStyle(Theme.muted)
+                        .textSelection(.enabled)
+                }
             }
             if !stats.isEmpty {
                 HStack(alignment: .top, spacing: 28) {
                     ForEach(stats, id: \.label) { LabeledValue(label: $0.label, value: $0.value) }
                 }
+                .padding(.top, 18)
             }
-            Divider()
+            RuleLine()
             if finishes.isEmpty {
-                Text("No price").foregroundStyle(.secondary)
+                Text("No price")
+                    .font(Theme.bodyFont)
+                    .foregroundStyle(Theme.muted)
             } else {
                 HStack(alignment: .top, spacing: 28) {
                     ForEach(finishes, id: \.finish) { LabeledValue(label: $0.finish, value: CardFacts.priceText($0.price.shown)) }
                 }
             }
             if !shown.rulesText.isEmpty {
-                Divider()
+                RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
-                Text(shown.rulesText).textSelection(.enabled)
+                Text(shown.rulesText)
+                    .font(Theme.bodyFont)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
             }
             if printings.count > 1 {
-                Divider()
+                RuleLine()
                 otherPrintings(printings, game: game)
             }
         }
@@ -119,17 +135,29 @@ struct CardPageView: View {
 
     private func otherPrintings(_ printings: [ProductRecord], game: GameDefinition) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Other printings").font(.headline)
+            Text("Other printings")
+                .font(Theme.labelFont)
+                .foregroundStyle(Theme.muted)
             ForEach(printings, id: \.productID) { printing in
                 Button { shownID = printing.productID } label: {
                     HStack(spacing: 12) {
-                        Text(setNames[printing.groupID] ?? "").lineLimit(1)
-                        Text(printing.number).foregroundStyle(.secondary)
-                        Text(printing.rarity).foregroundStyle(.secondary)
+                        // One line per row: the set name gives way (truncates); number, rarity and price keep their width.
+                        Text(setNames[printing.groupID] ?? "")
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                        Text(printing.number)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize()
+                        Text(printing.rarity)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize()
                         Spacer(minLength: 8)
                         Text(CardFacts.priceText(model.prices.cheapest(game: game.id, productIDs: [printing.productID])))
+                            .foregroundStyle(Theme.text)
                             .monospacedDigit()
+                            .fixedSize()
                     }
+                    .font(Theme.bodyFont)
                     .fontWeight(printing.productID == shown?.productID ? .semibold : .regular)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
@@ -150,15 +178,20 @@ struct CardPageView: View {
     }
 }
 
-/// A small label over a value, for stats and prices.
+/// A label (11 pt, `muted`) over a value, for stats and prices.
 private struct LabeledValue: View {
     let label: String
     let value: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-            Text(value).monospacedDigit()
+            Text(label)
+                .font(Theme.labelFont)
+                .foregroundStyle(Theme.muted)
+            Text(value)
+                .font(Theme.bodyFont)
+                .foregroundStyle(Theme.text)
+                .monospacedDigit()
         }
     }
 }

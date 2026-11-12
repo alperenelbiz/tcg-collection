@@ -44,6 +44,8 @@ class UITestCase: XCTestCase {
     }
 
     /// Launches the app with `-store <fresh root>`, `-fixtures <Fixtures>` (unless `fixtures` is false) and `-game`.
+    /// Every launch opens on All cards (`-screen all-cards`, the catalog the phase 1 and 2A tests expect) unless `extra`
+    /// names a `-screen` of its own.
     func launch(game: String? = nil, extra: [String] = [], fixtures: Bool = true) -> XCUIApplication {
         start(root: newRoot(), game: game, extra: extra, fixtures: fixtures)
     }
@@ -73,6 +75,7 @@ class UITestCase: XCTestCase {
         var arguments = ["-store", root.path]
         if fixtures { arguments += ["-fixtures", Self.fixturesDirectory.path] }
         if let game { arguments += ["-game", game] }
+        if !extra.contains("-screen") { arguments += ["-screen", "all-cards"] }
         let app = XCUIApplication(bundleIdentifier: Self.debugBundleID)
         app.launchArguments = arguments + extra
         self.root = root

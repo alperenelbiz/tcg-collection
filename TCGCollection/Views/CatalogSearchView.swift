@@ -3,8 +3,8 @@ import SwiftUI
 /// The catalog of the selected game: search field, three filter menus, and a gallery of cards.
 struct CatalogSearchView: View {
     private static let limit = 300
-    /// The content ground: flat and dark (spec 6).
-    private static let ground = Color(white: 0.075)
+    /// Placeholder cells while the first search runs: about one window of the gallery.
+    private static let placeholders = 12
 
     @Environment(AppModel.self) private var model
     @State private var text: String
@@ -23,7 +23,7 @@ struct CatalogSearchView: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { Self.ground.ignoresSafeArea() }
+            .background { Theme.ground.ignoresSafeArea() }
             .navigationTitle(model.game.name)
             .navigationSubtitle(subtitle)
             .searchable(text: $text)
@@ -47,40 +47,57 @@ struct CatalogSearchView: View {
                 if catalogEmpty {
                     emptyCatalog
                 } else {
-                    ContentUnavailableView {
-                        Text(text.trimmingCharacters(in: .whitespaces).isEmpty
-                             ? "No card matches these filters."
-                             : "No card matches \"\(text)\".")
-                    }
+                    EmptyMessage(sentence: text.trimmingCharacters(in: .whitespaces).isEmpty
+                                 ? "No card matches these filters."
+                                 : "No card matches \"\(text)\".")
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("empty-state")
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 20) {
-                    ForEach(cards ?? []) { CardCell(summary: $0) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cellMinWidth), spacing: Theme.columnGap)],
+                          spacing: Theme.rowGap) {
+                    if let cards {
+                        ForEach(cards) { card in
+                            NavigationLink(value: card) { CardCell(content: cellContent(card)) }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("card-cell-\(card.id)")
+                        }
+                    } else {
+                        // Loading: until the first search has ended, the final layout with flat `surface` blocks where
+                        // the pictures will be. No shimmer.
+                        ForEach(0..<Self.placeholders, id: \.self) { _ in PlaceholderCell() }
+                    }
                 }
-                .padding(20)
+                .padding(Theme.margin)
             }
             .accessibilityIdentifier("gallery")
         }
     }
 
+    /// A catalog cell: the card's cover printing, how many printings passed the filter, and the cheapest of their prices.
+    private func cellContent(_ card: CardSummary) -> CellContent {
+        CellContent(product: card.cover, name: card.name, left: card.printings > 1 ? "\(card.printings) printings" : "",
+                    price: model.prices.cheapest(game: card.cover.gameID, productIDs: card.productIDs), selected: false)
+    }
+
     /// The game has no card at all. "Downloading" only while a sync runs; otherwise the reason, and a way to try again.
     /// With no store file open (P8), the reason and a reset that the next launch does (not for a lack of disk space).
+    /// One sentence and at most one action each; the status line below the sidebar keeps the details (progress, reason).
     @ViewBuilder private var emptyCatalog: some View {
         if let failure = model.storeFailure {
-            ContentUnavailableView {
-                Text("The catalog cannot be opened.")
-            } description: {
-                Text(failure)
-            } actions: {
+            Group {
                 if model.catalogResetRequested {
-                    Text("Quit and open the app again to reset the catalog.")
-                } else if model.canResetCatalog {
-                    Button("Reset the catalog…") { confirmReset = true }
-                        .accessibilityIdentifier("reset-catalog")
+                    EmptyMessage(sentence: "Quit and open the app again to reset the catalog.")
+                } else {
+                    // The failure text says what happened and what to do.
+                    EmptyMessage(sentence: failure) {
+                        if model.canResetCatalog {
+                            Button("Reset the catalog…") { confirmReset = true }
+                                .accessibilityIdentifier("reset-catalog")
+                        }
+                    }
                 }
             }
             .confirmationDialog("The catalog on this Mac is set aside and downloaded again. About 1,100 requests and 205 MB. If its sets were already fetched today, the download starts tomorrow.",
@@ -90,25 +107,13 @@ struct CatalogSearchView: View {
         } else if model.catalogWaits {
             // The sets were fetched today into a store that is gone: no Try again before the next UTC day. Before the
             // "Downloading" branch: a held sync still runs the price step, but downloads no catalog.
-            ContentUnavailableView {
-                Text(StatusText.resetWaits)
-            }
+            EmptyMessage(sentence: StatusText.resetWaits)
         } else if model.status.isSyncing {
-            ContentUnavailableView {
-                Text("Downloading the catalog…")
-            } description: {
-                Text(model.status.text)
-            }
+            EmptyMessage(sentence: "Downloading the catalog…")
         } else if model.options.offline {
-            ContentUnavailableView {
-                Text("Offline. The catalog is empty.")
-            }
+            EmptyMessage(sentence: "Offline. The catalog is empty.")
         } else {
-            ContentUnavailableView {
-                Text("The catalog could not be downloaded.")
-            } description: {
-                Text(model.status.text)
-            } actions: {
+            EmptyMessage(sentence: "The catalog could not be downloaded.") {
                 Button("Try again") { Task { await model.refresh(rebuild: false) } }
             }
         }
@@ -136,6 +141,20 @@ struct CatalogSearchView: View {
 
     private func loadSets() async {
         sets = (try? await model.reader.sets(game: model.gameID)) ?? []
+    }
+}
+
+/// A gallery cell before its card is known: the picture's `surface` block and the two text lines' height, blank.
+private struct PlaceholderCell: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Theme.surface
+                .aspectRatio(59.0 / 86.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.pictureRadius))
+            Text(" ").font(Theme.bodyFont).padding(.top, 7)
+            Text(" ").font(Theme.lineFont).padding(.top, 1)
+        }
+        .accessibilityHidden(true)
     }
 }
 

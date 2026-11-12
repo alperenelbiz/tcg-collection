@@ -8,6 +8,8 @@ final class CatalogFlowTests: UITestCase {
         XCTAssertTrue(app.staticTexts["status-line"].waitForExistence(timeout: 20))
         let cell = app.descendants(matching: .any)["card-cell-kerry eurodyne the last rockerboy"]
         XCTAssertTrue(cell.waitForExistence(timeout: 20)); shot("01-gallery")
+        cell.hover()                                            // the pointer rests on the cell: `surface` behind it
+        shot("01-gallery-hover")
         cell.click()
         XCTAssertTrue(app.descendants(matching: .any)["card-page"].waitForExistence(timeout: 10))
         XCTAssertEqual(text(app.staticTexts["card-title"]), "Kerry Eurodyne - The Last Rockerboy"); shot("02-card-page")

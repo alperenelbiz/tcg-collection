@@ -19,6 +19,9 @@ nonisolated struct LaunchOptions: Sendable {
     /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
     /// it in a Release build and without `-store`.
     var askUserFolder = false
+    /// `-screen collection|all-cards`: the sidebar selection of this launch, for tests and snapshots. Any other value is
+    /// ignored (the stored selection is used).
+    var screen: Screen?
 
     init(arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -35,6 +38,7 @@ nonisolated struct LaunchOptions: Sendable {
         fixtures = value("-fixtures").map { URL(fileURLWithPath: $0, isDirectory: true) }
         fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
         askUserFolder = value("-askUserFolder") == "YES"
+        screen = value("-screen").flatMap(Screen.init(rawValue:))
     }
 }
 

@@ -2,7 +2,7 @@ import ImageIO
 import SwiftUI
 
 /// The picture of one printing. Downloaded once by `PictureStore`, decoded off the main actor, kept in memory.
-/// With no picture: a flat card with the card name.
+/// While it loads: a flat `surface` block of the final size, no shimmer. With no picture: that block with the card name.
 struct CardImage: View {
     let product: ProductRecord?
     let size: PictureSize
@@ -18,20 +18,20 @@ struct CardImage: View {
     private static let cache = NSCache<NSString, Entry>()
 
     var body: some View {
-        Color(white: 0.16)
+        Theme.surface
             .aspectRatio(59.0 / 86.0, contentMode: .fit)
             .overlay {
                 if let picture {
                     Image(decorative: picture, scale: 1).resizable().scaledToFill()
                 } else if missing, let product {
                     Text(product.cardName)
-                        .font(size == .small ? .caption : .title3)
-                        .foregroundStyle(.secondary)
+                        .font(size == .small ? Theme.lineFont : .system(size: 15))
+                        .foregroundStyle(Theme.faint)
                         .multilineTextAlignment(.center)
                         .padding(8)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: size == .small ? 6 : 12))
+            .clipShape(RoundedRectangle(cornerRadius: size == .small ? Theme.pictureRadius : Theme.largePictureRadius))
             .task(id: url) { await load() }
     }
 

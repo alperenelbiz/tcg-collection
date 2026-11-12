@@ -23,6 +23,13 @@ struct LaunchOptionsTests {
         #expect(!LaunchOptions(arguments: ["app", "-askUserFolder", "NO"]).askUserFolder)
         #expect(!LaunchOptions(arguments: ["app"]).askUserFolder)
     }
+    @Test func parsesTheScreenFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-screen", "collection"]).screen == .collection)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "all-cards"]).screen == .allCards)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "allCards"]).screen == nil)      // the flag's spelling only
+        #expect(LaunchOptions(arguments: ["app", "-screen", "wanted"]).screen == nil)
+        #expect(LaunchOptions(arguments: ["app"]).screen == nil)
+    }
     @Test func theUserTestRootIsInTheStoreRoot() {
         #expect(AppPaths.userTestRoot(URL(fileURLWithPath: "/tmp/s")).path == "/tmp/s/user")
     }

@@ -405,6 +405,29 @@ struct AppModelTests {
         #expect(model(["app", "-store", tempRoot().path]).gameID == "magic-the-gathering")   // another root, nothing saved
     }
 
+    /// The sidebar selection is kept in the root's preferences (key `screen`); a new root opens on the Collection.
+    @MainActor @Test func theChosenScreenIsRemembered() {
+        let root = tempRoot().path
+        let first = model(["app", "-store", root])
+        #expect(first.screen == .collection)
+        first.screen = .allCards
+        #expect(model(["app", "-store", root]).screen == .allCards)
+        #expect(model(["app", "-store", root, "-screen", "collection"]).screen == .collection)   // -screen wins
+        #expect(model(["app", "-store", root, "-screen", "wanted"]).screen == .allCards)         // an unknown name is ignored
+        #expect(model(["app", "-store", tempRoot().path]).screen == .collection)                 // another root, nothing saved
+    }
+
+    /// `-card` opens a card page, which lives under All cards: the screen follows, whatever `-screen` says.
+    @MainActor @Test func aLaunchCardShowsAllCards() async throws {
+        let root = tempRoot()
+        try await writeClosedStore(at: AppPaths(root: root).catalogStore,
+                                   products: try ProductParser.products(fixture("products-89.json"), game: Games.game("riftbound")!).cards)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-screen", "collection", "-card", "721334"])
+        #expect(model.screen == .collection)
+        await model.start()
+        #expect(model.pendingCard?.startProductID == 721334); #expect(model.screen == .allCards)
+    }
+
     @Test func theYuGiOhIndexIsFetchedWhenMissingOrAtMostOnceADayForNewSets() {   // D9
         let morning = TCGDate.date("2026-11-11T08:00:00")!, evening = TCGDate.date("2026-11-11T21:00:00")!
         let yesterday = TCGDate.date("2026-11-10T21:00:00")!

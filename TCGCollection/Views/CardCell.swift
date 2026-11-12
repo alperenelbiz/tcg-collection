@@ -1,35 +1,66 @@
 import SwiftUI
 
-/// One card in the gallery: picture, name, printing count and the cheapest price of its printings.
-struct CardCell: View {
-    let summary: CardSummary
+/// What one gallery cell shows. The catalog passes a card ("3 printings", or "" for one printing, and the cheapest
+/// price of its printings); the Collection passes a printing (`×3` and that printing's price).
+nonisolated struct CellContent: Sendable {
+    /// The printing whose picture is shown; nil shows the neutral placeholder.
+    let product: ProductRecord?
+    let name: String
+    /// The text left of the price, in `muted`; "" for none.
+    let left: String
+    let price: ShownPrice?
+    let selected: Bool
+}
 
-    @Environment(AppModel.self) private var model
+/// One cell of a gallery (the cell rule of "The look, as rules"): the picture (59:86, radius 6), 7 pt below it the name
+/// on one line, then one line with `left` in `muted` and the price right-aligned. No badge, no box, no border. Hover puts
+/// `surface` behind the cell with 6 pt padding; selection is a 2 pt `accent` ring around the picture. The caller makes
+/// it a button or a link and gives it its identifier.
+struct CardCell: View {
+    let content: CellContent
+
+    @State private var hovering = false
+
+    /// The hover background reaches this far past the cell; with the 16 pt column gap two of them never touch.
+    private static let hoverPadding: CGFloat = 6
 
     var body: some View {
-        NavigationLink(value: summary) {
-            VStack(alignment: .leading, spacing: 6) {
-                CardImage(product: summary.cover, size: .small)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(summary.name)
-                        .lineLimit(1)
-                    HStack {
-                        if summary.printings > 1 { Text("\(summary.printings) printings") }
-                        Spacer(minLength: 4)
-                        Text(priceText)
+        VStack(alignment: .leading, spacing: 0) {
+            CardImage(product: content.product, size: .small)
+                .overlay {
+                    if content.selected {
+                        // Outside the picture, concentric with its corners: the ring never covers the card.
+                        RoundedRectangle(cornerRadius: Theme.pictureRadius + 2)
+                            .strokeBorder(Theme.accent, lineWidth: 2)
+                            .padding(-2)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
-                .monospacedDigit()
+            Text(content.name)
+                .font(Theme.bodyFont)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.top, 7)
+            HStack(spacing: 4) {
+                if !content.left.isEmpty { Text(content.left).lineLimit(1) }
+                Spacer(minLength: 0)
+                Text(CardFacts.priceText(content.price))
+                    .lineLimit(1)
+                    .layoutPriority(1)
             }
-            .contentShape(Rectangle())
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            .monospacedDigit()
+            .padding(.top, 1)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("card-cell-\(summary.id)")
-    }
-
-    private var priceText: String {
-        CardFacts.priceText(model.prices.cheapest(game: summary.cover.gameID, productIDs: summary.productIDs))
+        .background {
+            if hovering {
+                RoundedRectangle(cornerRadius: Theme.pictureRadius + Self.hoverPadding)
+                    .fill(Theme.surface)
+                    .padding(-Self.hoverPadding)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }

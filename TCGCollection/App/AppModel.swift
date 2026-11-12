@@ -15,6 +15,12 @@ nonisolated enum Status: Equatable, Sendable {
     }
 }
 
+/// What the window shows, chosen in the sidebar. The raw value is the `-screen` flag's value and the stored one.
+nonisolated enum Screen: String, Hashable, Sendable {
+    case collection
+    case allCards = "all-cards"
+}
+
 nonisolated enum StatusText {
     static let checking = "Checking the catalog…"
     /// The store file could not be opened; it was moved aside and the sync fills a fresh one.
@@ -101,6 +107,11 @@ final class AppModel {
         didSet { defaults.set(gameID, forKey: Self.gameKey) }
     }
     var game: GameDefinition { Games.game(gameID) ?? Games.all[0] }
+    /// The sidebar selection, kept in `UserDefaults` (key `screen`; with `-store`, the root's own). `-screen` wins at
+    /// launch; a new root opens on the Collection.
+    var screen: Screen {
+        didSet { defaults.set(screen.rawValue, forKey: Self.screenKey) }
+    }
     private(set) var status: Status = .idle("") {
         didSet {
             #if DEBUG
@@ -143,6 +154,7 @@ final class AppModel {
     nonisolated static let userFolderBookmarkKey = "userFolderBookmark"
 
     private static let gameKey = "game"
+    private static let screenKey = "screen"
     /// Set by "Reset the catalog…" (`requestCatalogReset`); the next launch sets the store aside and clears it.
     private nonisolated static let resetKey = "resetCatalogOnNextLaunch"
     /// The UTC day (`yyyy-MM-dd`) of the last catalog step that fetched at least one set. It outlives the store, so a
@@ -213,6 +225,7 @@ final class AppModel {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
         }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
+        screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(rawValue:)) ?? .collection
         if let notice = opened.notice {
             // A notice means the store was set aside and a fresh, empty one opened. On the day of the last fetch that is
             // enough to know the sync waits (`catalogHeld`), before any store read.
@@ -415,11 +428,13 @@ final class AppModel {
         return true
     }
 
-    /// `-card <productId>`: switches to the product's game and asks the window to open its card page.
+    /// `-card <productId>`: switches to the product's game and to All cards (card pages live there), and asks the window
+    /// to open its card page.
     private func openLaunchCard() async {
         guard let id = options.card, let product = try? await reader.product(id),
               let game = Games.game(product.gameID) else { return }
         gameID = game.id
+        screen = .allCards
         pendingCard = CardTarget(gameID: game.id, cardKey: CardName.searchKey(product.cardName), startProductID: product.productID)
     }
 

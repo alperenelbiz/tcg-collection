@@ -6,12 +6,17 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            Sidebar()
+            Sidebar(screen: model.screen)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
-            CatalogStack(gameID: model.gameID, confirmRebuild: $confirmRebuild)
-                // Search text, filters and the open card page belong to one game.
-                .id(model.gameID)
+            switch model.screen {
+            case .collection:
+                CollectionPlaceholder()
+            case .allCards:
+                CatalogStack(gameID: model.gameID, confirmRebuild: $confirmRebuild)
+                    // Search text, filters and the open card page belong to one game.
+                    .id(model.gameID)
+            }
         }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
@@ -59,11 +64,32 @@ private struct CatalogStack: View {
     }
 }
 
-private struct Sidebar: View {
-    private enum Item: Hashable { case allCards }
+/// The Collection until Task 5 builds it: the title, one sentence, and what the user folder needs said.
+private struct CollectionPlaceholder: View {
+    var body: some View {
+        NavigationStack {
+            EmptyMessage(sentence: "No cards in this collection yet.")
+                .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
+                .background { Theme.ground.ignoresSafeArea() }
+                .navigationTitle("Collection")
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("collection-screen")
+        }
+    }
+}
 
+private struct Sidebar: View {
     @Environment(AppModel.self) private var model
-    @State private var selection: Item? = .allCards
+    /// Optional, as the split view wants it: on the iPhone, going back to the sidebar clears it. The screen itself stays
+    /// in the model, which keeps it.
+    @State private var selection: Screen?
+    /// The system emphasizes the selection (the accent fill) while the sidebar has focus in the active window.
+    @FocusState private var listFocused: Bool
+    @Environment(\.appearsActive) private var appearsActive
+
+    init(screen: Screen) {
+        _selection = State(initialValue: screen)
+    }
 
     var body: some View {
         @Bindable var model = model
@@ -75,15 +101,25 @@ private struct Sidebar: View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            // A control, not a selection: it does not take the accent.
+            .tint(Theme.text)
             .accessibilityIdentifier("game-picker")
+            Section("Lists") {
+                SidebarRow(title: "Collection", icon: "square.stack", onAccent: emphasized(.collection)).tag(Screen.collection)
+                    .accessibilityIdentifier("sidebar-collection")
+            }
             Section("Catalog") {
-                Label("All cards", systemImage: "square.grid.2x2").tag(Item.allCards)
+                SidebarRow(title: "All cards", icon: "square.grid.2x2", onAccent: emphasized(.allCards)).tag(Screen.allCards)
                     .accessibilityIdentifier("sidebar-all-cards")
             }
         }
+        .focused($listFocused)
+        .onChange(of: selection) { _, new in if let new { model.screen = new } }
+        .onChange(of: model.screen) { _, new in selection = new }
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
-                LibraryLines()
+                // On the Collection screen these lines are in the screen itself.
+                if model.screen != .collection { LibraryLines(inSidebar: true) }
                 StatusLine(status: model.status)
             }
         }
@@ -91,11 +127,43 @@ private struct Sidebar: View {
         .capturableSidebar()
         #endif
     }
+
+    /// True while the row of `screen` is drawn on the accent fill. Not on the iPhone, whose list shows no selection fill.
+    private func emphasized(_ screen: Screen) -> Bool {
+        #if os(macOS)
+        selection == screen && listFocused && appearsActive
+        #else
+        false
+        #endif
+    }
+}
+
+/// A sidebar row: a 16 pt outline icon in `muted` and the title in `text`. The selected row is the system's selection,
+/// drawn in the app's accent (the `AccentColor` asset). On that fill (`onAccent`) icon and title are `ground`, as the
+/// mockup has them: the system's white on the amber accent reads at under 2:1. (`backgroundProminence` does not report
+/// the fill in a macOS 27 sidebar, so the sidebar works it out.)
+private struct SidebarRow: View {
+    let title: String
+    let icon: String
+    let onAccent: Bool
+
+    var body: some View {
+        Label {
+            Text(title)
+                .foregroundStyle(onAccent ? Theme.ground : Theme.text)
+        } icon: {
+            Image(systemName: icon)
+                .symbolVariant(.none)
+                .foregroundStyle(onAccent ? Theme.ground : Theme.muted)
+        }
+    }
 }
 
 /// What the user folder needs said: a problem (the folder is missing, a file is refused, a write failed) and a settled
-/// conflict. Task 5 moves the problem into the Collection screen; the identifier `collection-problem` stays.
+/// conflict, each with its one action. Shown on the Collection screen, or in the sidebar's status area while another
+/// screen is showing; the identifier `collection-problem` is in one place at a time.
 private struct LibraryLines: View {
+    let inSidebar: Bool
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -104,6 +172,7 @@ private struct LibraryLines: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let problem = library.problem {
                     Text(problem)
+                        .foregroundStyle(inSidebar ? Theme.faint : Theme.text)
                         .lineLimit(3)
                         .accessibilityIdentifier("collection-problem")
                     if library.folderIsMissing, model.userFolderSetup.canChoose {
@@ -113,21 +182,26 @@ private struct LibraryLines: View {
                 }
                 if let notice = library.notice {
                     Text(notice)
+                        .foregroundStyle(inSidebar ? Theme.faint : Theme.muted)
                         .lineLimit(3)
                         .accessibilityIdentifier("collection-notice")
                     Button("OK") { library.clearNotice() }
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .font(inSidebar ? Theme.labelFont : Theme.bodyFont)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
+            .padding(.horizontal, inSidebar ? 16 : Theme.margin)
+            .padding(.top, inSidebar ? 10 : Theme.ruleSpacing)
+            .padding(.bottom, inSidebar ? 0 : Theme.ruleSpacing)
+            .background(alignment: .bottom) {
+                // On the screen the lines are a group of their own, ruled off from the content below.
+                if !inSidebar { Theme.rule.frame(height: 1) }
+            }
         }
     }
 }
 
-/// One or two lines; a long text is cut, it never makes the sidebar wider.
+/// One or two lines, 11 pt `faint`; a long text is cut, it never makes the sidebar wider.
 private struct StatusLine: View {
     let status: Status
 
@@ -139,8 +213,8 @@ private struct StatusLine: View {
                 .truncationMode(.tail)
                 .accessibilityIdentifier("status-line")
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .font(Theme.labelFont)
+        .foregroundStyle(Theme.faint)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

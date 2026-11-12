@@ -13,38 +13,50 @@ struct UserFolderSheet: View {
     var body: some View {
         let setup = model.userFolderSetup
         let firstRun = model.needsUserFolder
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Where to keep your collection")
-                .font(.title2.weight(.semibold))
-            Text("Your collection is a few small files. In iCloud Drive they reach your other devices.")
-            if firstRun, let lost = setup.lost {
-                Text(lost.sentence)
-                    .accessibilityIdentifier("user-folder-lost")
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Where to keep your collection")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+                sentence("Your collection is a few small files: in iCloud Drive they reach your other devices.")
+                if firstRun, let lost = setup.lost {
+                    sentence(lost.sentence)
+                        .accessibilityIdentifier("user-folder-lost")
+                }
+                if !setup.canChoose {
+                    sentence("This run keeps its collection in a fixed folder.")
+                } else if setup.iCloudDrive == nil {
+                    #if os(macOS)
+                    sentence("This Mac has no iCloud Drive.")
+                    #else
+                    // Without an app iCloud container the iPhone cannot name the drive itself: the folder panel can.
+                    sentence("Choose a folder in iCloud Drive to reach your other devices.")
+                    #endif
+                }
             }
             if !firstRun, let folder = model.library.folder {
-                VStack(alignment: .leading, spacing: 4) {
+                RuleLine()
+                VStack(alignment: .leading, spacing: 2) {
                     Text("Current folder")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Theme.labelFont)
+                        .foregroundStyle(Theme.muted)
                     Text(folder.path)
+                        .font(Theme.bodyFont)
+                        .foregroundStyle(Theme.text)
                         .textSelection(.enabled)
                         .accessibilityIdentifier("user-folder-path")
                 }
-                if setup.canChoose { Text("Files already in the old folder stay there.") }
-            }
-            if !setup.canChoose {
-                Text("This run keeps its collection in a fixed folder.")
-            } else if setup.iCloudDrive == nil {
-                #if os(macOS)
-                Text("This Mac has no iCloud Drive.")
-                #else
-                // Without an app iCloud container the iPhone cannot name the drive itself: the folder panel can.
-                Text("Choose a folder in iCloud Drive to reach your other devices.")
-                #endif
+                if setup.canChoose {
+                    sentence("Files already in the old folder stay there.")
+                        .padding(.top, 8)
+                }
             }
             if let failure {
+                RuleLine()
+                // The block that failed says so in one sentence; the buttons below are its actions.
                 Text(failure)
-                    .foregroundStyle(.secondary)
+                    .font(Theme.bodyFont)
+                    .foregroundStyle(Theme.text)
                     .accessibilityIdentifier("user-folder-failure")
             }
             HStack {
@@ -58,17 +70,19 @@ struct UserFolderSheet: View {
                     .accessibilityIdentifier("user-folder-choose")
                 if setup.canChoose, setup.iCloudDrive != nil {
                     Button("Use iCloud Drive") { run { try await model.useICloudDrive() } }
-                        .keyboardShortcut(.defaultAction)
+                        .sheetDefaultButton()
                         .disabled(working)
                         .accessibilityIdentifier("user-folder-icloud")
                 }
             }
+            .padding(.top, 20)
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding(24)
         #if os(macOS)
         .frame(width: 460)
         #endif
+        .presentationBackground(Theme.ground)
         .interactiveDismissDisabled(firstRun)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             switch result {
@@ -78,6 +92,13 @@ struct UserFolderSheet: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("user-folder-sheet")
+    }
+
+    /// A sentence of the sheet: body size, `muted`.
+    private func sentence(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.bodyFont)
+            .foregroundStyle(Theme.muted)
     }
 
     /// One choice at a time; a failure is said in the sheet, which stays open.

@@ -43,6 +43,9 @@ struct TCGCollectionApp: App {
             if let model {
                 RootView()
                     .environment(model)
+                    // Always dark. The accent reaches the system's selection, the default button and focus rings through
+                    // the app's `AccentColor` asset (Theme.accent): on macOS 27 a `.tint` here does not reach the
+                    // sidebar's selection, and it colours the label of every other button and the game picker.
                     .preferredColorScheme(.dark)
                     .task {
                         #if os(macOS)

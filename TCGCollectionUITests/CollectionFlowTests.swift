@@ -40,4 +40,25 @@ final class CollectionFlowTests: UITestCase {
         app.sheets.buttons["Cancel"].firstMatch.click()
         XCTAssertTrue(waitUntil { !sheet.exists }, "Cancel did not close the sheet")
     }
+
+    /// The sidebar's two screens. `-screen collection` opens on the Collection (Task 5 fills it; until then one
+    /// sentence); a click on "All cards" shows the catalog, a click on "Collection" brings the Collection back.
+    func testSidebarSwitchesBetweenCollectionAndAllCards() {
+        let app = launch(game: "riftbound", extra: ["-screen", "collection"])
+        let collection = element(app, "collection-screen")
+        XCTAssertTrue(collection.waitForExistence(timeout: 20), app.windows.firstMatch.debugDescription)
+        let sentence = NSPredicate(format: "label == %@ OR value == %@", "No cards in this collection yet.", "No cards in this collection yet.")
+        XCTAssertTrue(collection.descendants(matching: .staticText).matching(sentence).firstMatch.exists)
+        XCTAssertFalse(element(app, "gallery").exists)
+        XCTAssertTrue(waitUntil { self.text(app.staticTexts["status-line"]).hasPrefix("Catalog up to date") })
+        shot("collection-03-empty-collection")
+
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 10))
+        XCTAssertFalse(collection.exists)
+        element(app, "sidebar-collection").click()
+        XCTAssertTrue(collection.waitForExistence(timeout: 10))
+        XCTAssertFalse(element(app, "gallery").exists)
+        shot("collection-04-sidebar-collection-selected")
+    }
 }
