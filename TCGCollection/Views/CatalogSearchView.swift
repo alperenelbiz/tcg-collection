@@ -87,6 +87,12 @@ struct CatalogSearchView: View {
                                 isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset the catalog") { model.requestCatalogReset() }
             }
+        } else if model.catalogWaits {
+            // The sets were fetched today into a store that is gone: no Try again before the next UTC day. Before the
+            // "Downloading" branch: a held sync still runs the price step, but downloads no catalog.
+            ContentUnavailableView {
+                Text(StatusText.resetWaits)
+            }
         } else if model.status.isSyncing {
             ContentUnavailableView {
                 Text("Downloading the catalog…")
@@ -96,11 +102,6 @@ struct CatalogSearchView: View {
         } else if model.options.offline {
             ContentUnavailableView {
                 Text("Offline. The catalog is empty.")
-            }
-        } else if model.catalogWaits {
-            // A store set aside on the day its sets were fetched: no Try again before the next UTC day.
-            ContentUnavailableView {
-                Text(StatusText.resetWaits)
             }
         } else {
             ContentUnavailableView {

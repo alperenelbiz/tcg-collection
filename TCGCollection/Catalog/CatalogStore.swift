@@ -284,6 +284,13 @@ actor CatalogStore: ModelActor {
         Dictionary(try setRows(game: game).map { ($0.groupID, $0.rulesVersion) }, uniquingKeysWith: { first, _ in first })
     }
 
+    /// True when a set of any game has a fetch date.
+    func anySetFetched() throws -> Bool {
+        var descriptor = FetchDescriptor<CatalogSet>(predicate: #Predicate { $0.fetchedAt != nil })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetchCount(descriptor) > 0
+    }
+
     func progress(game: String) throws -> SetProgress {
         let rows = try setRows(game: game)
         return SetProgress(total: rows.count, fetched: rows.filter { $0.fetchedAt != nil }.count,
