@@ -24,8 +24,11 @@ final class UserLibrary {
     private var files: [String: GameUserFile] = [:]
     /// Games whose file is not used in this run, with the sentence that says why.
     private var refused: [String: String] = [:]
-    /// Games whose last write (or conflict step) failed, with the sentence. The next successful write clears it.
-    private var failures: [String: String] = [:]
+    /// Games whose last write failed, with the sentence. Memory then holds a change the file does not have: a reload of
+    /// the game is not applied until the next successful write (the next change writes the whole state) clears it.
+    private var writeFailures: [String: String] = [:]
+    /// Games whose conflict versions could not be settled at the last read, with the sentence.
+    private var conflictFailures: [String: String] = [:]
     /// False until the first `load()` of the current folder has finished, and again while the folder is switched or
     /// missing. A change while it is false is refused: it would start from an empty file and replace the owner's file.
     /// Controls that change the collection disable themselves on it.
@@ -55,12 +58,13 @@ final class UserLibrary {
 
     // MARK: Reading
 
-    /// Every problem, folder first, then refused files, then failed writes, in game order.
+    /// Every problem, folder first, then refused files, failed writes and unsettled conflicts, in game order.
     var problems: [String] {
         var list: [String] = []
         if folderIsMissing, let folder { list.append(Self.missingFolder(folder)) }
-        for game in Games.all { if let text = refused[game.id] { list.append(text) } }
-        for game in Games.all { if let text = failures[game.id], !list.contains(text) { list.append(text) } }
+        for kind in [refused, writeFailures, conflictFailures] {
+            for game in Games.all { if let text = kind[game.id], !list.contains(text) { list.append(text) } }
+        }
         return list
     }
 
@@ -121,7 +125,7 @@ final class UserLibrary {
             error = encoding
         }
         guard let error else {
-            failures[game] = nil
+            writeFailures[game] = nil
             return
         }
         if let refusal = error as? UserFilesError {
@@ -129,13 +133,13 @@ final class UserLibrary {
             let shown = rows(game: game)
             files[game] = nil
             refused[game] = Self.refusedText("\(game).json", refusal)
-            failures[game] = nil
+            writeFailures[game] = nil
             if rows(game: game) != shown { version += 1 }
             return
         }
         var isDirectory: ObjCBool = false
         let folderThere = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue
-        failures[game] = folderThere ? "\(game).json could not be saved (\(error.localizedDescription))." : Self.missingFolder(folder)
+        writeFailures[game] = folderThere ? "\(game).json could not be saved (\(error.localizedDescription))." : Self.missingFolder(folder)
     }
 
     // MARK: Loading and reloading
@@ -154,7 +158,8 @@ final class UserLibrary {
         watcher?.stop()
         files = [:]
         refused = [:]
-        failures = [:]
+        writeFailures = [:]
+        conflictFailures = [:]
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
@@ -189,7 +194,8 @@ final class UserLibrary {
         loadGeneration += 1
         files = [:]
         refused = [:]
-        failures = [:]
+        writeFailures = [:]
+        conflictFailures = [:]
         notice = nil
         folderIsMissing = false
         watcher?.stop()
@@ -220,6 +226,9 @@ final class UserLibrary {
             queueReload(game, in: folder)
             return
         }
+        // Our last write failed: memory holds a change the file does not have. It is not replaced; the next change writes
+        // the whole state, and reloads are applied again after that write succeeded (item 8).
+        guard writeFailures[game] == nil else { return }
         let before = changes[game, default: 0]
         let url = folder.appending(path: "\(game).json")
         await beforeRead?(url)
@@ -249,7 +258,7 @@ final class UserLibrary {
             files[game] = nil
             refused[game] = text
         }
-        if let failure = result.conflictFailure { failures[game] = failure }
+        conflictFailures[game] = result.conflictFailure
         if let backup = result.backup {
             notice = "Two devices changed \(Games.game(game)?.name ?? game). The older version is saved as \(backup.lastPathComponent)."
         }

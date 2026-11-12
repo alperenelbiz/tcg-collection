@@ -151,6 +151,30 @@ struct UserLibraryTests {
         #expect(lib.problem == "riftbound.json is not downloaded from iCloud yet.")
     }
 
+    /// Item 8: while a game has a failed write, a reload of that game does not replace memory: the change that could not
+    /// be saved stays, and so does its problem. The next successful write (the next change, with the whole state) clears
+    /// the failure; only then are reloads applied again.
+    @MainActor @Test func aFailedWriteIsNotReplacedByAReload() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        lib.setCount(2, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()      // the folder is read-only
+        #expect(lib.problem?.hasPrefix("riftbound.json could not be saved") == true)
+        var other = GameUserFile(); other.collection = [.init(productID: 9, finish: "Normal", count: 7, condition: "", name: "Other")]
+        try other.data().write(to: file)                                     // another device, in place
+        await lib.fileChanged(file)?.value
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2])
+        #expect(lib.problem?.hasPrefix("riftbound.json could not be saved") == true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        lib.setCount(3, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(try stored(dir, "riftbound").map(\.count) == [3]); #expect(lib.problem == nil)
+        try UserFiles.write(try other.data(), to: file)
+        await lib.fileChanged(file)?.value
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [9])
+    }
+
     /// Item 9: false before the first load, true after it, false while a folder is switched and when the folder is missing.
     @MainActor @Test(.timeLimit(.minutes(1))) func isLoadedFollowsTheFolder() async throws {
         let a = tempDir(), b = tempDir()
