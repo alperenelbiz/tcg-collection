@@ -513,6 +513,25 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound")) == Self.importedRows(keepingOnlyHere: true) },
                       "\(String(describing: try? storedCollection(game: "riftbound")))")
         shot("import-03-collection-after-import")
+
+        // Fix round 1, item 2: the same file again (a second launch on the same root). Only the kept "Only Here" differs:
+        // Import would write nothing, so the sheet says so, shows the kept row, and offers only Close until Remove is on.
+        quit(app)
+        app.launch()
+        let missing = element(app, "import-missing-riftbound")
+        XCTAssertTrue(missing.waitForExistence(timeout: 40), sheet.debugDescription)
+        XCTAssertEqual(text(element(app, "import-summary")), "Nothing to import: this file adds nothing to your collection.")
+        XCTAssertFalse(element(app, "import-new-riftbound").exists || element(app, "import-changed-riftbound").exists)
+        XCTAssertTrue(element(app, "import-close").exists)
+        XCTAssertFalse(element(app, "import-apply").exists || element(app, "import-cancel").exists)
+        shot("import-08-nothing-to-import", of: sheet)
+        element(app, "import-remove-555-Normal").click()
+        XCTAssertTrue(element(app, "import-apply").waitForExistence(timeout: 5), "Remove did not offer Import")
+        XCTAssertTrue(element(app, "import-apply").isEnabled)
+        XCTAssertEqual(text(element(app, "import-summary")), "1 not in the file (removed)")
+        element(app, "import-cancel").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        XCTAssertEqual(try storedCollection(game: "riftbound"), Self.importedRows(keepingOnlyHere: true))
     }
 
     /// The same start; "Remove" on "Only Here" (the header control then says "Keep all", and turns it off and on again).

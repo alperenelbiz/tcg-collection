@@ -591,6 +591,26 @@ struct AppModelTests {
         #expect(model.status == .idle("Offline · no prices yet"))
     }
 
+    /// Fix round 1, item 5: while a file is still being read, and while an import is open, a second import (the panel, or
+    /// a file) is ignored. The gate holds the first read, so it is in progress for sure.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSecondImportIsIgnoredWhileOneIsReadOrOpen() async throws {
+        let launched = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        let gate = ReadGate()
+        launched.beforeImportRead = { await gate.pass($0) }
+        let first = Task { await launched.importCSV(from: fixtureURL("collection-riftbound.csv")) }
+        try await gate.waitUntilHolding()
+        #expect(launched.readsImport)
+        await launched.importCSV(from: fixtureURL("collection-mixed.csv"))      // ignored: a read is in progress
+        launched.chooseCSVFile()
+        #expect(launched.importing == nil && !launched.choosesCSVFile)
+        gate.open()
+        await first.value
+        #expect(launched.importing?.fileName == "collection-riftbound.csv" && !launched.readsImport)
+        await launched.importCSV(from: fixtureURL("collection-mixed.csv"))      // ignored: an import is open
+        launched.chooseCSVFile()
+        #expect(launched.importing?.fileName == "collection-riftbound.csv" && !launched.choosesCSVFile)
+    }
+
     /// `-importCSV <path>` with `-store`: the launch opens the import of that file (DEBUG; the unit tests are Debug).
     @MainActor @Test func theImportFlagOpensTheImportAtLaunch() async throws {
         let file = fixtureURL("collection-riftbound.csv")

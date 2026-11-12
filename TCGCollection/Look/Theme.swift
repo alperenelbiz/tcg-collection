@@ -54,6 +54,8 @@ nonisolated enum Theme {
     static let tableChoiceWidth: CGFloat = 88
     /// Between two rows of a table.
     static let tableRowSpacing: CGFloat = 6
+    /// Between a heading and the line under it (a sheet's title and its summary, a game and why it is not imported).
+    static let lineGap: CGFloat = 4
 
     // MARK: Type (the system face only; the window title is the system's)
 

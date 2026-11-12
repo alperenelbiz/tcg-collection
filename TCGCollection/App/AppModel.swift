@@ -154,6 +154,10 @@ final class AppModel {
     /// line replaces it) or `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
     private(set) var statusNotice: String?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
+    private(set) var readsImport = false
+    /// Tests only: runs on the main actor before a picked file is read, so a test can act while the read is in progress.
+    @ObservationIgnored var beforeImportRead: (@MainActor (URL) async -> Void)?
     private static let noticeDuration = Duration.seconds(20)
 
     #if DEBUG
@@ -405,14 +409,22 @@ final class AppModel {
 
     // MARK: CSV import
 
-    /// "Import CSV…": opens the system's file panel. Not while a sheet of the window is open.
+    /// "Import CSV…": opens the system's file panel. Not while a sheet of the window is open or a file is read.
     func chooseCSVFile() {
-        guard importing == nil, !needsUserFolder, !showsFolderSheet else { return }
+        guard canStartImport, !needsUserFolder, !showsFolderSheet else { return }
         choosesCSVFile = true
     }
 
+    /// One import at a time: none is open and no file is being read for one.
+    private var canStartImport: Bool { importing == nil && !readsImport }
+
     /// Reads the picked file (security-scoped, off the main thread; it is never written) and opens the import sheet on it.
+    /// Ignored while another import is open or its file is still read.
     func importCSV(from url: URL) async {
+        guard canStartImport else { return }
+        readsImport = true
+        defer { readsImport = false }
+        await beforeImportRead?(url)
         let name = url.lastPathComponent
         do {
             let data = try await Self.readFile(url)
@@ -425,6 +437,7 @@ final class AppModel {
 
     /// The file panel gave no file: the import sheet says why.
     func importFailed(_ error: any Error) {
+        guard canStartImport else { return }
         importing = ImportModel(unreadable: error.localizedDescription, fileName: "CSV", library: library, reader: reader)
     }
 

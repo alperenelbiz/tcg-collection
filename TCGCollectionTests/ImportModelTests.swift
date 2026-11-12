@@ -115,8 +115,8 @@ struct ImportModelTests {
         #expect(library.version == version && library.rows(game: "riftbound") == rows)
     }
 
-    /// A row kept at the first import is still not in the file: the second import offers only its removal, and an
-    /// Import that keeps it writes nothing.
+    /// A row kept at the first import is still not in the file: the second import shows it, says there is nothing to
+    /// import and offers no Import (fix round 1, item 2) until the row is set to Remove.
     @Test func aSecondImportAfterKeepingOffersOnlyTheMissingRow() async throws {
         let (library, _) = try await library()
         let reader = try await catalog()
@@ -129,9 +129,15 @@ struct ImportModelTests {
         await second.prepare()
         let c = try #require(second.comparisons.first)
         #expect(c.new.isEmpty && c.changed.isEmpty && c.missing.map(\.key) == [onlyHere])
-        #expect(second.summary == "1 not in the file (kept)" && second.canApply)
-        #expect(second.apply()?.summary == "1 not in the file (kept)")
+        #expect(second.summary == "Nothing to import: this file adds nothing to your collection.")
+        #expect(!second.writes && !second.canApply)
+        #expect(second.apply() == nil)
         #expect(library.version == version)                                     // nothing was written
+
+        second.setAllMissing(remove: true, game: "riftbound")                   // Remove makes Import available again
+        #expect(second.writes && second.canApply && second.summary == "1 not in the file (removed)")
+        #expect(second.apply()?.summary == "1 not in the file (removed)")
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "722282 Normal 4", "721337 Normal 3"])
     }
 
     @Test func dataThatIsNotAnExportFails() async throws {
@@ -200,8 +206,9 @@ struct ImportModelTests {
     }
 
     /// While the game's catalog step has not ended, every line could read as "not in the catalog": no Import for that
-    /// game, the sheet says the catalog is downloading, and its lines are not listed as unknown. Once it has ended, a new
-    /// `prepare` makes the comparison and keeps the Remove choices that still apply.
+    /// game, the sheet says the catalog is downloading, and its lines are not listed as unknown. When the step ends, the
+    /// comparison made during the download is still not importable (fix round 1, item 1): only a `prepare` made after it
+    /// makes the game importable, and it keeps the Remove choices that still apply.
     @Test func aCatalogThatIsStillDownloadingBlocksTheGame() async throws {
         let (library, _) = try await library()
         let catalogStep = CatalogStep()
@@ -215,11 +222,42 @@ struct ImportModelTests {
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 1", "555 Normal 2"])
 
         catalogStep.settled = true
-        #expect(model.block(game: "riftbound") == nil && model.canApply)
+        #expect(model.block(game: "riftbound") == .catalog("The catalog is still downloading. This game can be imported when it is ready."))
+        #expect(!model.canApply && model.apply() == nil)
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 1", "555 Normal 2"])
         model.setAllMissing(remove: true, game: "riftbound")
         await model.prepare()                                                  // the sheet does it when the step ends
+        #expect(model.block(game: "riftbound") == nil && model.canApply)
         #expect(model.remove == [onlyHere])
         #expect(model.apply()?.summary == "2 new, 1 changed, 1 not in the file (removed)")
+    }
+
+    /// Fix round 1, item 1: while a `prepare` runs again (a catalog step ended), the comparison on screen stays, and
+    /// Import is off until the new one is made.
+    @Test(.timeLimit(.minutes(1))) func importIsOffWhileARePrepareRuns() async throws {
+        let (library, _) = try await library()
+        let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
+        await model.prepare()
+        #expect(model.canApply)
+        let gate = ReadGate()
+        model.beforeLookup = { await gate.pass(URL(fileURLWithPath: "/lookup")) }
+        let again = Task { await model.prepare() }
+        try await gate.waitUntilHolding()
+        #expect(model.state == .ready && model.isPreparing && model.comparisons.count == 1)
+        #expect(!model.canApply && model.apply() == nil)
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 1", "555 Normal 2"])
+        gate.open()
+        await again.value
+        #expect(!model.isPreparing && model.canApply)
+    }
+
+    /// Fix round 1, item 3: the sheet prepares again only when one of the file's games becomes settled, not when a step
+    /// starts or the catalog only grows.
+    @Test func aPrepareIsDueOnlyWhenAGameBecomesSettled() {
+        #expect(ImportModel.prepareIsDue(settled: ["riftbound"], before: []))
+        #expect(ImportModel.prepareIsDue(settled: ["riftbound", "yu-gi-oh"], before: ["riftbound"]))
+        #expect(!ImportModel.prepareIsDue(settled: [], before: ["riftbound"]))            // a Refresh started
+        #expect(!ImportModel.prepareIsDue(settled: ["riftbound"], before: ["riftbound"]))
     }
 
     /// A settled catalog with no product of the game (offline on an empty catalog, every set failed): blocked as well.

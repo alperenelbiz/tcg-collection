@@ -11,6 +11,8 @@ struct ImportSheet: View {
     let importModel: ImportModel
     /// "Not imported" is collapsed until clicked.
     @State private var showsSkipped = false
+    /// Goes up when a game of the file becomes settled; each value runs one `prepare` (the first at once).
+    @State private var prepareRound = 0
 
     /// What the body shows under the title.
     private enum Layout: Equatable {
@@ -51,8 +53,13 @@ struct ImportSheet: View {
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("import-sheet")
-        // Again when a catalog step ends or the catalog grows: the file's products may be in it now.
-        .task(id: catalogKey) { await importModel.prepare() }
+        // Again when a catalog step of a game of the file ends: its products may be in the catalog now. A step that starts
+        // blocks the game live (`block`), and a batch of a download changes nothing that is shown.
+        .task(id: prepareRound) { await importModel.prepare() }
+        .onChange(of: importModel.settledGames()) { before, settled in
+            if ImportModel.prepareIsDue(settled: settled, before: before) { prepareRound += 1 }
+        }
+        // The collection changed: compared again at once from the lines and products already read.
         .onChange(of: model.library.version) { importModel.refreshComparison() }
     }
 
@@ -68,24 +75,21 @@ struct ImportSheet: View {
         }
     }
 
-    private var catalogKey: [Int] {
-        [model.catalogVersion] + Games.all.map { model.catalogSettled(game: $0.id) ? 1 : 0 }
-    }
-
     private var layout: Layout {
         switch importModel.state {
         case .reading: return .sentence("Reading the file…")
         case .failed(let text): return .sentence(text)
         case .ready:
             if importModel.comparisons.isEmpty { return .sentence(ImportModel.noGame) }
+            // Only when no group has a row: kept rows alone are shown, with "Nothing to import: …" as the summary.
             let nothingBlocked = importModel.comparisons.allSatisfy { importModel.block(game: $0.gameID) == nil }
-            if nothingBlocked, !importModel.canApply { return .sentence(ImportModel.matches) }
+            if nothingBlocked, importModel.summary == ImportModel.matches { return .sentence(ImportModel.matches) }
             return .comparison
         }
     }
 
     private func header(_ layout: Layout) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.lineGap) {
             Text("Import \(importModel.fileName)")
                 .font(Theme.sheetTitleFont)
                 .foregroundStyle(Theme.text)
@@ -103,12 +107,11 @@ struct ImportSheet: View {
                 Text(notice)
                     .font(Theme.bodyFont)
                     .foregroundStyle(Theme.text)
-                    .padding(.top, 4)
+                    .padding(.top, Theme.lineGap)
                     .accessibilityIdentifier("import-notice")
             }
         }
         .padding([.horizontal, .top], Theme.sheetPadding)
-        .padding(.bottom, layout == .comparison ? 8 : 0)
     }
 
     // MARK: A game
@@ -126,7 +129,7 @@ struct ImportSheet: View {
                 Text(block.text)
                     .font(Theme.bodyFont)
                     .foregroundStyle(Theme.muted)
-                    .padding(.top, 4)
+                    .padding(.top, Theme.lineGap)
                     .accessibilityIdentifier("import-blocked-\(game)")
             }
             // A catalog that is not ready would make every line "not in the catalog": no groups then.
@@ -136,7 +139,7 @@ struct ImportSheet: View {
                 Text("Nothing changes in this game.")
                     .font(Theme.bodyFont)
                     .foregroundStyle(Theme.muted)
-                    .padding(.top, 4)
+                    .padding(.top, Theme.lineGap)
             } else {
                 groups(comparison, locked: block != nil)
             }
@@ -202,7 +205,6 @@ struct ImportSheet: View {
                 Spacer()
                 control()
             }
-            .frame(minHeight: 20)
             .padding(.bottom, Theme.tableRowSpacing)
             LazyVStack(alignment: .leading, spacing: Theme.tableRowSpacing) { rows() }
         }
@@ -306,8 +308,9 @@ struct ImportSheet: View {
 
     private var buttons: some View {
         HStack {
-            // Import is offered while the file is read (disabled) and when a game can be imported with a change.
-            if importModel.state == .reading || importModel.canApply {
+            // Import is offered (off) while a `prepare` runs, and (on) when it would write; rows that are only kept write
+            // nothing, so then only Close is offered until a row is set to Remove.
+            if importModel.state == .reading || importModel.isPreparing || importModel.writes {
                 Button("Cancel") { model.importing = nil }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("import-cancel")
