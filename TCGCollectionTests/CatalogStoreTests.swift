@@ -133,6 +133,16 @@ struct CatalogStoreTests {
         #expect(Set(try await s.products(ids: [721334, 719684, 999_999], game: "cyberpunk").keys) == [719684])
     }
 
+    /// Fix round 2, item 1: whether a game has any product (a set fetched without a card does not count).
+    @Test func whetherAGameHasProducts() async throws {
+        let s = try await filledStore()
+        #expect(try await s.hasProducts(game: "riftbound"))
+        try await s.replaceProducts(of: 24819, with: [], at: .now)                 // the set is fetched, without cards
+        #expect(try await !s.hasProducts(game: "riftbound"))
+        #expect(try await s.progress(game: "riftbound").fetched == 1)
+        #expect(try await s.hasProducts(game: "cyberpunk"))
+    }
+
     /// More ids than one batch of 500 holds, repeated ids, and the ids the store has in the third batch.
     @Test func productsByIDReadsInBatches() async throws {
         let s = try await filledStore()

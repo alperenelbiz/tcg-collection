@@ -178,6 +178,10 @@ final class AppModel {
     /// says why and has no Try again. Set by each sync; at launch already when this launch set the store aside on the
     /// day of the last fetch.
     private(set) var catalogWaits = false
+    /// The games whose catalog step of this run is still to come or running: every game from a launch that syncs until
+    /// its step of the first sync has ended, and again during each Refresh or Rebuild. A step that ended with failed sets
+    /// counts as ended. Empty offline, with a store in memory, and while the catalog waits for the next UTC day.
+    private(set) var catalogPending: Set<String> = []
     /// The status of the first catalog check. After a store was moved aside it says so, until the first set is in.
     @ObservationIgnored private var checkingText = StatusText.checking
     @ObservationIgnored private var isRunning = false
@@ -240,7 +244,13 @@ final class AppModel {
                 status = .idle(notice)
             }
         }
+        // A launch that syncs has every game's catalog step still to come.
+        if !options.offline, opened.failure == nil, !catalogWaits { catalogPending = Set(Games.all.map(\.id)) }
     }
+
+    /// True when no catalog step of this run is running or still to come for the game (`catalogPending`): the catalog
+    /// then holds every product of the game it is going to hold in this run.
+    func catalogSettled(game: String) -> Bool { !catalogPending.contains(game) }
 
     /// The filter menu values of a game. Nil until a file exists or a sync wrote one. Views read it again when
     /// `filtersVersion` changes.
@@ -463,16 +473,26 @@ final class AppModel {
     private func sync(rebuild: Bool) async {
         guard !isRunning else { return }
         isRunning = true
-        defer { isRunning = false }
+        defer {
+            isRunning = false
+            catalogPending = []
+        }
         let now = self.now()
         // A held sync skips only the catalog steps: the price and index steps keep their own once-a-day rules.
         let held = await catalogHeld(now: now)
         catalogWaits = held
+        catalogPending = held ? [] : Set(Games.all.map(\.id))
         let chosen = game
         var first = SyncResult(fetched: 0, failed: 0, newSets: [:]), rest = first
-        if !held { first = await syncCatalog(of: [chosen], now: now, rebuild: rebuild) }
+        if !held {
+            first = await syncCatalog(of: [chosen], now: now, rebuild: rebuild)
+            catalogPending.remove(chosen.id)
+        }
         let priceFailure = await syncPrices(now: now)
-        if !held { rest = await syncCatalog(of: Games.all.filter { $0.id != chosen.id }, now: now, rebuild: rebuild) }
+        if !held {
+            rest = await syncCatalog(of: Games.all.filter { $0.id != chosen.id }, now: now, rebuild: rebuild)
+            catalogPending = []
+        }
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 removedSets: first.removedSets + rest.removedSets,

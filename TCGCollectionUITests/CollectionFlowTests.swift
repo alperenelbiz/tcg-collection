@@ -126,22 +126,15 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// A row counted down to 0 on the card page is removed: from the file, and from the Collection, which is empty again.
-    /// `-fixtureDelay 1500`: while the catalog downloads, the row is listed by its saved name with a line that says so, and
-    /// its cell opens nothing (fix round 1, item 2); once the game's sets are in, it opens the card page.
+    /// The cell opens its card page once the catalog has its product (before that it is pending and opens nothing).
     func testCountDownToZeroRemovesTheRow() throws {
-        let app = try launch(game: "riftbound", extra: ["-screen", "collection", "-fixtureDelay", "1500"]) { root in
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
             try self.writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 2, name: "Dockside Lock-Up")],
                                      game: "riftbound", in: root)
         }
         let cell = element(app, "collection-cell-721334-Foil")
         XCTAssertTrue(cell.waitForExistence(timeout: 20))
-        let note = element(app, "collection-catalog-note")
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        XCTAssertEqual(text(note), "The catalog is still downloading. Pictures and prices come when it is ready.")
-        XCTAssertEqual(cell.label, "Dockside Lock-Up, ×2, Foil, no price")
-        shot("collection-24-catalog-downloading")
-        XCTAssertTrue(waitUntilSynced(app))
-        XCTAssertTrue(waitUntil { !note.exists && app.buttons["collection-cell-721334-Foil"].exists }, "the cell is not a link")
+        XCTAssertTrue(app.buttons["collection-cell-721334-Foil"].waitForExistence(timeout: 30), "the cell is not a link")
         cell.click()
         let minus = element(app, "count-minus-Foil")
         XCTAssertTrue(minus.waitForExistence(timeout: 10))
@@ -392,6 +385,48 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.text(self.element(app, "count-value-Foil")) == "5" })
         XCTAssertEqual(text(element(app, "card-owned")), "In your collection: 5")
         shot("collection-21-five-after-relaunch")
+    }
+
+    /// Fix round 2, item 1: while a game's catalog is still downloading, a row whose product is not in yet is pending (its
+    /// saved name, no link, the downloading line), never "not in the catalog any more"; a row whose product is in already
+    /// opens its card page. `-game cyberpunk -fixtureDelay 3000`: Cyberpunk, the prices, Magic and Yu-Gi-Oh! come first,
+    /// then Riftbound's 14 sets, 4 at a time, 3 s each. Once the first Riftbound set is in, the test switches to
+    /// Riftbound, whose step still runs for about 9 s. When the step has ended, the missing row opens the page of a printing
+    /// that left the catalog.
+    func testARowNotInTheCatalogYetIsPendingDuringADownload() throws {
+        let app = try launch(game: "cyberpunk", extra: ["-screen", "collection", "-fixtureDelay", "3000"]) { root in
+            try self.writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 2, name: "Dockside Lock-Up"),
+                                      StoredRow(productID: 999999, finish: "Normal", count: 1, name: "Gone Card")],
+                                     game: "riftbound", in: root)
+        }
+        let status = app.staticTexts["status-line"]
+        let started = waitUntil(timeout: 40) {
+            let line = status.exists ? self.text(status) : ""
+            guard let range = line.range(of: #"Riftbound: \d+ / 14 sets"#, options: .regularExpression) else { return false }
+            let done = Int(line[range].split(separator: " ")[1]) ?? 0
+            return done >= 1 && done <= 10
+        }
+        XCTAssertTrue(started, "Riftbound's download was not seen running: \(text(status))")
+        element(app, "game-picker").click()
+        XCTAssertTrue(app.menuItems["Riftbound"].firstMatch.waitForExistence(timeout: 5))
+        app.menuItems["Riftbound"].firstMatch.click()
+        XCTAssertTrue(app.buttons["collection-cell-721334-Foil"].waitForExistence(timeout: 5), "the product that is in is no link")
+        let gone = element(app, "collection-cell-999999-Normal")
+        XCTAssertTrue(gone.exists)
+        XCTAssertFalse(app.buttons["collection-cell-999999-Normal"].exists, "a row not in the catalog yet is a link")
+        XCTAssertEqual(gone.label, "Gone Card, ×1, Normal, no price")
+        XCTAssertEqual(text(element(app, "collection-catalog-note")),
+                       "The catalog is still downloading. Pictures and prices come when it is ready.")
+        XCTAssertTrue(text(status).contains("Riftbound:"), "the download ended before the check: \(text(status))")
+        shot("collection-24-catalog-downloading")
+
+        // The step has ended: now the missing product is "not in the catalog any more".
+        XCTAssertTrue(app.buttons["collection-cell-999999-Normal"].waitForExistence(timeout: 40), "the step did not end")
+        XCTAssertFalse(element(app, "collection-catalog-note").exists)
+        app.buttons["collection-cell-999999-Normal"].click()
+        let sentence = NSPredicate(format: "label == %@ OR value == %@", "This printing is not in the catalog any more.",
+                                   "This printing is not in the catalog any more.")
+        XCTAssertTrue(app.staticTexts.matching(sentence).firstMatch.waitForExistence(timeout: 5))
     }
 
     /// Fix round 1, item 2: offline on an empty catalog (no fixtures), a pre-filled collection is listed by the rows'

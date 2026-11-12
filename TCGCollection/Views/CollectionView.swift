@@ -15,16 +15,18 @@ final class CollectionScreenState {
     var path = NavigationPath()
     /// The printing at the top of the gallery.
     var scrolledTo: PrintingKey?
-    /// The last join that succeeded on a catalog with this game's sets, in the file's order. Nil until one did.
+    /// The last join that succeeded on a catalog with this game's products, in the file's order. Nil until one did.
     var entries: [CollectionEntry]?
-    /// The latest join threw (the catalog could not be read): `entries` stays as it was.
+    /// The latest join threw (the catalog could not be read): `entries` stays as it was, and the next appearance of the
+    /// screen tries again.
     var joinFailed = false
-    /// The catalog has fetched sets of this game. Until then no row can be "not in the catalog any more".
-    var catalogHasSets = false
+    /// The catalog has products of this game. Without, the rows are listed alone.
+    var catalogHasProducts = false
     /// The Filter menu's sets (newest first) and rarities (by name): those of the owned printings only.
     var sets: [SetRecord] = []
     var rarities: [String] = []
-    /// What the latest join that ended read: a join with the same inputs is not done again (a return from All cards).
+    /// What the latest join that ended read: a join with the same inputs is not done again (a return from All cards),
+    /// unless it failed (`CollectionList.joinIsDue`).
     var joined: CollectionJoin?
 
     init(gameID: String) {
@@ -65,6 +67,9 @@ nonisolated struct CollectionJoin: Equatable {
     let catalogVersion: Int
     /// The game's price day: a new day's prices change the entries' prices.
     let priceDay: String?
+    /// The game's catalog step has ended in this run (`AppModel.catalogSettled`): only then may a Set or Rarity choice
+    /// go back to "All".
+    let catalogSettled: Bool
 }
 
 /// Where the cell of a product that is not in the catalog any more opens (Review Focus 4).
@@ -76,8 +81,9 @@ nonisolated struct UnknownPrinting: Hashable, Sendable {
 
 /// The printings the user owns in the selected game: the totals as the window's subtitle, one search field, the Filter
 /// menu (set, rarity, price, playset) and the Sort menu, and a gallery of `CardCell`s. A click opens the card page on that
-/// printing, in this screen's own navigation stack. While the catalog has none of the game's sets, or cannot be read, the
-/// rows are listed by their saved names with one line that says why (`CollectionList.content`), and a cell opens nothing.
+/// printing, in this screen's own navigation stack. While the catalog has no product of the game, or cannot be read, the
+/// rows are listed by their saved names with one line that says why, and a cell opens nothing; while the game's catalog
+/// is still downloading, a row whose product is not in yet is pending in the same way (`CollectionList.content`).
 struct CollectionView: View {
     /// Placeholder cells while the folder is read: about one window of the gallery.
     private static let placeholders = 12
@@ -98,14 +104,14 @@ struct CollectionView: View {
         // Nil until a join of this game has ended.
         let listed = state.joined == nil ? nil : CollectionList.content(
             rows: model.library.rows(game: state.gameID), joined: state.entries, joinFailed: state.joinFailed,
-            catalogHasSets: state.catalogHasSets, syncing: model.status.isSyncing)
+            catalogHasProducts: state.catalogHasProducts, catalogSettled: model.catalogSettled(game: state.gameID))
         let all = listed?.entries ?? []
-        let shown = CollectionList.sorted(
-            CollectionList.filtered(all, text: state.text, groupID: state.groupID, rarity: state.rarity, price: state.price,
-                                    playset: state.playset, playsetSize: model.game.playset),
-            by: state.sort)
+        let shown = listed.map {
+            CollectionList.shown($0, text: state.text, groupID: state.groupID, rarity: state.rarity, price: state.price,
+                                 playset: state.playset, playsetSize: model.game.playset, sort: state.sort)
+        } ?? []
         let phase = phase(listed)
-        content(phase, shown: shown, linked: listed?.linked ?? false)
+        content(phase, shown: shown, listed: listed)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .top, spacing: 0) { note(phase == .list ? listed?.note : nil) }
             .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
@@ -152,7 +158,7 @@ struct CollectionView: View {
         }
     }
 
-    @ViewBuilder private func content(_ phase: Phase, shown: [CollectionEntry], linked: Bool) -> some View {
+    @ViewBuilder private func content(_ phase: Phase, shown: [CollectionEntry], listed: CollectionContent?) -> some View {
         switch phase {
         case .loading:
             // The final layout with flat `surface` blocks where the pictures will be. No shimmer.
@@ -178,7 +184,7 @@ struct CollectionView: View {
                 ScrollView {
                     grid {
                         ForEach(shown) { entry in
-                            cell(entry, linked: linked)
+                            cell(entry, link: listed?.link(for: entry) ?? .none)
                                 .accessibilityIdentifier("collection-cell-\(entry.row.productID)-\(entry.row.finish)")
                         }
                     }
@@ -197,23 +203,24 @@ struct CollectionView: View {
         .padding(Theme.margin)
     }
 
-    /// A printing of the catalog opens its card page on that printing; one that left the catalog opens its small page.
-    /// Without a linked catalog (`CollectionContent.linked`) a cell opens nothing and takes no hover.
-    @ViewBuilder private func cell(_ entry: CollectionEntry, linked: Bool) -> some View {
+    /// A printing of the catalog opens its card page on that printing; one that left a settled catalog opens its small
+    /// page; a pending one (`CollectionCellLink.none`) opens nothing and takes no hover.
+    @ViewBuilder private func cell(_ entry: CollectionEntry, link: CollectionCellLink) -> some View {
         let cell = CardCell(content: CellContent(product: entry.product, name: entry.name, left: entry.countText,
                                                  price: entry.price, selected: false))
-        if !linked {
-            cell
-                .allowsHitTesting(false)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(entry.accessibilityText)
-        } else if let product = entry.product {
+        switch (link, entry.product) {
+        case (.card, let product?):
             NavigationLink(value: CardTarget(gameID: state.gameID, cardKey: entry.cardKey, startProductID: product.productID)) { cell }
                 .buttonStyle(.plain)
                 .accessibilityLabel(entry.accessibilityText)
-        } else {
+        case (.unknownPrinting, _):
             NavigationLink(value: UnknownPrinting(gameID: state.gameID, key: entry.id, name: entry.name)) { cell }
                 .buttonStyle(.plain)
+                .accessibilityLabel(entry.accessibilityText)
+        default:
+            cell
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(entry.accessibilityText)
         }
     }
@@ -287,21 +294,22 @@ struct CollectionView: View {
 
     private var join: CollectionJoin {
         CollectionJoin(game: state.gameID, libraryVersion: model.library.version, catalogVersion: model.catalogVersion,
-                       priceDay: model.prices.day(game: state.gameID))
+                       priceDay: model.prices.day(game: state.gameID), catalogSettled: model.catalogSettled(game: state.gameID))
     }
 
     /// Joins the game's rows with the catalog (products and set names through `reader`, off the main thread) and the
     /// prices, once per `join`. Filtering and sorting then run in memory on every keystroke.
     private func joinRows() async {
         let key = join, library = model.library
-        // Before the folder is read the rows are empty: no join, the screen shows its loading layout.
-        guard library.isLoaded, state.joined != key else { return }
+        // Before the folder is read the rows are empty: no join, the screen shows its loading layout. A failed join is
+        // tried again the next time the screen appears.
+        guard library.isLoaded, CollectionList.joinIsDue(key, last: state.joined, lastFailed: state.joinFailed) else { return }
         let game = state.gameID, rows = library.rows(game: game)
-        let products: [Int: ProductRecord], sets: [SetRecord], hasSets: Bool
+        let products: [Int: ProductRecord], sets: [SetRecord], hasProducts: Bool
         do {
             products = try await model.reader.products(ids: rows.map(\.productID), game: game)
             sets = try await model.reader.sets(game: game)
-            hasSets = try await model.reader.progress(game: game).fetched > 0
+            hasProducts = try await model.reader.hasProducts(game: game)
         } catch {
             // A read error never turns the rows into unknown printings: the last good entries stay (`content`).
             guard !Task.isCancelled else { return }
@@ -311,10 +319,10 @@ struct CollectionView: View {
         }
         guard !Task.isCancelled else { return }
         state.joinFailed = false
-        state.catalogHasSets = hasSets
+        state.catalogHasProducts = hasProducts
         state.joined = key
-        // No fetched set of this game yet: every product would be missing; the rows are listed alone.
-        guard hasSets else {
+        // No product of this game yet: every product would be missing; the rows are listed alone.
+        guard hasProducts else {
             state.entries = nil
             return
         }
@@ -326,10 +334,11 @@ struct CollectionView: View {
         let ownedSets = Set(products.values.map(\.groupID))
         state.sets = sets.filter { ownedSets.contains($0.groupID) }
         state.rarities = Set(products.values.map(\.rarity)).filter { !$0.isEmpty }.sorted()
-        // A chosen set or rarity the collection no longer has goes back to "All" (and leaves the Filter count).
-        let groupID = CollectionList.validChoice(state.groupID, among: Set(state.sets.map(\.groupID)))
+        // A chosen set or rarity the collection no longer has goes back to "All" (and leaves the Filter count), but only
+        // on a settled catalog: while it downloads, the owned sets are not all known yet.
+        let groupID = CollectionList.validChoice(state.groupID, among: Set(state.sets.map(\.groupID)), settled: key.catalogSettled)
         if groupID != state.groupID { state.groupID = groupID }
-        let rarity = CollectionList.validChoice(state.rarity, among: Set(state.rarities))
+        let rarity = CollectionList.validChoice(state.rarity, among: Set(state.rarities), settled: key.catalogSettled)
         if rarity != state.rarity { state.rarity = rarity }
         // On a return to the Collection with the same rows nothing is written, so nothing redraws.
         if state.entries != entries { state.entries = entries }

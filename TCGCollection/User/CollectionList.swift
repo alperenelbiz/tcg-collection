@@ -41,12 +41,28 @@ nonisolated struct CollectionEntry: Sendable, Identifiable, Equatable {
 /// What the Collection lists, given the state of the catalog (`CollectionList.content`).
 nonisolated struct CollectionContent: Equatable {
     let entries: [CollectionEntry]
-    /// True when the entries come from a join with a catalog that has this game's sets: a cell opens its page, and a
-    /// product the catalog does not have is "not in the catalog any more". False: the rows alone (saved names, no picture,
-    /// no price), and a cell opens nothing.
-    let linked: Bool
+    /// True when the entries come from a join with the catalog's products: they have sets, rarities and prices, so the Set
+    /// and Rarity choices apply. False: the rows alone (saved names, no picture, no price).
+    let joined: Bool
+    /// True when the game's catalog is settled (its catalog step is not running or still due in this run, and the game
+    /// has products): only then is a product the catalog lacks "not in the catalog any more" (Review Focus 4).
+    let settled: Bool
     /// One muted line above the gallery that says what the catalog cannot give; nil when it gives everything.
     let note: String?
+
+    /// Where a cell opens: its card page when the catalog has its product; the page of a printing that left the catalog
+    /// when the catalog is settled; else nowhere (pending).
+    func link(for entry: CollectionEntry) -> CollectionCellLink {
+        if entry.product != nil { return .card }
+        return settled ? .unknownPrinting : .none
+    }
+}
+
+/// Where a Collection cell opens (`CollectionContent.link(for:)`).
+nonisolated enum CollectionCellLink: Equatable {
+    case card, unknownPrinting
+    /// Pending: the catalog cannot say yet what this row is.
+    case none
 }
 
 /// The Collection's list: rows joined with the catalog, then filtered, sorted and counted in memory. Pure; the view joins
@@ -120,26 +136,52 @@ nonisolated enum CollectionList {
     static let catalogUnreadable = "The catalog could not be read."
     static let catalogUnreadableKept = "The catalog could not be read. Showing what was read before."
 
-    /// What the Collection lists. `joined` is the last join that succeeded on a catalog with this game's sets (nil when
-    /// none did yet); `joinFailed` says the latest join threw. Only a catalog with fetched sets can say that a product
-    /// is "not in the catalog any more" (Review Focus 4); before that, and after a failed read with nothing read before,
-    /// the rows are listed alone with a line that says why.
-    static func content(rows: [CollectionRow], joined: [CollectionEntry]?, joinFailed: Bool, catalogHasSets: Bool,
-                        syncing: Bool) -> CollectionContent {
+    /// What the Collection lists.
+    /// - `joined`: the last join that succeeded on a catalog with this game's products (nil when none did yet).
+    /// - `joinFailed`: the latest join threw.
+    /// - `catalogHasProducts`: the catalog has products of this game.
+    /// - `catalogSettled`: the game's catalog step is not running or still due in this run (`AppModel.catalogSettled`); a
+    ///   step that ended with failed sets counts as ended.
+    /// A missing product is "not in the catalog any more" only on a settled catalog with products; otherwise its row is
+    /// pending, with the downloading line. Without products the rows are listed alone; a failed join keeps the last good
+    /// entries, whose missing products are then pending (the read could not confirm them).
+    static func content(rows: [CollectionRow], joined: [CollectionEntry]?, joinFailed: Bool, catalogHasProducts: Bool,
+                        catalogSettled: Bool) -> CollectionContent {
         let alone = rows.map { CollectionEntry(row: $0, product: nil, setName: "", price: nil, copiesOfCard: $0.count) }
         if joinFailed {
-            if let joined, !joined.isEmpty { return CollectionContent(entries: joined, linked: true, note: catalogUnreadableKept) }
-            return CollectionContent(entries: alone, linked: false, note: catalogUnreadable)
+            if let joined, !joined.isEmpty {
+                return CollectionContent(entries: joined, joined: true, settled: false, note: catalogUnreadableKept)
+            }
+            return CollectionContent(entries: alone, joined: false, settled: false, note: catalogUnreadable)
         }
-        guard catalogHasSets else {
-            return CollectionContent(entries: alone, linked: false, note: syncing ? catalogDownloading : catalogEmpty)
+        guard catalogHasProducts, let joined else {
+            return CollectionContent(entries: alone, joined: false, settled: false,
+                                     note: catalogSettled ? catalogEmpty : catalogDownloading)
         }
-        return CollectionContent(entries: joined ?? alone, linked: joined != nil, note: nil)
+        let pending = !catalogSettled && joined.contains { $0.product == nil }
+        return CollectionContent(entries: joined, joined: true, settled: catalogSettled, note: pending ? catalogDownloading : nil)
     }
 
-    /// A Set or Rarity choice, or nil ("All") when the collection no longer has that value.
-    static func validChoice<T: Hashable>(_ choice: T?, among available: Set<T>) -> T? {
-        choice.flatMap { available.contains($0) ? $0 : nil }
+    /// The gallery's entries: `content`'s entries filtered and sorted. A Set or Rarity choice applies only to joined
+    /// entries: the rows alone have neither, and the choice would hide every row (it stays stored).
+    static func shown(_ content: CollectionContent, text: String, groupID: Int?, rarity: String?, price: PriceFilter,
+                      playset: CollectionRules.PlaysetFilter, playsetSize: Int, sort: CollectionSort) -> [CollectionEntry] {
+        sorted(filtered(content.entries, text: text, groupID: content.joined ? groupID : nil,
+                        rarity: content.joined ? rarity : nil, price: price, playset: playset, playsetSize: playsetSize),
+               by: sort)
+    }
+
+    /// A Set or Rarity choice, or nil ("All") when the collection no longer has that value. Only on a settled catalog:
+    /// while it downloads, a set or rarity that is not in yet is no proof, and the choice stays.
+    static func validChoice<T: Hashable>(_ choice: T?, among available: Set<T>, settled: Bool) -> T? {
+        guard settled else { return choice }
+        return choice.flatMap { available.contains($0) ? $0 : nil }
+    }
+
+    /// True when the Collection must join again: what the join reads changed since the last one, or the last one failed
+    /// (tried again at the next appearance of the screen; the failure changes nothing the join reads, so it never loops).
+    static func joinIsDue<Key: Equatable>(_ key: Key, last: Key?, lastFailed: Bool) -> Bool {
+        last != key || lastFailed
     }
 
     /// `120 copies · 74 printings`, `1 copy · 1 printing`. With `all` (a filter or search text is on), the shown part of

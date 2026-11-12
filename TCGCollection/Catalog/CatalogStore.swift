@@ -399,6 +399,13 @@ actor CatalogStore: ModelActor {
         return try modelContext.fetch(descriptor).first?.record
     }
 
+    /// True when the store has at least one product of `game` (a set fetched without a card gives none).
+    func hasProducts(game: String) throws -> Bool {
+        var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetchCount(descriptor) > 0
+    }
+
     /// The products of `game` with these ids, by id; an id the store does not hold for that game is left out (a row whose
     /// id belongs to another game is then an unknown printing, not a card of the wrong game). Read in batches of 500 ids,
     /// so a collection of thousands of rows never builds one huge `IN` list.

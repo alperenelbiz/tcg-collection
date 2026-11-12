@@ -39,38 +39,81 @@ struct CollectionListTests {
         #expect(e[5].accessibilityText == "Gone Card, ×5, Normal, no price")
     }
 
-    /// Fix round 1, item 2: what the Collection lists depends on the catalog. Joined only when the game has fetched sets;
-    /// otherwise the rows alone (saved names, no product, no price) with one line that says why; a failed join keeps the
-    /// last good entries.
+    /// What the Collection lists depends on the catalog (fix rounds 1 and 2). A row whose product the catalog lacks is
+    /// "not in the catalog any more" only when the game's catalog is settled (its catalog step is not running or still
+    /// due in this run, and the game has products); otherwise it is pending, with the downloading line. Without products
+    /// the rows are listed alone; a failed join keeps the last good entries.
     @Test func contentFollowsTheCatalog() {
-        let joined = entries()
+        let joined = entries()                                   // product 9 is missing
         let rowsOnly = rows.map { CollectionEntry(row: $0, product: nil, setName: "", price: nil, copiesOfCard: $0.count) }
-        // The catalog has this game's sets: the join, with unknown products as they are (Review Focus 4).
-        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasSets: true, syncing: true)
-                == CollectionContent(entries: joined, linked: true, note: nil))
-        // No fetched set yet: the rows alone, nothing opens, and no row is "not in the catalog any more".
-        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasSets: false, syncing: true)
-                == CollectionContent(entries: rowsOnly, linked: false,
-                                     note: "The catalog is still downloading. Pictures and prices come when it is ready."))
-        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: false, catalogHasSets: false, syncing: false)
-                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog is empty. Pictures and prices need the catalog."))
-        // The join threw: the last good entries stay, or the rows alone when there are none.
-        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: true, catalogHasSets: true, syncing: false)
-                == CollectionContent(entries: joined, linked: true, note: "The catalog could not be read. Showing what was read before."))
-        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: true, catalogHasSets: false, syncing: false)
-                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog could not be read."))
-        #expect(CollectionList.content(rows: rows, joined: [], joinFailed: true, catalogHasSets: true, syncing: false)
-                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog could not be read."))
-        #expect(CollectionList.content(rows: [], joined: nil, joinFailed: false, catalogHasSets: false, syncing: true).entries.isEmpty)
+        let downloading = "The catalog is still downloading. Pictures and prices come when it is ready."
+        // Settled, with products: a missing product is unknown (Review Focus 4); no line. Also when the step had failed
+        // sets: a step that ended counts as settled (the model's `catalogSettled`).
+        let settled = CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasProducts: true, catalogSettled: true)
+        #expect(settled == CollectionContent(entries: joined, joined: true, settled: true, note: nil))
+        #expect(settled.link(for: joined[0]) == .card); #expect(settled.link(for: joined[5]) == .unknownPrinting)
+        // The game's step runs or is still due, with some products in: the missing product is pending, not unknown.
+        let partial = CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasProducts: true, catalogSettled: false)
+        #expect(partial == CollectionContent(entries: joined, joined: true, settled: false, note: downloading))
+        #expect(partial.link(for: joined[0]) == .card); #expect(partial.link(for: joined[5]) == .none)
+        // ... and with every product found, nothing is pending and no line is needed.
+        #expect(CollectionList.content(rows: Array(rows.prefix(5)), joined: Array(joined.prefix(5)), joinFailed: false,
+                                       catalogHasProducts: true, catalogSettled: false).note == nil)
+        // No products for the game: the rows alone, nothing opens.
+        let downloadingAlone = CollectionList.content(rows: rows, joined: nil, joinFailed: false, catalogHasProducts: false, catalogSettled: false)
+        #expect(downloadingAlone == CollectionContent(entries: rowsOnly, joined: false, settled: false, note: downloading))
+        #expect(rowsOnly.allSatisfy { downloadingAlone.link(for: $0) == .none })
+        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: false, catalogHasProducts: false, catalogSettled: true)
+                == CollectionContent(entries: rowsOnly, joined: false, settled: false,
+                                     note: "The catalog is empty. Pictures and prices need the catalog."))
+        // The join threw: the last good entries stay (a missing one is pending: the read could not confirm it), or the
+        // rows alone when there are none.
+        let kept = CollectionList.content(rows: rows, joined: joined, joinFailed: true, catalogHasProducts: true, catalogSettled: true)
+        #expect(kept == CollectionContent(entries: joined, joined: true, settled: false,
+                                          note: "The catalog could not be read. Showing what was read before."))
+        #expect(kept.link(for: joined[5]) == .none)
+        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: true, catalogHasProducts: false, catalogSettled: true)
+                == CollectionContent(entries: rowsOnly, joined: false, settled: false, note: "The catalog could not be read."))
+        #expect(CollectionList.content(rows: rows, joined: [], joinFailed: true, catalogHasProducts: true, catalogSettled: true)
+                == CollectionContent(entries: rowsOnly, joined: false, settled: false, note: "The catalog could not be read."))
+        #expect(CollectionList.content(rows: [], joined: nil, joinFailed: false, catalogHasProducts: false, catalogSettled: false).entries.isEmpty)
     }
 
-    /// Fix round 1, item 5: a Set or Rarity choice that the collection no longer has goes back to "All".
+    /// Fix round 2, item 3: the rows alone have no set or rarity, so a stored Set or Rarity choice is kept but not
+    /// applied (it would hide every row); on joined entries it applies.
+    @Test func setAndRarityApplyOnlyToJoinedEntries() {
+        func shown(_ content: CollectionContent, groupID: Int? = 10, rarity: String? = nil) -> [String] {
+            CollectionList.shown(content, text: "", groupID: groupID, rarity: rarity, price: .any, playset: .any,
+                                 playsetSize: 3, sort: .name).map { "\($0.row.productID)-\($0.row.finish)" }
+        }
+        let alone = CollectionList.content(rows: rows, joined: nil, joinFailed: false, catalogHasProducts: false, catalogSettled: false)
+        // Every row, in the name order of the saved names (then finish), although Set 10 is chosen.
+        #expect(shown(alone) == ["1-Foil", "1-Normal", "2-Normal", "3-Normal", "4-Foil", "9-Normal"])
+        #expect(shown(alone, groupID: nil, rarity: "Rare").count == 6)
+        let joined = CollectionList.content(rows: rows, joined: entries(), joinFailed: false, catalogHasProducts: true, catalogSettled: true)
+        #expect(shown(joined) == ["1-Foil", "1-Normal", "3-Normal"])
+        #expect(shown(joined, groupID: nil, rarity: "Rare") == ["1-Foil", "1-Normal", "4-Foil"])
+    }
+
+    /// A Set or Rarity choice that the collection no longer has goes back to "All" (fix round 1, item 5), but only on a
+    /// settled catalog: while it downloads, a missing set is not proof (fix round 2, item 1).
     @Test func aChoiceTheCollectionNoLongerHasGoesBackToAll() {
-        #expect(CollectionList.validChoice(10, among: [10, 20]) == 10)
-        #expect(CollectionList.validChoice(30, among: [10, 20]) == nil)
-        #expect(CollectionList.validChoice(Int?.none, among: [10]) == nil)
-        #expect(CollectionList.validChoice("Rare", among: ["Rare", "Epic"]) == "Rare")
-        #expect(CollectionList.validChoice("Showcase", among: Set<String>()) == nil)
+        #expect(CollectionList.validChoice(10, among: [10, 20], settled: true) == 10)
+        #expect(CollectionList.validChoice(30, among: [10, 20], settled: true) == nil)
+        #expect(CollectionList.validChoice(30, among: [10, 20], settled: false) == 30)
+        #expect(CollectionList.validChoice(Int?.none, among: [10], settled: true) == nil)
+        #expect(CollectionList.validChoice("Rare", among: ["Rare", "Epic"], settled: true) == "Rare")
+        #expect(CollectionList.validChoice("Showcase", among: Set<String>(), settled: true) == nil)
+        #expect(CollectionList.validChoice("Showcase", among: Set<String>(), settled: false) == "Showcase")
+    }
+
+    /// Fix round 2, item 2: a join runs when what it reads changed, and again after a failed one (the next time the screen
+    /// appears; the failure itself changes nothing the join reads, so it does not loop).
+    @Test func aFailedJoinIsTriedAgain() {
+        #expect(CollectionList.joinIsDue(1, last: nil, lastFailed: false))
+        #expect(!CollectionList.joinIsDue(1, last: 1, lastFailed: false))
+        #expect(CollectionList.joinIsDue(2, last: 1, lastFailed: false))
+        #expect(CollectionList.joinIsDue(1, last: 1, lastFailed: true))
     }
 
     @Test func totalsLine() {

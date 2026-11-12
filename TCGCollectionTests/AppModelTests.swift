@@ -117,6 +117,33 @@ struct AppModelTests {
         #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
     }
 
+    /// Fix round 2, item 1: a game's catalog is settled once its catalog step of the running sync has ended, also with
+    /// failed sets; before that (from launch, while due) and while it runs it is not. The price step runs between the game
+    /// on screen and the other games: there the first is settled and the others are not.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGamesCatalogIsSettledWhenItsStepHasEnded() async throws {
+        let archive = GatedArchive()
+        let model = AppModel(options: .init(arguments: ["app", "-store", tempRoot().path, "-game", "riftbound"]),
+                             catalogClient: fakeCatalog, archiveClient: archive, fetcher: fakeFetcher, now: { Self.day1 })
+        #expect(!model.catalogSettled(game: "riftbound"))                           // due in this run
+        let run = Task { await model.start() }
+        while await !archive.called { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(model.catalogSettled(game: "riftbound"))                            // its step ended; prices run
+        #expect(!model.catalogSettled(game: "cyberpunk"))                           // still due
+        await archive.release()
+        await run.value
+        #expect(Games.all.allSatisfy { model.catalogSettled(game: $0.id) })
+    }
+
+    @MainActor @Test func aStepWithFailedSetsEndsSettledAndOfflineIsSettled() async throws {
+        await fakeCatalog.failEveryCall(after: 5)
+        let model = model(["app", "-store", tempRoot().path])
+        await model.start()
+        #expect(try await model.store.progress(game: "riftbound").failed == 9)
+        #expect(model.catalogSettled(game: "riftbound"))
+        let offline = self.model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        #expect(offline.catalogSettled(game: "riftbound"))                          // no step in this run
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()
@@ -547,5 +574,26 @@ struct AppModelTests {
         let next = UserFolder.setup(storeRoot: root, isDebugBuild: true, askUserFolder: true, bookmark: bookmark) { nil }
         guard case .iCloud(let again) = next.choice else { Issue.record("next launch: \(next.choice)"); return }
         #expect(again.resolvingSymlinksInPath().path == folder.resolvingSymlinksInPath().path)
+    }
+}
+
+/// An archive client whose first download waits until `release()`: a test can look at the model during the price step.
+private actor GatedArchive: ArchiveFetching {
+    private(set) var called = false
+    private var released = false
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    func download(day: String, to file: URL) async throws -> Bool {
+        if !called {
+            called = true
+            if !released { await withCheckedContinuation { waiting = $0 } }
+        }
+        return false
+    }
+
+    func release() {
+        released = true
+        waiting?.resume()
+        waiting = nil
     }
 }
