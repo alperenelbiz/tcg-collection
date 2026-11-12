@@ -15,12 +15,16 @@ final class CollectionScreenState {
     var path = NavigationPath()
     /// The printing at the top of the gallery.
     var scrolledTo: PrintingKey?
-    /// The rows joined with the catalog, in the file's order. Nil until the first join of this game has ended.
+    /// The last join that succeeded on a catalog with this game's sets, in the file's order. Nil until one did.
     var entries: [CollectionEntry]?
+    /// The latest join threw (the catalog could not be read): `entries` stays as it was.
+    var joinFailed = false
+    /// The catalog has fetched sets of this game. Until then no row can be "not in the catalog any more".
+    var catalogHasSets = false
     /// The Filter menu's sets (newest first) and rarities (by name): those of the owned printings only.
     var sets: [SetRecord] = []
     var rarities: [String] = []
-    /// What `entries` was joined from: a join with the same inputs is not done again (a return from All cards).
+    /// What the latest join that ended read: a join with the same inputs is not done again (a return from All cards).
     var joined: CollectionJoin?
 
     init(gameID: String) {
@@ -72,7 +76,8 @@ nonisolated struct UnknownPrinting: Hashable, Sendable {
 
 /// The printings the user owns in the selected game: the totals as the window's subtitle, one search field, the Filter
 /// menu (set, rarity, price, playset) and the Sort menu, and a gallery of `CardCell`s. A click opens the card page on that
-/// printing, in this screen's own navigation stack.
+/// printing, in this screen's own navigation stack. While the catalog has none of the game's sets, or cannot be read, the
+/// rows are listed by their saved names with one line that says why (`CollectionList.content`), and a cell opens nothing.
 struct CollectionView: View {
     /// Placeholder cells while the folder is read: about one window of the gallery.
     private static let placeholders = 12
@@ -90,14 +95,19 @@ struct CollectionView: View {
     }
 
     var body: some View {
-        let all = state.entries ?? []
+        // Nil until a join of this game has ended.
+        let listed = state.joined == nil ? nil : CollectionList.content(
+            rows: model.library.rows(game: state.gameID), joined: state.entries, joinFailed: state.joinFailed,
+            catalogHasSets: state.catalogHasSets, syncing: model.status.isSyncing)
+        let all = listed?.entries ?? []
         let shown = CollectionList.sorted(
             CollectionList.filtered(all, text: state.text, groupID: state.groupID, rarity: state.rarity, price: state.price,
                                     playset: state.playset, playsetSize: model.game.playset),
             by: state.sort)
-        let phase = phase(all)
-        content(phase, shown: shown)
+        let phase = phase(listed)
+        content(phase, shown: shown, linked: listed?.linked ?? false)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .top, spacing: 0) { note(phase == .list ? listed?.note : nil) }
             .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             .background { Theme.ground.ignoresSafeArea() }
             .accessibilityElement(children: .contain)
@@ -122,14 +132,27 @@ struct CollectionView: View {
             .task(id: join) { await joinRows() }
     }
 
-    private func phase(_ all: [CollectionEntry]) -> Phase {
+    private func phase(_ listed: CollectionContent?) -> Phase {
         let library = model.library
-        guard all.isEmpty else { return .list }
-        if library.canChange(game: state.gameID) { return state.entries == nil ? .loading : .empty }
-        return library.problem == nil ? .loading : .unavailable
+        if let listed, !listed.entries.isEmpty { return .list }
+        if library.canChange(game: state.gameID) { return listed == nil ? .loading : .empty }
+        return library.problem(game: state.gameID) == nil ? .loading : .unavailable
     }
 
-    @ViewBuilder private func content(_ phase: Phase, shown: [CollectionEntry]) -> some View {
+    /// What the catalog cannot give yet (`CollectionContent.note`): one muted line above the gallery.
+    @ViewBuilder private func note(_ text: String?) -> some View {
+        if let text {
+            Text(text)
+                .font(Theme.lineFont)
+                .foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Theme.margin)
+                .padding(.top, Theme.ruleSpacing)
+                .accessibilityIdentifier("collection-catalog-note")
+        }
+    }
+
+    @ViewBuilder private func content(_ phase: Phase, shown: [CollectionEntry], linked: Bool) -> some View {
         switch phase {
         case .loading:
             // The final layout with flat `surface` blocks where the pictures will be. No shimmer.
@@ -155,8 +178,7 @@ struct CollectionView: View {
                 ScrollView {
                     grid {
                         ForEach(shown) { entry in
-                            link(entry)
-                                .buttonStyle(.plain)
+                            cell(entry, linked: linked)
                                 .accessibilityIdentifier("collection-cell-\(entry.row.productID)-\(entry.row.finish)")
                         }
                     }
@@ -176,13 +198,23 @@ struct CollectionView: View {
     }
 
     /// A printing of the catalog opens its card page on that printing; one that left the catalog opens its small page.
-    @ViewBuilder private func link(_ entry: CollectionEntry) -> some View {
-        let cell = CardCell(content: CellContent(product: entry.product, name: entry.name, left: "×\(entry.row.count)",
+    /// Without a linked catalog (`CollectionContent.linked`) a cell opens nothing and takes no hover.
+    @ViewBuilder private func cell(_ entry: CollectionEntry, linked: Bool) -> some View {
+        let cell = CardCell(content: CellContent(product: entry.product, name: entry.name, left: entry.countText,
                                                  price: entry.price, selected: false))
-        if let product = entry.product {
+        if !linked {
+            cell
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(entry.accessibilityText)
+        } else if let product = entry.product {
             NavigationLink(value: CardTarget(gameID: state.gameID, cardKey: entry.cardKey, startProductID: product.productID)) { cell }
+                .buttonStyle(.plain)
+                .accessibilityLabel(entry.accessibilityText)
         } else {
             NavigationLink(value: UnknownPrinting(gameID: state.gameID, key: entry.id, name: entry.name)) { cell }
+                .buttonStyle(.plain)
+                .accessibilityLabel(entry.accessibilityText)
         }
     }
 
@@ -265,9 +297,27 @@ struct CollectionView: View {
         // Before the folder is read the rows are empty: no join, the screen shows its loading layout.
         guard library.isLoaded, state.joined != key else { return }
         let game = state.gameID, rows = library.rows(game: game)
-        let products = (try? await model.reader.products(ids: rows.map(\.productID))) ?? [:]
-        let sets = (try? await model.reader.sets(game: game)) ?? []
+        let products: [Int: ProductRecord], sets: [SetRecord], hasSets: Bool
+        do {
+            products = try await model.reader.products(ids: rows.map(\.productID), game: game)
+            sets = try await model.reader.sets(game: game)
+            hasSets = try await model.reader.progress(game: game).fetched > 0
+        } catch {
+            // A read error never turns the rows into unknown printings: the last good entries stay (`content`).
+            guard !Task.isCancelled else { return }
+            state.joinFailed = true
+            state.joined = key
+            return
+        }
         guard !Task.isCancelled else { return }
+        state.joinFailed = false
+        state.catalogHasSets = hasSets
+        state.joined = key
+        // No fetched set of this game yet: every product would be missing; the rows are listed alone.
+        guard hasSets else {
+            state.entries = nil
+            return
+        }
         let prices = model.prices
         let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
         let entries = CollectionList.entries(rows: rows, products: products, setNames: names) { printing in
@@ -276,9 +326,13 @@ struct CollectionView: View {
         let ownedSets = Set(products.values.map(\.groupID))
         state.sets = sets.filter { ownedSets.contains($0.groupID) }
         state.rarities = Set(products.values.map(\.rarity)).filter { !$0.isEmpty }.sorted()
+        // A chosen set or rarity the collection no longer has goes back to "All" (and leaves the Filter count).
+        let groupID = CollectionList.validChoice(state.groupID, among: Set(state.sets.map(\.groupID)))
+        if groupID != state.groupID { state.groupID = groupID }
+        let rarity = CollectionList.validChoice(state.rarity, among: Set(state.rarities))
+        if rarity != state.rarity { state.rarity = rarity }
         // On a return to the Collection with the same rows nothing is written, so nothing redraws.
         if state.entries != entries { state.entries = entries }
-        state.joined = key
     }
 }
 
@@ -300,8 +354,9 @@ struct UnknownPrintingPage: View {
                     .foregroundStyle(Theme.muted)
                     .padding(.top, 4)
                 RuleLine()
+                // No price column: the price table has nothing for a product the catalog does not have.
                 OwnedFinishes(gameID: printing.gameID, productID: printing.key.productID, name: printing.name,
-                              offered: [printing.key.finish], prices: [])
+                              offered: [printing.key.finish], prices: nil)
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 20)

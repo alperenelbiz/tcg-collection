@@ -180,26 +180,30 @@ struct CardPageView: View {
 }
 
 /// What the user owns of one product and how to change it (B5): the line "In your collection: N" (`card-owned`, N over
-/// every finish of the product), then one line per finish: its name, its price and a `CountControl` labelled with the
-/// finish. The finishes are `offered` (the price table's, or `Normal` when there are none) and then every owned finish
-/// that `offered` does not list. The controls are off while the library refuses changes of the game; the Collection's
-/// problem line, or the sidebar's, says why.
+/// every finish of the product), then one line per finish: its name, its price ("No price" in `muted` when it has none;
+/// no price column at all when `prices` is nil) and a `CountControl` labelled with the finish. The finishes are `offered`
+/// (the price table's, or `Normal` when there are none) and then every owned finish that `offered` does not list.
+/// While the library refuses changes of the game, no number is shown (`—`), the controls are off, and one muted line
+/// under them says why (`card-counts-locked`): the game's own problem, or "Reading your collection…".
 struct OwnedFinishes: View {
     let gameID: String
     let productID: Int
     /// Saved in a new row: what a reader of the file sees, and what the Collection shows if the product leaves the catalog.
     let name: String
     let offered: [String]
-    let prices: [FinishPrice]
+    /// The price table's prices of the product; nil for a page without a price column (a product not in the catalog).
+    let prices: [FinishPrice]?
 
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let library = model.library
+        // A refused file reads as no rows: its counts are not known, so none is shown (not a false 0).
+        let locked = library.countsLocked(game: gameID)
         let rows = library.rows(game: gameID).filter { $0.productID == productID }
         let finishes = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish))
         VStack(alignment: .leading, spacing: 8) {
-            Text("In your collection: \(CollectionRules.copies(rows))")
+            Text("In your collection: \(locked == nil ? String(CollectionRules.copies(rows)) : "—")")
                 .font(Theme.labelFont)
                 .foregroundStyle(Theme.muted)
                 .monospacedDigit()
@@ -210,16 +214,35 @@ struct OwnedFinishes: View {
                     GridRow {
                         Text(finish)
                             .foregroundStyle(Theme.text)
-                        Text(CardFacts.priceText(prices.first { $0.finish == finish }?.price.shown))
-                            .foregroundStyle(Theme.text)
-                            .monospacedDigit()
-                            .gridColumnAlignment(.trailing)
-                        CountControl(count: count, label: finish) { step(by: $0 - count, finish: finish) }
+                        if let prices {
+                            price(prices.first { $0.finish == finish }?.price.shown)
+                                .gridColumnAlignment(.trailing)
+                        }
+                        CountControl(count: locked == nil ? count : nil, label: finish) { step(by: $0 - count, finish: finish) }
                     }
                 }
             }
             .font(Theme.bodyFont)
-            .disabled(!library.canChange(game: gameID))
+            .disabled(locked != nil)
+            if let locked {
+                Text(locked)
+                    .font(Theme.lineFont)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("card-counts-locked")
+            }
+        }
+    }
+
+    @ViewBuilder private func price(_ shown: ShownPrice?) -> some View {
+        if let shown {
+            Text(CardFacts.priceText(shown))
+                .foregroundStyle(Theme.text)
+                .monospacedDigit()
+        } else {
+            Text("No price")
+                .font(Theme.lineFont)
+                .foregroundStyle(Theme.muted)
         }
     }
 

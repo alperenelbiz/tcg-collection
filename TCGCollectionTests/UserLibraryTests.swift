@@ -517,6 +517,41 @@ struct UserLibraryTests {
         #expect(!none.canChange(game: "cyberpunk"))                                 // no folder chosen yet
     }
 
+    /// Fix round 1, item 6: each game's own problem first (refusal, failed write), then the folder's; `problem` stays the
+    /// general one for the sidebar.
+    @MainActor @Test func eachGameHasItsOwnProblem() async throws {
+        let dir = tempDir()
+        try UserFiles.write(Data(#"{"version":3}"#.utf8), to: dir.appending(path: "riftbound.json"))
+        try UserFiles.write(Data("not json".utf8), to: dir.appending(path: "yu-gi-oh.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.problem(game: "riftbound") == "riftbound.json was written by a newer version of the app.")
+        #expect(lib.problem(game: "yu-gi-oh") == "yu-gi-oh.json cannot be read.")
+        #expect(lib.problem(game: "cyberpunk") == nil)
+        #expect(lib.problem == "yu-gi-oh.json cannot be read.")
+        // A failed write is the game's own problem.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        lib.setCount(1, game: "cyberpunk", key: .init(productID: 2, finish: "Normal"), name: "B"); await lib.flush()
+        #expect(lib.problem(game: "cyberpunk")?.hasPrefix("cyberpunk.json could not be saved") == true)
+        #expect(lib.problem(game: "magic-the-gathering") == nil)
+        // A missing folder is every game's problem.
+        let gone = tempDir().appending(path: "not-there"), missing = UserLibrary(folder: gone, watcher: nil); await missing.load()
+        #expect(missing.problem(game: "cyberpunk") == "The collection folder is not at \(gone.path).")
+    }
+
+    /// Fix round 1, item 1: why a card page's counts are not shown and cannot change; nil while they can.
+    @MainActor @Test func whyTheCountsCannotChange() async throws {
+        let dir = tempDir()
+        try UserFiles.write(Data(#"{"version":2,"collection":[]}"#.utf8), to: dir.appending(path: "riftbound.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        #expect(lib.countsLocked(game: "cyberpunk") == "Reading your collection…")             // not read yet
+        await lib.load()
+        #expect(lib.countsLocked(game: "cyberpunk") == nil)
+        #expect(lib.countsLocked(game: "riftbound") == "The counts cannot change: riftbound.json was written by a newer version of the app.")
+        let gone = tempDir().appending(path: "not-there"), missing = UserLibrary(folder: gone, watcher: nil); await missing.load()
+        #expect(missing.countsLocked(game: "cyberpunk") == "The counts cannot change: The collection folder is not at \(gone.path).")
+    }
+
     @MainActor @Test func countsAndReplace() async throws {
         let dir = tempDir(); let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
         lib.setCount(2, game: "riftbound", key: riftFoil, name: "A")

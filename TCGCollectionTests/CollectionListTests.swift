@@ -21,9 +21,56 @@ struct CollectionListTests {
         // Calm Rune: 1 + 2 + 1 over three rows; Dockside Lock-Up: 1 + 1; the unknown product only itself.
         #expect(e.map(\.copiesOfCard) == [4, 4, 4, 2, 2, 5])
         #expect(e.map(\.id) == rows.map(\.key))
-        // The shown name: the card's; an unknown product's saved name, or its id when the row has no name.
-        #expect(e.map(\.name) == ["Calm Rune", "Calm Rune", "Calm Rune", "Dockside Lock-Up", "Dockside Lock-Up", "Gone Card"])
+    }
+
+    /// Fix round 1, item 3: a collection cell tells printings and finishes apart. The name is the printing's product name
+    /// (an unknown product's saved name, or its id); the count line names a finish other than Normal; the accessibility
+    /// text always has the name, the count, the finish, the set and the price.
+    @Test func cellTexts() {
+        let e = entries()
+        #expect(e.map(\.name) == ["Calm Rune (R02a)", "Calm Rune (R02a)", "Calm Rune (R02b)", "Dockside Lock-Up",
+                                  "Dockside Lock-Up (Alternate Art)", "Gone Card"])
         #expect(entry(7, count: 1).name == "Product 7")
+        #expect(e.map(\.countText) == ["×1", "×2 · Foil", "×1", "×1", "×1 · Foil", "×5"])
+        #expect(entry(7, count: 3, finish: "1st Edition").countText == "×3 · 1st Edition")
+        #expect(entry(7, count: 3, finish: "normal").countText == "×3")
+        #expect(e[0].accessibilityText == "Calm Rune (R02a), ×1, Normal, Alpha, $0.50")
+        #expect(e[4].accessibilityText == "Dockside Lock-Up (Alternate Art), ×1, Foil, Beta, ~$0.50")
+        #expect(e[5].accessibilityText == "Gone Card, ×5, Normal, no price")
+    }
+
+    /// Fix round 1, item 2: what the Collection lists depends on the catalog. Joined only when the game has fetched sets;
+    /// otherwise the rows alone (saved names, no product, no price) with one line that says why; a failed join keeps the
+    /// last good entries.
+    @Test func contentFollowsTheCatalog() {
+        let joined = entries()
+        let rowsOnly = rows.map { CollectionEntry(row: $0, product: nil, setName: "", price: nil, copiesOfCard: $0.count) }
+        // The catalog has this game's sets: the join, with unknown products as they are (Review Focus 4).
+        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasSets: true, syncing: true)
+                == CollectionContent(entries: joined, linked: true, note: nil))
+        // No fetched set yet: the rows alone, nothing opens, and no row is "not in the catalog any more".
+        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: false, catalogHasSets: false, syncing: true)
+                == CollectionContent(entries: rowsOnly, linked: false,
+                                     note: "The catalog is still downloading. Pictures and prices come when it is ready."))
+        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: false, catalogHasSets: false, syncing: false)
+                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog is empty. Pictures and prices need the catalog."))
+        // The join threw: the last good entries stay, or the rows alone when there are none.
+        #expect(CollectionList.content(rows: rows, joined: joined, joinFailed: true, catalogHasSets: true, syncing: false)
+                == CollectionContent(entries: joined, linked: true, note: "The catalog could not be read. Showing what was read before."))
+        #expect(CollectionList.content(rows: rows, joined: nil, joinFailed: true, catalogHasSets: false, syncing: false)
+                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog could not be read."))
+        #expect(CollectionList.content(rows: rows, joined: [], joinFailed: true, catalogHasSets: true, syncing: false)
+                == CollectionContent(entries: rowsOnly, linked: false, note: "The catalog could not be read."))
+        #expect(CollectionList.content(rows: [], joined: nil, joinFailed: false, catalogHasSets: false, syncing: true).entries.isEmpty)
+    }
+
+    /// Fix round 1, item 5: a Set or Rarity choice that the collection no longer has goes back to "All".
+    @Test func aChoiceTheCollectionNoLongerHasGoesBackToAll() {
+        #expect(CollectionList.validChoice(10, among: [10, 20]) == 10)
+        #expect(CollectionList.validChoice(30, among: [10, 20]) == nil)
+        #expect(CollectionList.validChoice(Int?.none, among: [10]) == nil)
+        #expect(CollectionList.validChoice("Rare", among: ["Rare", "Epic"]) == "Rare")
+        #expect(CollectionList.validChoice("Showcase", among: Set<String>()) == nil)
     }
 
     @Test func totalsLine() {
@@ -104,8 +151,8 @@ struct CollectionListTests {
     }
 
     /// An entry of an unknown product with `count` copies.
-    private func entry(_ id: Int, count: Int) -> CollectionEntry {
-        CollectionEntry(row: CollectionRow(productID: id, finish: "Normal", count: count, condition: "", name: ""),
+    private func entry(_ id: Int, count: Int, finish: String = "Normal") -> CollectionEntry {
+        CollectionEntry(row: CollectionRow(productID: id, finish: finish, count: count, condition: "", name: ""),
                         product: nil, setName: "", price: nil, copiesOfCard: count)
     }
 }

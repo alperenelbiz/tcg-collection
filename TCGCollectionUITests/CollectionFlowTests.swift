@@ -109,7 +109,8 @@ final class CollectionFlowTests: UITestCase {
         let cell = element(app, "collection-cell-721334-Foil")
         XCTAssertTrue(cell.waitForExistence(timeout: 10))
         XCTAssertEqual(identifiers(collectionCells(app)), ["collection-cell-721334-Foil"])
-        XCTAssertTrue(cell.label.contains("×2"), cell.label)
+        // The cell's name is the printing's product name; the count line names the finish (fix round 1, item 3).
+        XCTAssertEqual(cell.label, "Dockside Lock-Up, ×2, Foil, Radiance, ~$9.50")
         XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("2 copies · 1 printing") }, app.windows.firstMatch.title)
         shot("collection-08-one-printing")
 
@@ -125,13 +126,22 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// A row counted down to 0 on the card page is removed: from the file, and from the Collection, which is empty again.
+    /// `-fixtureDelay 1500`: while the catalog downloads, the row is listed by its saved name with a line that says so, and
+    /// its cell opens nothing (fix round 1, item 2); once the game's sets are in, it opens the card page.
     func testCountDownToZeroRemovesTheRow() throws {
-        let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection", "-fixtureDelay", "1500"]) { root in
             try self.writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 2, name: "Dockside Lock-Up")],
                                      game: "riftbound", in: root)
         }
         let cell = element(app, "collection-cell-721334-Foil")
         XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        let note = element(app, "collection-catalog-note")
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(note), "The catalog is still downloading. Pictures and prices come when it is ready.")
+        XCTAssertEqual(cell.label, "Dockside Lock-Up, ×2, Foil, no price")
+        shot("collection-24-catalog-downloading")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { !note.exists && app.buttons["collection-cell-721334-Foil"].exists }, "the cell is not a link")
         cell.click()
         let minus = element(app, "count-minus-Foil")
         XCTAssertTrue(minus.waitForExistence(timeout: 10))
@@ -181,6 +191,11 @@ final class CollectionFlowTests: UITestCase {
         let byName = ids(["722282-Foil", "722282-Normal", "721334-Foil", "721334-Normal", "721337-Normal"])
         XCTAssertTrue(waitUntil { shown() == byName }, "\(shown())")
         XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("8 copies · 5 printings"), app.windows.firstMatch.title)
+        // A Normal and a Foil of one product, and two products of one card, are told apart (fix round 1, item 3).
+        XCTAssertTrue(waitUntil { self.element(app, "collection-cell-722282-Foil").label == "Calm Rune (R02a), ×1, Foil, Radiance, no price" },
+                      element(app, "collection-cell-722282-Foil").label)
+        XCTAssertEqual(element(app, "collection-cell-722282-Normal").label, "Calm Rune (R02a), ×3, Normal, Radiance, no price")
+        XCTAssertEqual(element(app, "collection-cell-721334-Normal").label, "Dockside Lock-Up, ×1, Normal, Radiance, $5.12")
         shot("collection-12-five-printings")
 
         sort(app, "Price high to low")
@@ -247,9 +262,15 @@ final class CollectionFlowTests: UITestCase {
         }
         let cell = element(app, "collection-cell-719834-1st Edition")
         XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { app.buttons["collection-cell-719834-1st Edition"].exists }, "the cell is not a link")
+        XCTAssertTrue(cell.label.hasPrefix("Swiftwind Panther Warrior, ×1, 1st Edition, "), cell.label)
         cell.click()
         let plus = element(app, "count-plus-1st Edition")
         XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        // No price for either finish: "No price" in place of a price (fix round 1, item 8).
+        let noPrice = NSPredicate(format: "label == %@ OR value == %@", "No price", "No price")
+        XCTAssertEqual(app.staticTexts.matching(noPrice).count, 2)
         XCTAssertEqual(text(element(app, "count-value-1st Edition")), "1")
         XCTAssertEqual(text(element(app, "count-value-Normal")), "0")
         XCTAssertLessThan(element(app, "count-value-Normal").frame.minY, element(app, "count-value-1st Edition").frame.minY,
@@ -262,13 +283,16 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// A game file this app must not rewrite (here: a newer version) is read-only for the run: the Collection says why in
-    /// its problem line and shows no cards; the count controls of the card page are off, and the sidebar says why there.
+    /// its problem line and shows no cards; the card page shows no count (not a false 0), its controls are off, and a line
+    /// under them says why. Yu-Gi-Oh!'s file is refused too: the Collection and the card page name Riftbound's own
+    /// problem; the sidebar keeps the first problem of all (fix round 1, items 1 and 6).
     func testARefusedFileTurnsTheCountControlsOff() throws {
         let newer = Data(#"{"version":2,"collection":[{"productID":721334,"finish":"Foil","count":2,"condition":"","name":"Dockside Lock-Up"}]}"#.utf8)
         let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
             let folder = root.appending(path: "user", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try newer.write(to: folder.appending(path: "riftbound.json"))
+            try Data("not json".utf8).write(to: folder.appending(path: "yu-gi-oh.json"))
         }
         let problem = app.staticTexts["collection-problem"]
         XCTAssertTrue(problem.waitForExistence(timeout: 20))
@@ -287,7 +311,13 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(plus.waitForExistence(timeout: 10))
         XCTAssertFalse(plus.isEnabled, "+ is on for a refused file")
         XCTAssertFalse(element(app, "count-plus-Normal").isEnabled)
-        XCTAssertEqual(text(app.staticTexts["collection-problem"]), "riftbound.json was written by a newer version of the app.")
+        // The file holds Foil ×2, which this run cannot read: no number at all, not 0.
+        XCTAssertEqual(text(element(app, "card-owned")), "In your collection: —")
+        XCTAssertEqual(text(element(app, "count-value-Foil")), "—")
+        XCTAssertEqual(text(element(app, "count-value-Normal")), "—")
+        XCTAssertEqual(text(element(app, "card-counts-locked")),
+                       "The counts cannot change: riftbound.json was written by a newer version of the app.")
+        XCTAssertEqual(text(app.staticTexts["collection-problem"]), "yu-gi-oh.json cannot be read.")   // the sidebar
         shot("collection-23-refused-file-card-page")
         let file = try XCTUnwrap(root).appending(path: "user/riftbound.json")
         XCTAssertEqual(try Data(contentsOf: file), newer, "the refused file was rewritten")
@@ -304,9 +334,11 @@ final class CollectionFlowTests: UITestCase {
         let gone = element(app, "collection-cell-999999-Normal")
         XCTAssertTrue(gone.waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntilSynced(app))
-        XCTAssertTrue(element(app, "collection-cell-721334-Normal").exists)
-        XCTAssertTrue(gone.label.contains("Gone Card") && gone.label.contains("×2") && gone.label.contains("—"), gone.label)
-        XCTAssertFalse(gone.label.contains("$"), gone.label)
+        // Only once the catalog has the game's sets is a missing product "not in the catalog any more".
+        XCTAssertTrue(waitUntil { app.buttons["collection-cell-999999-Normal"].exists }, "the cell is not a link")
+        XCTAssertFalse(element(app, "collection-catalog-note").exists)
+        XCTAssertEqual(element(app, "collection-cell-721334-Normal").label, "Dockside Lock-Up, ×1, Normal, Radiance, $5.12")
+        XCTAssertEqual(gone.label, "Gone Card, ×2, Normal, no price")
         shot("collection-18-unknown-product")
 
         gone.click()
@@ -317,6 +349,8 @@ final class CollectionFlowTests: UITestCase {
                                    "This printing is not in the catalog any more.")
         XCTAssertTrue(app.staticTexts.matching(sentence).firstMatch.exists)
         XCTAssertEqual(text(element(app, "count-value-Normal")), "2")
+        let noPrice = NSPredicate(format: "label == %@ OR value == %@", "No price", "No price")
+        XCTAssertEqual(app.staticTexts.matching(noPrice).count, 0, "the page of an unknown product has a price column")
         shot("collection-19-unknown-product-page")
         element(app, "count-minus-Normal").click()
         element(app, "count-minus-Normal").click()
@@ -329,11 +363,12 @@ final class CollectionFlowTests: UITestCase {
                       "\(identifiers(collectionCells(app)))")
     }
 
-    /// Review Focus 5 and the quit path. `-writeDelay 1500`: every write of a game file waits 1.5 s, so the writes are
-    /// still queued when Cmd+Q arrives right after the clicks; the app must wait for them before it ends. Five fast clicks
-    /// on `+` (a double click and three clicks) count five, and all five are in the file after the quit.
+    /// Review Focus 5 and the quit path. `-writeDelay 4000`: every write of a game file waits 4 s, so the writes are
+    /// still queued when Cmd+Q arrives right after the clicks (checked: the file does not hold the count yet); the app must
+    /// wait for them before it ends. Five fast clicks on `+` (a double click and three clicks) count five, and all five are
+    /// in the file after the quit.
     func testFastClicksAndAQuitAtOnceReachTheFile() throws {
-        let app = launch(game: "riftbound", extra: ["-writeDelay", "1500"])
+        let app = launch(game: "riftbound", extra: ["-writeDelay", "4000"])
         let card = element(app, "card-cell-dockside lock up")
         XCTAssertTrue(card.waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntilSynced(app))
@@ -346,9 +381,10 @@ final class CollectionFlowTests: UITestCase {
         plus.click()
         XCTAssertTrue(waitUntil(timeout: 3) { self.text(self.element(app, "count-value-Foil")) == "5" },
                       text(element(app, "count-value-Foil")))
+        let five = [StoredRow(productID: 721334, finish: "Foil", count: 5, name: "Dockside Lock-Up")]
+        XCTAssertNotEqual(try storedCollection(game: "riftbound"), five, "the write was done before the quit: nothing to wait for")
         quit(app)                                                // at once: the last write is still waiting
-        XCTAssertEqual(try storedCollection(game: "riftbound"),
-                       [StoredRow(productID: 721334, finish: "Foil", count: 5, name: "Dockside Lock-Up")])
+        XCTAssertEqual(try storedCollection(game: "riftbound"), five)
 
         app.launch()
         XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))
@@ -356,6 +392,32 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.text(self.element(app, "count-value-Foil")) == "5" })
         XCTAssertEqual(text(element(app, "card-owned")), "In your collection: 5")
         shot("collection-21-five-after-relaunch")
+    }
+
+    /// Fix round 1, item 2: offline on an empty catalog (no fixtures), a pre-filled collection is listed by the rows'
+    /// saved names and counts, with the totals and one line that says the catalog is empty. Nothing says "not in the
+    /// catalog any more", and a cell opens nothing.
+    func testAnEmptyCatalogListsTheRowsByTheirSavedNames() throws {
+        let app = try launch(game: "riftbound", extra: ["-offline", "YES", "-screen", "collection"], fixtures: false) { root in
+            try self.writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 2, name: "Dockside Lock-Up"),
+                                      StoredRow(productID: 722282, finish: "Normal", count: 1, name: "Calm Rune (R02a)")],
+                                     game: "riftbound", in: root)
+        }
+        let note = element(app, "collection-catalog-note")
+        XCTAssertTrue(note.waitForExistence(timeout: 20))
+        XCTAssertEqual(text(note), "The catalog is empty. Pictures and prices need the catalog.")
+        let cells = collectionCells(app)
+        XCTAssertEqual(identifiersInOrder(cells), ["collection-cell-722282-Normal", "collection-cell-721334-Foil"])
+        XCTAssertEqual(element(app, "collection-cell-721334-Foil").label, "Dockside Lock-Up, ×2, Foil, no price")
+        XCTAssertEqual(element(app, "collection-cell-722282-Normal").label, "Calm Rune (R02a), ×1, Normal, no price")
+        XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("3 copies · 2 printings"), app.windows.firstMatch.title)
+        let gone = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "not in the catalog", "not in the catalog")
+        XCTAssertEqual(app.staticTexts.matching(gone).count, 0)
+        XCTAssertFalse(app.buttons["collection-cell-721334-Foil"].exists, "a cell is a link without a catalog")
+        shot("collection-25-empty-catalog")
+        element(app, "collection-cell-721334-Foil").click()
+        XCTAssertFalse(app.staticTexts["card-title"].waitForExistence(timeout: 2), "a cell opened a page")
+        XCTAssertEqual(app.staticTexts.matching(gone).count, 0)
     }
 
     // MARK: Helpers

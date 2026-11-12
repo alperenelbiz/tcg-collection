@@ -94,6 +94,20 @@ final class UserLibrary {
         isLoaded && folder != nil && !folderIsMissing && refused[game] == nil && Games.game(game) != nil
     }
 
+    /// The game's own problem (its file refused, its last write failed, its conflict versions not settled), else the
+    /// folder's (missing), else nil. The Collection and the card page show this one; the sidebar shows `problem`.
+    func problem(game: String) -> String? {
+        if let own = refused[game] ?? writeFailures[game] ?? conflictFailures[game] { return own }
+        if folderIsMissing, let folder { return Self.missingFolder(folder) }
+        return nil
+    }
+
+    /// Why a card page shows no counts and its controls are off; nil when the game can change (`canChange`).
+    func countsLocked(game: String) -> String? {
+        guard !canChange(game: game) else { return nil }
+        return problem(game: game).map { "The counts cannot change: \($0)" } ?? "Reading your collection…"
+    }
+
     func clearNotice() { notice = nil }
 
     // MARK: Changing

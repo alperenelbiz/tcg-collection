@@ -174,7 +174,8 @@ private struct SidebarRow: View {
 }
 
 /// What the user folder needs said: a problem (the folder is missing, a file is refused, a write failed) and a settled
-/// conflict, each with its one action. Shown on the Collection screen and the pages pushed on it, or in the sidebar's
+/// conflict, each with its one action. On the Collection it is this game's problem (`UserLibrary.problem(game:)`); in the
+/// sidebar the first problem of all. Shown on the Collection screen and the pages pushed on it, or in the sidebar's
 /// status area while another screen is showing; the identifier `collection-problem` is in one place at a time.
 struct LibraryLines: View {
     let inSidebar: Bool
@@ -182,9 +183,11 @@ struct LibraryLines: View {
 
     var body: some View {
         let library = model.library
-        if library.problem != nil || library.notice != nil {
+        // The Collection and its pages show this game's problem first; the sidebar the first one of all.
+        let problem = inSidebar ? library.problem : library.problem(game: model.gameID)
+        if problem != nil || library.notice != nil {
             VStack(alignment: .leading, spacing: 6) {
-                if let problem = library.problem {
+                if let problem {
                     Text(problem)
                         .foregroundStyle(inSidebar ? Theme.faint : Theme.text)
                         .lineLimit(3)

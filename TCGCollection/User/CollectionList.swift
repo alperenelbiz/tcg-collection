@@ -17,12 +17,36 @@ nonisolated struct CollectionEntry: Sendable, Identifiable, Equatable {
     /// product, the folded saved name.
     var cardKey: String { product?.searchKey ?? CardName.searchKey(row.name) }
 
-    /// What the gallery shows: the card's name; for an unknown product the saved name, or its product id when the row has
-    /// none.
+    /// The cell's name: the printing's product name, so two printings of one card differ (`Calm Rune (R02a)`); for an
+    /// unknown product the saved name, or its product id when the row has none.
     var name: String {
-        if let product { return product.cardName }
+        if let product { return product.name }
         return row.name.isEmpty ? "Product \(row.productID)" : row.name
     }
+
+    /// The cell's count line: `×3`, or `×3 · Foil` for any finish other than Normal, as written.
+    var countText: String {
+        let count = "×\(row.count)"
+        return row.finish.caseInsensitiveCompare("Normal") == .orderedSame ? count : "\(count) · \(row.finish)"
+    }
+
+    /// What VoiceOver and the UI tests read for a cell: name, count, finish (Normal too), set (when known) and price.
+    var accessibilityText: String {
+        [name, "×\(row.count)", row.finish, setName, price.map { CardFacts.priceText($0) } ?? "no price"]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+    }
+}
+
+/// What the Collection lists, given the state of the catalog (`CollectionList.content`).
+nonisolated struct CollectionContent: Equatable {
+    let entries: [CollectionEntry]
+    /// True when the entries come from a join with a catalog that has this game's sets: a cell opens its page, and a
+    /// product the catalog does not have is "not in the catalog any more". False: the rows alone (saved names, no picture,
+    /// no price), and a cell opens nothing.
+    let linked: Bool
+    /// One muted line above the gallery that says what the catalog cannot give; nil when it gives everything.
+    let note: String?
 }
 
 /// The Collection's list: rows joined with the catalog, then filtered, sorted and counted in memory. Pure; the view joins
@@ -89,6 +113,33 @@ nonisolated enum CollectionList {
             }
         }
         return ordered.map(\.entry)
+    }
+
+    static let catalogDownloading = "The catalog is still downloading. Pictures and prices come when it is ready."
+    static let catalogEmpty = "The catalog is empty. Pictures and prices need the catalog."
+    static let catalogUnreadable = "The catalog could not be read."
+    static let catalogUnreadableKept = "The catalog could not be read. Showing what was read before."
+
+    /// What the Collection lists. `joined` is the last join that succeeded on a catalog with this game's sets (nil when
+    /// none did yet); `joinFailed` says the latest join threw. Only a catalog with fetched sets can say that a product
+    /// is "not in the catalog any more" (Review Focus 4); before that, and after a failed read with nothing read before,
+    /// the rows are listed alone with a line that says why.
+    static func content(rows: [CollectionRow], joined: [CollectionEntry]?, joinFailed: Bool, catalogHasSets: Bool,
+                        syncing: Bool) -> CollectionContent {
+        let alone = rows.map { CollectionEntry(row: $0, product: nil, setName: "", price: nil, copiesOfCard: $0.count) }
+        if joinFailed {
+            if let joined, !joined.isEmpty { return CollectionContent(entries: joined, linked: true, note: catalogUnreadableKept) }
+            return CollectionContent(entries: alone, linked: false, note: catalogUnreadable)
+        }
+        guard catalogHasSets else {
+            return CollectionContent(entries: alone, linked: false, note: syncing ? catalogDownloading : catalogEmpty)
+        }
+        return CollectionContent(entries: joined ?? alone, linked: joined != nil, note: nil)
+    }
+
+    /// A Set or Rarity choice, or nil ("All") when the collection no longer has that value.
+    static func validChoice<T: Hashable>(_ choice: T?, among available: Set<T>) -> T? {
+        choice.flatMap { available.contains($0) ? $0 : nil }
     }
 
     /// `120 copies · 74 printings`, `1 copy · 1 printing`. With `all` (a filter or search text is on), the shown part of

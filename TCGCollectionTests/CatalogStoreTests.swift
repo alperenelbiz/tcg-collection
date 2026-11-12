@@ -124,18 +124,21 @@ struct CatalogStoreTests {
         #expect(try await s.product(1) == nil)
     }
 
+    /// Only the given game's products: a row whose id belongs to another game is an unknown printing (fix round 1, item 7).
     @Test func productsByID() async throws {
-        let found = try await filledStore().products(ids: [721334, 719684, 999_999])
-        #expect(Set(found.keys) == [721334, 719684])
-        #expect(found[721334]?.name == "Dockside Lock-Up"); #expect(found[719684]?.gameID == "cyberpunk")
+        let s = try await filledStore()
+        let found = try await s.products(ids: [721334, 719684, 999_999], game: "riftbound")
+        #expect(Set(found.keys) == [721334])
+        #expect(found[721334]?.name == "Dockside Lock-Up")
+        #expect(Set(try await s.products(ids: [721334, 719684, 999_999], game: "cyberpunk").keys) == [719684])
     }
 
     /// More ids than one batch of 500 holds, repeated ids, and the ids the store has in the third batch.
     @Test func productsByIDReadsInBatches() async throws {
         let s = try await filledStore()
-        let found = try await s.products(ids: Array(1...1_000) + [722282, 721334, 721334])
+        let found = try await s.products(ids: Array(1...1_000) + [722282, 721334, 721334], game: "riftbound")
         #expect(Set(found.keys) == [722282, 721334])
-        #expect(try await s.products(ids: []).isEmpty)
+        #expect(try await s.products(ids: [], game: "riftbound").isEmpty)
     }
 
     @Test func replaceProductsIsRepeatableAndRecordsTheDate() async throws {

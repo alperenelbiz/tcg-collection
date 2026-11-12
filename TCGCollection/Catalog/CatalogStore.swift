@@ -399,14 +399,15 @@ actor CatalogStore: ModelActor {
         return try modelContext.fetch(descriptor).first?.record
     }
 
-    /// The products with these ids, by id; an id the store does not hold is left out. Read in batches of 500 ids, so a
-    /// collection of thousands of rows never builds one huge `IN` list.
-    func products(ids: [Int]) throws -> [Int: ProductRecord] {
+    /// The products of `game` with these ids, by id; an id the store does not hold for that game is left out (a row whose
+    /// id belongs to another game is then an unknown printing, not a card of the wrong game). Read in batches of 500 ids,
+    /// so a collection of thousands of rows never builds one huge `IN` list.
+    func products(ids: [Int], game: String) throws -> [Int: ProductRecord] {
         let unique = Array(Set(ids))
         var found: [Int: ProductRecord] = [:]
         for start in stride(from: 0, to: unique.count, by: 500) {
             let batch = Array(unique[start..<min(start + 500, unique.count)])
-            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { batch.contains($0.productID) })) {
+            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game && batch.contains($0.productID) })) {
                 found[row.productID] = row.record
             }
         }
