@@ -28,10 +28,32 @@ nonisolated struct SetProgress: Sendable, Equatable {
 
 /// Why the store file could not be opened (P8).
 nonisolated enum StoreOpenFailure: Sendable, Equatable {
-    /// The file is corrupt or not a database, or its migration failed: it is moved aside and the catalog downloaded again.
+    /// Core Data cannot read the file's metadata: it is corrupt or not a database. It is moved aside and the catalog
+    /// downloaded again.
     case unreadable
-    /// Anything else (a full disk, no permission): the file stays where it is. The text says what happened.
+    /// Anything else (a failed migration, a schema this build does not know, a full disk, no permission): the file stays
+    /// where it is. The text is the status line: it says what happened and what to do.
     case other(String)
+}
+
+/// What `CatalogStore(url:)` throws when it opens no store.
+nonisolated enum StoreOpenError: Error {
+    /// SwiftData could not open the file. `fileError` is what Core Data threw when it read the file's metadata; nil when
+    /// it read them, or when there is no file.
+    case cannotOpen(any Error, fileError: (any Error)?)
+
+    /// `error` from opening the store at `url`, with what a metadata read of that file says.
+    init(opening url: URL, failedWith error: any Error) {
+        var fileError: (any Error)?
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                _ = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
+            } catch {
+                fileError = error
+            }
+        }
+        self = .cannotOpen(error, fileError: fileError)
+    }
 }
 
 /// Runs every job of one `CatalogStore` on that store's own serial queue.
@@ -98,7 +120,7 @@ actor CatalogStore: ModelActor {
             container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
                                            configurations: ModelConfiguration(schema: schema, url: url))
         } catch {
-            throw Self.openError(error, url: url)
+            throw StoreOpenError(opening: url, failedWith: error)
         }
         self.init(modelContainer: container)
     }
@@ -311,15 +333,20 @@ actor CatalogStore: ModelActor {
 
 extension CatalogStore {
     /// SQLite primary result codes of a file that is bad in itself: SQLITE_CORRUPT, SQLITE_NOTADB.
-    private nonisolated static let unreadableSQLiteCodes: Set<Int> = [11, 26]
-    /// Core Data codes of a store that cannot be migrated: NSPersistentStoreIncompatibleVersionHashError,
-    /// NSMigrationError, NSMigrationMissingSourceModelError, NSMigrationMissingMappingModelError.
-    private nonisolated static let unreadableCocoaCodes: Set<Int> = [134100, 134110, 134130, 134140]
+    private nonisolated static let badFileSQLiteCodes: Set<Int> = [11, 26]
+    /// Core Data codes of a migration that failed: NSPersistentStoreIncompatibleVersionHashError, NSMigrationError,
+    /// NSMigrationMissingSourceModelError, NSMigrationMissingMappingModelError.
+    private nonisolated static let migrationCocoaCodes: Set<Int> = [134100, 134110, 134130, 134140]
 
-    /// `.unreadable` when the error or one of its causes says that the file is corrupt or not a database, or that its
-    /// migration failed; `.other` for everything else (a full disk, no permission, a folder that cannot be written).
+    /// `.unreadable` only for a file that is corrupt or not a database (SQLite 11 or 26). For what `init(url:)` throws,
+    /// the metadata read of the file decides: a file whose metadata Core Data reads is always kept, whatever stopped the
+    /// open (a failed migration, an unknown schema, no space, no permission). Any other error is judged by its causes.
     nonisolated static func classify(_ error: any Error) -> StoreOpenFailure {
-        causes(of: error).contains(where: isUnreadable) ? .unreadable : .other(reason(error))
+        if let open = error as? StoreOpenError, case .cannotOpen(let openError, let fileError) = open {
+            if let fileError, causes(of: fileError).contains(where: isBadFile) { return .unreadable }
+            return .other(statusText(openError))
+        }
+        return causes(of: error).contains(where: isBadFile) ? .unreadable : .other(statusText(error))
     }
 
     /// The text of the outermost cause that is not SwiftData's own: a `SwiftDataError` reads "SwiftData.SwiftDataError
@@ -328,17 +355,25 @@ extension CatalogStore {
         (causes(of: error).first { !($0 is SwiftDataError) } ?? error).localizedDescription
     }
 
-    private nonisolated static func isUnreadable(_ error: any Error) -> Bool {
-        // A store written with a schema that no version of the migration plan has (seen for another app's schema and
-        // for a newer version of ours): SwiftData throws this with no cause.
-        if let swiftData = error as? SwiftDataError { return swiftData == .unknownDataStoreSchema }
+    /// The status line for a store that is kept: what happened, and what the person can do.
+    private nonisolated static func statusText(_ error: any Error) -> String {
+        let causes = causes(of: error)
+        if causes.contains(where: { ($0 as? SwiftDataError) == .unknownDataStoreSchema }) {
+            return StatusText.storeFromNewerVersion
+        }
+        if causes.contains(where: { ($0 as NSError).domain == NSCocoaErrorDomain && migrationCocoaCodes.contains(($0 as NSError).code) }) {
+            return StatusText.storeNotUpdated(reason(error))
+        }
+        return StatusText.storeCannotOpen(reason(error))
+    }
+
+    private nonisolated static func isBadFile(_ error: any Error) -> Bool {
         let error = error as NSError
         // An extended SQLite code keeps the primary code in its low byte (SQLITE_READONLY_DIRECTORY is 1544 = 8 + 6 << 8).
-        func unreadableSQLite(_ code: Int) -> Bool { unreadableSQLiteCodes.contains(code & 0xFF) }
-        if error.domain == NSSQLiteErrorDomain, unreadableSQLite(error.code) { return true }
-        if error.domain == NSCocoaErrorDomain, unreadableCocoaCodes.contains(error.code) { return true }
+        func bad(_ code: Int) -> Bool { badFileSQLiteCodes.contains(code & 0xFF) }
+        if error.domain == NSSQLiteErrorDomain, bad(error.code) { return true }
         // Core Data also puts an SQLite code in the user info of a Cocoa error (seen: 256 with 1544 for a read-only folder).
-        if let code = error.userInfo[NSSQLiteErrorDomain] as? Int, unreadableSQLite(code) { return true }
+        if let code = error.userInfo[NSSQLiteErrorDomain] as? Int, bad(code) { return true }
         return false
     }
 
@@ -351,23 +386,10 @@ extension CatalogStore {
     }
 
     /// SwiftData keeps the Core Data error that stopped a container in `_underlyingCocoaError`, which it does not make
-    /// public (seen on macOS 27). Nil when the error has none, or when a later SwiftData no longer has that property.
+    /// public (seen on macOS 27). Only the status text uses it (a failed migration, the reason in brackets); nil when the
+    /// error has none, or when a later SwiftData no longer has that property.
     private nonisolated static func wrappedCocoaError(_ error: any Error) -> (any Error)? {
         guard error is SwiftDataError else { return nil }
         return Mirror(reflecting: error).children.first { $0.label == "_underlyingCocoaError" }?.value as? any Error
-    }
-
-    /// For a file that is not a database or is corrupt, SwiftData throws `loadIssueModelContainer` with no cause and
-    /// writes the SQLite error only to its log (seen on macOS 27). Reading the file's metadata through Core Data gives
-    /// that error back; it is thrown instead. Any other error is thrown as it is.
-    private nonisolated static func openError(_ error: any Error, url: URL) -> any Error {
-        guard case SwiftDataError.loadIssueModelContainer = error, wrappedCocoaError(error) == nil,
-              FileManager.default.fileExists(atPath: url.path) else { return error }
-        do {
-            _ = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
-            return error
-        } catch let metadataError {
-            return metadataError
-        }
     }
 }

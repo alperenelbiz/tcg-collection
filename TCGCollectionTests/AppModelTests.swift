@@ -143,13 +143,9 @@ struct AppModelTests {
         // the store file is still at its path, no unreadable-… folder exists, and start() makes no network call
         let root = tempRoot()
         let paths = AppPaths(root: root)
-        do {
-            let store = try CatalogStore(url: paths.catalogStore)
-            try await store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
-        }
         // SQLite opens a store in a read-only folder while its -wal and -shm files exist (seen on macOS 27); without
-        // them the open fails with SQLITE_READONLY_DIRECTORY.
-        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: paths.catalogStore.path + suffix) }
+        // them the open fails with SQLITE_READONLY_DIRECTORY. `writeClosedStore` leaves none.
+        try await writeClosedStore(at: paths.catalogStore)
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: paths.support.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: paths.support.path) }
         let model = model(["app", "-store", root.path])
@@ -168,10 +164,7 @@ struct AppModelTests {
     @MainActor @Test func aStoreFileThatCannotBeReadIsNotMoved() async throws {
         let root = tempRoot()
         let paths = AppPaths(root: root)
-        do {
-            let store = try CatalogStore(url: paths.catalogStore)
-            try await store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
-        }
+        try await writeClosedStore(at: paths.catalogStore)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: paths.catalogStore.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: paths.catalogStore.path) }
         let model = model(["app", "-store", root.path])
@@ -181,6 +174,37 @@ struct AppModelTests {
         #expect(FileManager.default.fileExists(atPath: paths.catalogStore.path))
         #expect(try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }.isEmpty)
         #expect(await fakeCatalog.groupCalls == 0)
+    }
+
+    /// Fix round 1, item 1: a store whose schema this build does not know is a readable database (Core Data reads its
+    /// metadata). It is kept: in memory, sync off, and a text that says what to do.
+    @MainActor @Test func aStoreOfAnUnknownSchemaIsKept() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try ForeignSchema.writeStore(at: paths.catalogStore)
+        let model = model(["app", "-store", root.path])
+        #expect(model.canSync == false)
+        await model.start()
+        #expect(model.status == .failed("This catalog was written by a newer version of the app. Update the app, or reset the catalog."))
+        #expect(FileManager.default.fileExists(atPath: paths.catalogStore.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }.isEmpty)
+        #expect(await fakeCatalog.groupCalls == 0)
+    }
+
+    /// A store file cut short: Core Data cannot read its metadata (SQLITE_CORRUPT). It is moved aside and downloaded again.
+    @MainActor @Test func aTruncatedStoreIsMovedAsideAndDownloadedAgain() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore)
+        let handle = try FileHandle(forUpdating: paths.catalogStore)
+        try handle.truncate(atOffset: 8192)
+        try handle.close()
+        let model = model(["app", "-store", root.path])
+        #expect(model.status == .idle("The catalog could not be read and is downloaded again."))
+        let aside = try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }
+        #expect(aside.count == 1)
+        await model.start()
+        #expect(try await model.store.progress(game: "riftbound").fetched == 14)
     }
 
     @MainActor @Test func theChosenGameIsRemembered() {

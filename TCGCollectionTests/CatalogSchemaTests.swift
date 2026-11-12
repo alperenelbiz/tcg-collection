@@ -3,17 +3,6 @@ import SwiftData
 import Testing
 @testable import TCGCollection2
 
-/// A store with a schema the catalog never had: SwiftData cannot say which version it is.
-private enum ForeignSchema: VersionedSchema {
-    static let versionIdentifier = Schema.Version(9, 0, 0)
-    static var models: [any PersistentModel.Type] { [Note.self] }
-
-    @Model final class Note {
-        var text: String
-        init(text: String) { self.text = text }
-    }
-}
-
 /// A store file at a new temporary path; its folder exists.
 private func newStoreURL() throws -> URL {
     let url = URL.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "catalog.store")
@@ -77,9 +66,13 @@ struct CatalogSchemaTests {
         }
     }
 
+    /// Changed by fix round 1, item 1: a bare 134110 (NSMigrationError) is no longer unreadable. Only a file whose
+    /// metadata Core Data cannot read (SQLite 11 or 26) is; with no file to read, only those SQLite codes count.
     @Test func openErrorsAreClassified() {
         #expect(CatalogStore.classify(NSError(domain: "NSSQLiteErrorDomain", code: 26)) == .unreadable)
-        #expect(CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 134110)) == .unreadable)
+        if case .other(let text) = CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 134110)) {
+            #expect(text.hasPrefix("The catalog could not be updated to this version ("))
+        } else { Issue.record("a failed migration alone is not unreadable") }
         #expect(CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 256, userInfo: [NSUnderlyingErrorKey: NSError(domain: "NSSQLiteErrorDomain", code: 11)])) == .unreadable)
         if case .other = CatalogStore.classify(NSError(domain: NSPOSIXErrorDomain, code: 28)) {} else { Issue.record("a full disk is not unreadable") }
         if case .other = CatalogStore.classify(NSError(domain: "NSSQLiteErrorDomain", code: 13)) {} else { Issue.record("SQLITE_FULL is not unreadable") }
@@ -90,25 +83,51 @@ struct CatalogSchemaTests {
     @Test func openErrorsAreClassifiedInTheFormsSwiftDataAndCoreDataUse() {
         #expect(CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 259, userInfo: ["NSSQLiteErrorDomain": 26])) == .unreadable)
         #expect(CatalogStore.classify(NSError(domain: "NSSQLiteErrorDomain", code: 779)) == .unreadable)   // SQLITE_CORRUPT_INDEX
-        #expect(CatalogStore.classify(SwiftDataError.unknownDataStoreSchema) == .unreadable)
+        #expect(CatalogStore.classify(SwiftDataError.unknownDataStoreSchema) == .other(StatusText.storeFromNewerVersion))
         // A read-only folder: SQLITE_READONLY_DIRECTORY (1544) in a Cocoa error.
-        #expect(CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 256, userInfo: ["NSSQLiteErrorDomain": 1544, NSLocalizedDescriptionKey: "No folder"])) == .other("No folder"))
+        #expect(CatalogStore.classify(NSError(domain: NSCocoaErrorDomain, code: 256, userInfo: ["NSSQLiteErrorDomain": 1544, NSLocalizedDescriptionKey: "No folder"])) == .other("Catalog: the store cannot be opened (No folder)"))
         if case .other = CatalogStore.classify(SwiftDataError.loadIssueModelContainer) {} else { Issue.record("no cause is not unreadable") }
+        // A failed migration of a file whose metadata could be read, and one whose metadata read failed with SQLITE_NOTADB.
+        let migration = NSError(domain: NSCocoaErrorDomain, code: 134110)
+        if case .other = CatalogStore.classify(StoreOpenError.cannotOpen(migration, fileError: nil)) {} else { Issue.record("a readable file is kept") }
+        #expect(CatalogStore.classify(StoreOpenError.cannotOpen(migration, fileError: NSError(domain: "NSSQLiteErrorDomain", code: 26))) == .unreadable)
     }
 
-    /// What `CatalogStore(url:)` really throws, judged: a file that is not a database, a corrupt file and a store with
-    /// an unknown schema are unreadable; a healthy store in a folder that cannot be written is not.
+    /// The phase 1 build opening a store this build has migrated (the probe's reverse case): SwiftData tries V2 → V1 and
+    /// fails with NSMigrationError (134110), which it keeps inside a `SwiftDataError`. The file is a readable database:
+    /// it is kept, and it is still the V2 store with its row.
+    @Test func aStoreWhoseMigrationFailsIsKept() async throws {
+        let url = try newStoreURL()
+        try await writeClosedStore(at: url)
+        let phase1 = Schema([CatalogSchemaV1.CatalogSet.self, CatalogSchemaV1.CatalogProduct.self])
+        let error: any Error
+        do {
+            _ = try ModelContainer(for: phase1, configurations: ModelConfiguration(schema: phase1, url: url))
+            Issue.record("the phase 1 schema opened a V2 store"); return
+        } catch let thrown { error = thrown }
+        let failure = CatalogStore.classify(StoreOpenError(opening: url, failedWith: error))
+        // The reason is the Cocoa error that SwiftData keeps (read through `Mirror`).
+        #expect(failure == .other(StatusText.storeNotUpdated("An error occurred during persistent store migration.")))
+        #expect(try await CatalogStore(url: url).product(1) != nil)
+    }
+
+    /// What `CatalogStore(url:)` really throws, judged: a file that is not a database, a truncated file and a corrupt file
+    /// are unreadable; a store with an unknown schema (Core Data reads its metadata) and a healthy store in a folder that
+    /// cannot be written are kept.
     @Test func theErrorsOfARealOpenAreClassified() async throws {
         let text = try newStoreURL()
         try Data("not a database".utf8).write(to: text)
         #expect(openError(text).map(CatalogStore.classify) == .unreadable)
 
+        let truncated = try newStoreURL()
+        try await writeClosedStore(at: truncated)
+        let cut = try FileHandle(forUpdating: truncated)
+        try cut.truncate(atOffset: 8192)
+        try cut.close()
+        #expect(openError(truncated).map(CatalogStore.classify) == .unreadable)
+
         let corrupt = try newStoreURL()
-        do {
-            let store = try CatalogStore(url: corrupt)
-            try await store.replaceProducts(of: 1, with: (1...500).map { product(id: $0, name: "Card \($0)") }, at: .now)
-        }
-        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: corrupt.path + suffix) }
+        try await writeClosedStore(at: corrupt, products: (1...500).map { product(id: $0, name: "Card \($0)") })
         let handle = try FileHandle(forUpdating: corrupt)
         let size = try handle.seekToEnd()
         try handle.seek(toOffset: 4096)                                     // the header page stays, the rest is noise
@@ -117,21 +136,12 @@ struct CatalogSchemaTests {
         #expect(openError(corrupt).map(CatalogStore.classify) == .unreadable)
 
         let foreign = try newStoreURL()
-        do {
-            let container = try ModelContainer(for: Schema(versionedSchema: ForeignSchema.self), configurations: ModelConfiguration(url: foreign))
-            let context = ModelContext(container)
-            context.insert(ForeignSchema.Note(text: "x"))
-            try context.save()
-        }
-        #expect(openError(foreign).map(CatalogStore.classify) == .unreadable)
+        try ForeignSchema.writeStore(at: foreign)
+        #expect(openError(foreign).map(CatalogStore.classify) == .other(StatusText.storeFromNewerVersion))
 
-        let locked = try newStoreURL()
-        do {
-            let store = try CatalogStore(url: locked)
-            try await store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
-        }
         // SQLite opens a store in a read-only folder while its -wal and -shm files exist; without them it cannot.
-        for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: locked.path + suffix) }
+        let locked = try newStoreURL()
+        try await writeClosedStore(at: locked)
         let folder = locked.deletingLastPathComponent().path
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder) }

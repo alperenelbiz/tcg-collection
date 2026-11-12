@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 @testable import TCGCollection2
 
 func product(id: Int = 1, game: String = "riftbound", groupID: Int = 1, name: String = "Card", number: String = "",
@@ -124,4 +125,49 @@ actor FakeArchive: ArchiveFetching {
 extension CatalogStore {
     /// True when this store's work runs on the main thread. It must never do (the views call it from the main actor).
     func runsOnMainThread() -> Bool { Thread.isMainThread }
+}
+
+/// A store with a schema the catalog never had: SwiftData cannot say which version it is, Core Data reads its metadata.
+enum ForeignSchema: VersionedSchema {
+    static let versionIdentifier = Schema.Version(9, 0, 0)
+    static var models: [any PersistentModel.Type] { [Note.self] }
+
+    @Model final class Note {
+        var text: String
+        init(text: String) { self.text = text }
+    }
+
+    /// Writes a store of this schema, with one row, at `url`.
+    static func writeStore(at url: URL) throws {
+        let container = try ModelContainer(for: Schema(versionedSchema: ForeignSchema.self), configurations: ModelConfiguration(url: url))
+        let context = ModelContext(container)
+        context.insert(Note(text: "x"))
+        try context.save()
+    }
+}
+
+/// The store was still open after `writeClosedStore` waited 5 s for it to close.
+struct StoreStillOpen: Error {}
+
+/// Writes a catalog store with `products` (and their set 1) at `url`, waits until it is closed, and removes its `-wal`
+/// and `-shm` files: the store file alone holds every row then. Core Data empties the -wal when it closes a store, but
+/// it closes a released container later, on its own schedule (seen: an autorelease pool is not enough).
+func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)]) async throws {
+    do {
+        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
+        let container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
+                                           configurations: ModelConfiguration(schema: schema, url: url))
+        let context = ModelContext(container)
+        context.insert(CatalogSet(groupID: 1, gameID: "riftbound", name: "Set", abbreviation: "", publishedOn: nil,
+                                  fetchedAt: .now, rulesVersion: CatalogRules.version))
+        for record in products { context.insert(CatalogProduct(record)) }
+        try context.save()
+    }
+    func walSize() -> Int { (try? FileManager.default.attributesOfItem(atPath: url.path + "-wal")[.size] as? Int) ?? 0 }
+    let end = ContinuousClock.now + .seconds(5)
+    while walSize() > 0 {
+        guard ContinuousClock.now < end else { throw StoreStillOpen() }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
 }

@@ -19,6 +19,16 @@ nonisolated enum StatusText {
     static let checking = "Checking the catalog…"
     /// The store file could not be opened; it was moved aside and the sync fills a fresh one.
     static let storeRecovered = "The catalog could not be read and is downloaded again."
+    /// The store file is kept and the app runs on an empty store in memory (P8).
+    static let storeFromNewerVersion = "This catalog was written by a newer version of the app. Update the app, or reset the catalog."
+
+    static func storeNotUpdated(_ reason: String) -> String {
+        "The catalog could not be updated to this version (\(reason)). Free some disk space and open the app again."
+    }
+
+    static func storeCannotOpen(_ reason: String) -> String {
+        "Catalog: the store cannot be opened (\(reason))"
+    }
     static let prices = "Updating prices…"
     static let ygoIndex = "Updating Yu-Gi-Oh! pictures…"
 
@@ -136,29 +146,29 @@ final class AppModel {
         }
     }
 
-    /// Opens the catalog store (P8). A file that is corrupt or not a database, or whose migration failed, is moved
-    /// aside into `unreadable-<date>` and a fresh store is made at the normal path. Any other open error keeps the file.
-    /// When no store file is open in the end, the store lives in memory and `failure` says why.
+    /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
+    /// and a fresh store is made at the normal path. Any other open error keeps the file. When no store file is open in
+    /// the end, the store lives in memory and `failure` is the status line that says why.
     private nonisolated static func openStore(paths: AppPaths, now: Date)
         -> (store: CatalogStore, movedAside: Bool, failure: String?) {
-        let reason: String
+        let failure: String
         do {
             return (try CatalogStore(url: paths.catalogStore), false, nil)
         } catch {
             switch CatalogStore.classify(error) {
             case .other(let text):
-                reason = text
+                failure = text
             case .unreadable:
                 do {
                     try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
                     return (try CatalogStore(url: paths.catalogStore), true, nil)
                 } catch {
-                    reason = CatalogStore.reason(error)
+                    failure = StatusText.storeCannotOpen(CatalogStore.reason(error))
                 }
             }
         }
         do {
-            return (try CatalogStore.inMemory(), false, "Catalog: the store cannot be opened (\(reason))")
+            return (try CatalogStore.inMemory(), false, failure)
         } catch {
             // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
             fatalError("The catalog schema cannot be loaded: \(error)")
