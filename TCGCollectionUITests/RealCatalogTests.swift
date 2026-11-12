@@ -7,7 +7,8 @@ import XCTest
 final class RealCatalogTests: UITestCase {
     /// Magic: the Type menu (A4) and "erase" (A3, a bracket that is part of the official name). Yu-Gi-Oh!: "call of the
     /// haunted" (A3, a printing named `… (Skill Card)` is a card of its own). Not Power Bond: its Skill printings are
-    /// named `Power Bond`, with no bracket, so A3 cannot separate them (task 6 report, a question for Alperen).
+    /// named `Power Bond`, with no bracket; A5 (rules version 3) separates them by their card type, but only in sets
+    /// stored under version 3, and a copy run offline keeps the version its sets were stored with.
     func testTheNewRulesOnTheRealCatalog() throws {
         let app = launch(storeRoot: try realStoreRoot(), game: "magic-the-gathering")
         let cells = cardCells(app)
@@ -52,10 +53,12 @@ final class RealCatalogTests: UITestCase {
         "Artifact", "Battle", "Conspiracy", "Creature", "Dungeon", "Enchantment", "Instant", "Kindred", "Land",
         "Phenomenon", "Plane", "Planeswalker", "Scheme", "Sorcery", "Vanguard",
     ]
+}
 
+extension UITestCase {
     /// `TCG_REAL_STORE`, or a skip when it is not set. A root with no catalog store fails before the app starts: the
-    /// app would make an empty store there.
-    private func realStoreRoot() throws -> URL {
+    /// app would make an empty store there. Also used by `RealCollectionTests`.
+    func realStoreRoot() throws -> URL {
         guard let path = ProcessInfo.processInfo.environment["TCG_REAL_STORE"], !path.isEmpty else {
             throw XCTSkip("TCG_REAL_STORE is not set: this test runs only on a copy of a real store")
         }
