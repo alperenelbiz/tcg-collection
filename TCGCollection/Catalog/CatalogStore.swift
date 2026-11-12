@@ -260,12 +260,17 @@ actor CatalogStore: ModelActor {
     }
 
     /// Removes the set rows and the products of these sets. A group id the store does not hold is ignored.
-    func removeSets(_ groupIDs: [Int]) throws {
+    /// Returns how many set rows it removed.
+    @discardableResult
+    func removeSets(_ groupIDs: [Int]) throws -> Int {
+        var removed = 0
         for groupID in groupIDs {
+            if try setRow(groupID) != nil { removed += 1 }
             try modelContext.delete(model: CatalogProduct.self, where: #Predicate { $0.groupID == groupID })
             try modelContext.delete(model: CatalogSet.self, where: #Predicate { $0.groupID == groupID })
         }
         try modelContext.save()
+        return removed
     }
 
     /// Deletes the change history of the store. Nothing reads it; a full re-fetch writes about 12 MB of it (B12).

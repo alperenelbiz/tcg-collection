@@ -206,7 +206,9 @@ struct CatalogStoreTests {
     }
 
     @Test func historyIsDeleted() async throws {
-        let store = try await filledStore(); try await store.deleteHistory()
+        let store = try await filledStore()
+        #expect(try await store.historyCount() > 0)                                 // else the test proves nothing
+        try await store.deleteHistory()
         #expect(try await store.historyCount() == 0)
     }
     @Test func removeSetsDeletesTheRowsAndTheirProducts() async throws {

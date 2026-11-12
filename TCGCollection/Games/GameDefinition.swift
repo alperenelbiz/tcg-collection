@@ -67,14 +67,16 @@ nonisolated struct GameDefinition: Sendable, Identifiable, Hashable {
     static func == (a: GameDefinition, b: GameDefinition) -> Bool { a.id == b.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
-    /// A product is a card when its type field is filled, or when it has both a `Number` and a `Rarity`.
+    /// A product is a card when its type field is filled, or when it has both a `Number` and a `Rarity` and the Number is
+    /// not a range (A7: a range with no type field is a sealed or bundle product).
     func isCard(fields: [String: String]) -> Bool {
         func filled(_ key: String) -> Bool {
             !(fields[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        if filled(typeField) { return true }
         let number = (fields["Number"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if number.wholeMatch(of: /\d+ *- *\d+/) != nil { return false }       // a range such as 448-451 (A7)
-        return filled(typeField) || (filled("Number") && filled("Rarity"))
+        return filled("Number") && filled("Rarity")
     }
 
     /// True when the game keeps no set of this name (A6).

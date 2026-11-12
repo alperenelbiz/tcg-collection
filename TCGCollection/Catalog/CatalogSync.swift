@@ -13,6 +13,8 @@ nonisolated struct SyncResult: Sendable, Equatable {
     let failed: Int
     /// Games whose set list could not be loaded (no network at first launch fails here). Not counted in `failed`.
     var failedSetLists = 0
+    /// Sets removed from the store because the game excludes them (A6). A removal changes what the store holds.
+    var removedSets = 0
     /// gameID: sets fetched for the first time.
     let newSets: [String: Int]
 }
@@ -68,7 +70,7 @@ actor CatalogSync {
 
     func run(games: [GameDefinition], now: Date, rebuild: Bool,
              progress: @Sendable (SyncProgress) -> Void) async -> SyncResult {
-        var fetched = 0, failed = 0, failedSetLists = 0
+        var fetched = 0, failed = 0, failedSetLists = 0, removedSets = 0
         var newSets: [String: Int] = [:]
         for game in games {
             // A cancelled sync stops: the sets it did not reach are not failed, only not fetched yet.
@@ -77,11 +79,12 @@ actor CatalogSync {
                 failedSetLists += 1
                 continue
             }
+            removedSets += plan.removed
             // The progress line counts the whole game: `total` is every set of the game that it keeps, `done` is the
             // sets that are not due any more in this run (B11), so it moves during a re-fetch too.
             var stillDue = plan.due.count, gameFailed = 0
             let total = plan.total
-            if plan.due.isEmpty { progress(SyncProgress(gameID: game.id, done: total, total: total, failed: 0)) }
+            if plan.due.isEmpty && total > 0 { progress(SyncProgress(gameID: game.id, done: total, total: total, failed: 0)) }
             // At most `maxConcurrent` child tasks are alive: a new one starts when one ends.
             // Fetch and parse run in the children; the store is written here, one set at a time.
             // A cancelled group (the sync's task was cancelled) starts no new child.
@@ -119,24 +122,25 @@ actor CatalogSync {
                 }
             }
         }
-        return SyncResult(fetched: fetched, failed: failed, failedSetLists: failedSetLists, newSets: newSets)
+        return SyncResult(fetched: fetched, failed: failed, failedSetLists: failedSetLists, removedSets: removedSets, newSets: newSets)
     }
 
     /// Fetches and stores the set list of one game. Nil when that fails.
     /// `total` is every set of the game that it keeps. Sets the game excludes (A6) are not stored, and removed when an
     /// earlier rules version stored them: removing is not a fetch, so it happens on any day.
     private func plan(for game: GameDefinition, now: Date, rebuild: Bool) async
-        -> (due: [Int], neverFetched: Set<Int>, total: Int)? {
+        -> (due: [Int], neverFetched: Set<Int>, total: Int, removed: Int)? {
         do {
             let body = try await client.groups(category: game.categoryID)
             let listed = try ProductParser.sets(body, game: game)
-            try await store.removeSets(listed.filter { game.excludesSet(named: $0.name) }.map(\.groupID))
+            let excluded = Set(listed.filter { game.excludesSet(named: $0.name) }.map(\.groupID))
+            let removed = try await store.removeSets(Array(excluded))
             try await store.upsertSets(listed.filter { !game.excludesSet(named: $0.name) })
             let sets = try await store.sets(game: game.id)
             let dates = try await store.fetchDates(game: game.id)
             let versions = try await store.rulesVersions(game: game.id)
             let due = SyncPlan.due(sets: sets, fetchDates: dates, rulesVersions: versions, now: now, rebuild: rebuild)
-            return (due, Set(due.filter { dates[$0] == nil }), sets.count)
+            return (due, Set(due.filter { dates[$0] == nil }), sets.count, removed)
         } catch {
             return nil
         }

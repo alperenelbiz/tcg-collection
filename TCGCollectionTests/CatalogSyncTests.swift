@@ -18,10 +18,10 @@ private struct Rig {
     let now = TCGDate.date("2026-11-11T10:00:00")!
     let progressLog = ProgressLog()
 
-    init(products: Data? = nil) async throws {
+    init(products: Data? = nil, groups: Data? = nil) async throws {
         let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
         store = try CatalogStore(url: url)
-        fake = FakeCatalog(groups: try fixture("groups-89.json"), products: try products ?? fixture("products-89.json"))
+        fake = FakeCatalog(groups: try groups ?? fixture("groups-89.json"), products: try products ?? fixture("products-89.json"))
         sync = CatalogSync(store: store, client: fake)
     }
 
@@ -191,15 +191,26 @@ struct CatalogSyncTests {
         let store = try CatalogStore(url: url)
         let body = Data(#"{"success":true,"errors":[],"results":[{"groupId":24684,"name":"Reality Fracture","abbreviation":"RF","publishedOn":"2026-10-02T00:00:00","categoryId":1},{"groupId":24690,"name":"Art Series: The Hobbit","abbreviation":"AH","publishedOn":"2026-10-02T00:00:00","categoryId":1}]}"#.utf8)
         let fake = FakeCatalog(groups: body, products: try fixture("products-1.json"), category: 1)
-        // An earlier rules version stored the Art Series set with a product.
-        try await store.upsertSets([SetRecord(groupID: 24690, gameID: magic.id, name: "Art Series: The Hobbit", abbreviation: "AH", publishedOn: nil)])
-        try await store.replaceProducts(of: 24690, with: [product(id: 7, game: magic.id, groupID: 24690, name: "Smaug", number: "1", rarity: "M", cardType: "Creature")], at: .now)
-        let sync = CatalogSync(store: store, client: fake)
+        // Rules version 2 stored both sets, and fetched them on the day of the run.
         let now = TCGDate.date("2026-11-11T10:00:00")!
-        let result = await sync.run(games: [magic], now: now, rebuild: false) { _ in }
-        #expect(await fake.productGroups == [24684]); #expect(result.fetched == 1)
+        try await store.upsertSets([SetRecord(groupID: 24690, gameID: magic.id, name: "Art Series: The Hobbit", abbreviation: "AH", publishedOn: nil)])
+        try await store.replaceProducts(of: 24690, with: [product(id: 7, game: magic.id, groupID: 24690, name: "Smaug", number: "1", rarity: "M", cardType: "Creature")], at: now)
+        try await store.replaceProducts(of: 24684, with: [product(id: 8, game: magic.id, groupID: 24684, name: "Bear", number: "2", rarity: "C", cardType: "Creature")], at: now)
+        try await store.setRulesVersion(2, game: magic.id)
+        let sync = CatalogSync(store: store, client: fake)
+        // The removal is not a fetch: it happens on a day when every set was fetched already.
+        let same = await sync.run(games: [magic], now: now, rebuild: false) { _ in }
+        #expect(await fake.productGroups == []); #expect(same.fetched == 0); #expect(same.removedSets == 1)
         #expect(try await store.sets(game: "magic-the-gathering").map(\.groupID) == [24684])
         #expect(try await store.search(game: "magic-the-gathering", text: "", filter: .init(groupID: 24690), limit: 10).isEmpty)
+        let next = await sync.run(games: [magic], now: now.addingTimeInterval(86_400), rebuild: false) { _ in }
+        #expect(await fake.productGroups == [24684]); #expect(next.fetched == 1); #expect(next.removedSets == 0)
+    }
+
+    @Test func aGameWithNoSetsReportsNoProgress() async throws {                  // Minor 3
+        let rig = try await Rig(groups: Data(#"{"success":true,"errors":[],"results":[],"totalItems":0}"#.utf8))
+        _ = await rig.run()
+        #expect(rig.progressLog.all.isEmpty)
     }
 
     @Test func progressMovesDuringAReFetch() async throws {                       // B11

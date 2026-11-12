@@ -61,6 +61,31 @@ struct AppModelTests {
         #expect(model.status == .failed("Catalog: the set list of 4 games could not be loaded · prices of 2026-01-02"))
     }
 
+    /// A removal alone (no set fetched) refreshes the menus, the version counters and the history: the Art Series set
+    /// was stored and fetched today under rules version 2.
+    @MainActor @Test func aRemovalAloneRefreshesTheStoreViews() async throws {
+        let magic = Games.game("magic-the-gathering")!
+        let body = Data(#"{"success":true,"errors":[],"results":[{"groupId":24684,"name":"Reality Fracture","abbreviation":"RF","publishedOn":"2026-10-02T00:00:00","categoryId":1},{"groupId":24690,"name":"Art Series: The Hobbit","abbreviation":"AH","publishedOn":"2026-10-02T00:00:00","categoryId":1}]}"#.utf8)
+        let catalog = FakeCatalog(groups: body, products: try fixture("products-1.json"), category: 1, log: log)
+        let root = tempRoot()
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path]), catalogClient: catalog,
+                             archiveClient: fakeArchive, fetcher: fakeFetcher, now: { Self.day1 })
+        let day = Self.day1
+        try await model.store.upsertSets([SetRecord(groupID: 24690, gameID: magic.id, name: "Art Series: The Hobbit", abbreviation: "AH", publishedOn: nil)])
+        try await model.store.replaceProducts(of: 24690, with: [product(id: 7, game: magic.id, groupID: 24690, name: "Smaug", number: "1", rarity: "Only Art Series", cardType: "Creature")], at: day)
+        try await model.store.replaceProducts(of: 24684, with: try ProductParser.products(fixture("products-1.json"), game: magic).cards, at: day)
+        try await model.store.setRulesVersion(2, game: magic.id)
+        let before = (model.catalogVersion, model.filtersVersion)
+        await model.start()
+        #expect(await catalog.productCalls == 0)
+        #expect(try await model.store.sets(game: magic.id).map(\.groupID) == [24684])
+        #expect(try await model.store.search(game: magic.id, text: "", filter: .init(groupID: 24690), limit: 10).isEmpty)
+        #expect(model.catalogVersion > before.0); #expect(model.filtersVersion > before.1)
+        let lists = try #require(FacetLists.read(model.paths.facets(magic.id)))
+        #expect(!lists.rarities.contains("Only Art Series"))
+        #expect(!lists.rarities.isEmpty)
+    }
+
     @MainActor @Test func startFillsCatalogPricesAndTheIndex() async throws {
         let model = model(["app", "-store", tempRoot().path])
         await model.start()

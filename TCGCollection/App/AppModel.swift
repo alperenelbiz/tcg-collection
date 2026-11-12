@@ -355,6 +355,7 @@ final class AppModel {
         if !held { rest = await syncCatalog(of: Games.all.filter { $0.id != chosen.id }, now: now, rebuild: rebuild) }
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
+                                removedSets: first.removedSets + rest.removedSets,
                                 newSets: first.newSets.merging(rest.newSets, uniquingKeysWith: +))
         // The new sets of the game whose pictures come from YGOPRODeck: the index maps their printings to pictures.
         let indexSets = Games.all.filter { $0.pictures == .ygoprodeck }.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
@@ -401,14 +402,15 @@ final class AppModel {
         }
         let done = await result
         // Nothing reads the store's change history, and a full re-fetch writes about 12 MB of it (B12).
-        if done.fetched > 0 || done.failed > 0 { try? await store.deleteHistory() }
-        if done.fetched > 0 {
+        if done.fetched > 0 || done.failed > 0 || done.removedSets > 0 { try? await store.deleteHistory() }
+        if done.fetched > 0 || done.removedSets > 0 {
             // A game that reported progress had a set stored or failed; its lists are read again before the menus are told.
-            for game in games where touched.contains(game.id) { _ = await storeFacetLists(of: game) }
+            // A removal can leave a game with no event (every set excluded), so then every game of the step is read.
+            for game in games where done.removedSets > 0 || touched.contains(game.id) { _ = await storeFacetLists(of: game) }
             catalogVersion += 1
             filtersVersion += 1
-            defaults.set(SyncPlan.utcDay(now), forKey: Self.lastFetchDayKey)
         }
+        if done.fetched > 0 { defaults.set(SyncPlan.utcDay(now), forKey: Self.lastFetchDayKey) }
         return done
     }
 

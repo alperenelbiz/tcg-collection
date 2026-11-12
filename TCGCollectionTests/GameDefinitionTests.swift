@@ -66,8 +66,10 @@ struct GameDefinitionTests {
 
     @Test func aNumberRangeIsNotACard() {                                   // A7
         let m = Games.game("magic-the-gathering")!
-        #expect(!m.isCard(fields: ["Number": "448-451", "Rarity": "R"])); #expect(!m.isCard(fields: ["Number": "448 - 451", "Rarity": "R", "SubType": "Land"]))
-        #expect(m.isCard(fields: ["Number": "448", "Rarity": "R"])); #expect(Games.game("yu-gi-oh")!.isCard(fields: ["Number": "LEDE-EN061", "Rarity": "Ultra Rare"]))
+        #expect(!m.isCard(fields: ["Number": "448-451", "Rarity": "R"])); #expect(m.isCard(fields: ["Number": "448 - 451", "Rarity": "R", "SubType": "Land"]))   // a type field wins over a range
+        #expect(m.isCard(fields: ["Number": "448", "Rarity": "R"])); #expect(Games.game("yu-gi-oh")!.isCard(fields: ["Number": "001-002", "Rarity": "Common", "Card Type": "Effect Monster"]))
+        #expect(!Games.game("yu-gi-oh")!.isCard(fields: ["Number": "001-002", "Rarity": "Common"]))
+        #expect(Games.game("yu-gi-oh")!.isCard(fields: ["Number": "LEDE-EN061", "Rarity": "Ultra Rare"]))
         #expect(Games.game("riftbound")!.isCard(fields: ["Number": "136/167", "Rarity": "Epic"]))
     }
     @Test func artSeriesSetsAreExcluded() {                                 // A6
