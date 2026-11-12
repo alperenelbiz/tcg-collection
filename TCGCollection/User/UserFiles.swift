@@ -38,12 +38,9 @@ nonisolated enum UserFiles {
         return data
     }
 
-    /// Replaces the whole file, atomically. `creatingFolder: false` (the library) fails when the folder is gone instead of
-    /// making it again, so a write never puts a file where the owner did not choose (Review Focus 3).
-    static func write(_ data: Data, to url: URL, creatingFolder: Bool = true) throws {
-        if creatingFolder {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        }
+    /// Replaces the whole file, atomically. It never makes a folder: when the folder is gone the write fails, so a file is
+    /// never put where the owner did not choose (Review Focus 3). Only `makeFolder` makes one, from the sheet's choice.
+    static func write(_ data: Data, to url: URL) throws {
         try coordinate(writing: url, options: .forReplacing) { url in try data.write(to: url, options: .atomic) }
     }
 
@@ -53,7 +50,7 @@ nonisolated enum UserFiles {
         guard try read(url) == nil else { return }
         var data = try JSONSerialization.data(withJSONObject: ["version": 1], options: [.prettyPrinted, .sortedKeys])
         data.append(0x0A)
-        try write(data, to: url, creatingFolder: false)
+        try write(data, to: url)
     }
 
     /// Makes one folder whose parent exists (the parent is never made). Nothing happens when the folder is there.

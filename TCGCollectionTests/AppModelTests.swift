@@ -459,6 +459,7 @@ struct AppModelTests {
     /// `-store`: the collection is in `<root>/user`, made at launch with its settings file; no sheet; `start()` loads it.
     @MainActor @Test func aStoreRootKeepsTheCollectionInItsUserFolder() async throws {
         let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
         try UserFiles.write(Data(#"{"version":1,"collection":[{"productID":5,"finish":"Normal","count":2}]}"#.utf8),
                             to: user.appending(path: "riftbound.json"))
         let model = model(["app", "-store", root.path, "-offline", "YES"])

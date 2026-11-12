@@ -5,9 +5,11 @@ import Testing
 /// Coordinated reads and writes in a temporary directory. The conflict path itself (`NSFileVersion` conflict versions) needs
 /// two devices and iCloud: only its pure parts are tested here.
 struct UserFilesTests {
+    /// The brief's test; the folder is made by an explicit call now (fix round 1, item 4).
     @Test func readWriteAndMissing() throws {
         let file = tempDir().appending(path: "deep/riftbound.json")
-        #expect(try UserFiles.read(file) == nil); try UserFiles.write(Data("{}".utf8), to: file); #expect(try UserFiles.read(file) == Data("{}".utf8))
+        #expect(try UserFiles.read(file) == nil); try UserFiles.makeFolder(file.deletingLastPathComponent())
+        try UserFiles.write(Data("{}".utf8), to: file); #expect(try UserFiles.read(file) == Data("{}".utf8))
     }
 
     @Test func aWriteReplacesTheWholeFile() throws {
@@ -17,10 +19,11 @@ struct UserFilesTests {
         #expect(try UserFiles.read(file) == Data("short".utf8))
     }
 
-    /// The library writes with `creatingFolder: false`: a folder that is gone stays gone (Review Focus 3).
-    @Test func aWriteThatMayNotCreateTheFolderFails() throws {
+    /// A write never makes a folder: a folder that is gone stays gone (Review Focus 3). Only `makeFolder` makes one.
+    @Test func aWriteNeverMakesAFolder() throws {
         let gone = tempDir().appending(path: "not-there")
-        #expect(throws: (any Error).self) { try UserFiles.write(Data("{}".utf8), to: gone.appending(path: "riftbound.json"), creatingFolder: false) }
+        #expect(throws: (any Error).self) { try UserFiles.write(Data("{}".utf8), to: gone.appending(path: "riftbound.json")) }
+        #expect(throws: (any Error).self) { try UserFiles.write(Data("{}".utf8), to: gone.appending(path: "deep/riftbound.json")) }
         #expect(!FileManager.default.fileExists(atPath: gone.path))
     }
 
@@ -85,6 +88,7 @@ struct UserFilesTests {
         let (reported, sink) = AsyncStream.makeStream(of: String.self)
         let presenter = FolderPresenter()
         presenter.start(folder: dir) { url in sink.yield(url.lastPathComponent) }
+        try UserFiles.makeFolder(dir.appending(path: "sub"))
         for name in [".hidden.json", "notes.txt", "sub/riftbound.json", "riftbound.json"] {
             try UserFiles.write(Data("{}".utf8), to: dir.appending(path: name))
         }

@@ -304,7 +304,7 @@ final class UserLibrary {
 
     @concurrent private nonisolated static func store(_ data: Data, at url: URL) async -> (any Error)? {
         do {
-            try UserFiles.write(data, to: url, creatingFolder: false)
+            try UserFiles.write(data, to: url)
             return nil
         } catch {
             return error
