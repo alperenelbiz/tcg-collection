@@ -41,6 +41,8 @@ nonisolated struct GameDefinition: Sendable, Identifiable, Hashable {
     let wholeNames: Set<String>
     /// The values of the card-type filter for one non-empty, trimmed type line.
     let facets: @Sendable (String) -> [String]
+    /// The Type menu: only these values, in this order. Nil: every stored value, sorted.
+    let facetOrder: [String]?
     /// The stat lines of the card page, in order.
     let stats: [StatField]
     /// Search keys of card names that are basic cards.
@@ -87,20 +89,20 @@ nonisolated enum Games {
         GameDefinition(id: "magic-the-gathering", name: "Magic: The Gathering", categoryID: 1,
                        typeField: "SubType", textField: "OracleText", pictures: .tcgplayer,
                        keptBrackets: [], wholeNames: ["Erase (Not the Urza's Legacy One)"],
-                       facets: MagicTypes.facets,
+                       facets: MagicTypes.facets, facetOrder: MagicTypes.all,
                        stats: [StatField("P/T", "P", "T", format: .pair)],
                        basicNames: [], basicTypeWords: ["Basic"], altArtBasicsAreNormal: false),
         GameDefinition(id: "yu-gi-oh", name: "Yu-Gi-Oh!", categoryID: 2,
                        typeField: "Card Type", textField: "Description", pictures: .ygoprodeck,
                        keptBrackets: ["Skill Card"], wholeNames: [],
-                       facets: { $0.split(separator: " ").last.map { [String($0)] } ?? [] },
+                       facets: { $0.split(separator: " ").last.map { [String($0)] } ?? [] }, facetOrder: nil,
                        stats: [StatField("Attribute", "Attribute"), StatField("Type", "MonsterType"),
                                StatField("ATK", "Attack"), StatField("DEF", "Defense"), StatField("Link", "LinkRating")],
                        basicNames: [], basicTypeWords: [], altArtBasicsAreNormal: false),
         GameDefinition(id: "riftbound", name: "Riftbound", categoryID: 89,
                        typeField: "Card Type", textField: "Description", pictures: .tcgplayer,
                        keptBrackets: [], wholeNames: [],
-                       facets: { [$0] },
+                       facets: { [$0] }, facetOrder: nil,
                        stats: [StatField("Domain", "Domain"), StatField("Energy", "Energy Cost"),
                                StatField("Power", "Power Cost"), StatField("Might", "Might"), StatField("Tag", "Tag")],
                        basicNames: Set(["Body Rune", "Calm Rune", "Chaos Rune", "Fury Rune", "Mind Rune", "Order Rune"]
@@ -109,7 +111,7 @@ nonisolated enum Games {
         GameDefinition(id: "cyberpunk", name: "Cyberpunk TCG", categoryID: 92,
                        typeField: "CardType", textField: "Description", pictures: .tcgplayer,
                        keptBrackets: [], wholeNames: [],
-                       facets: { [$0] },
+                       facets: { [$0] }, facetOrder: nil,
                        stats: [StatField("Color", "Color"), StatField("Cost", "Cost"), StatField("Power", "Power"),
                                StatField("RAM", "RAM"), StatField("Eddies", "Eddies", format: .yesNo)],
                        basicNames: [], basicTypeWords: [], altArtBasicsAreNormal: false),

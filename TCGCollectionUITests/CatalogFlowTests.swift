@@ -3,7 +3,7 @@ import XCTest
 /// The phase 1 click paths, on the fixture catalog: Magic 4 cards, Yu-Gi-Oh! 2, Riftbound 3, Cyberpunk 3.
 /// A cell's identifier is `card-cell-<card key>` (the card name in lower case, punctuation as spaces).
 final class CatalogFlowTests: UITestCase {
-    func testGalleryToCardPageAndPrintingSwitch() {
+    func testGalleryToCardPage() {
         let app = launch(game: "cyberpunk")
         XCTAssertTrue(app.staticTexts["status-line"].waitForExistence(timeout: 20))
         let cell = app.descendants(matching: .any)["card-cell-kerry eurodyne the last rockerboy"]

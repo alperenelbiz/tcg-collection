@@ -200,6 +200,22 @@ struct AppModelTests {
         #expect(await fakeCatalog.groupCalls == 0)
     }
 
+    /// M8: a store kept for lack of disk space offers no reset: a reset frees nothing and downloads onto a full disk. A
+    /// store kept for another reason offers one; a store that opens needs none.
+    @MainActor @Test func aStoreKeptForLackOfSpaceOffersNoReset() async throws {
+        let root = tempRoot()
+        try await writePhase1Store(at: AppPaths(root: root).catalogStore)          // it needs a migration
+        let full = AppModel(options: .init(arguments: ["app", "-store", root.path]), catalogClient: fakeCatalog,
+                            archiveClient: fakeArchive, fetcher: fakeFetcher, now: { Self.day1 }, availableCapacity: { _ in 0 })
+        #expect(full.storeFailure?.hasPrefix("Not enough free disk space to update the catalog") == true)
+        #expect(full.canResetCatalog == false)
+
+        let foreign = tempRoot()
+        try ForeignSchema.writeStore(at: AppPaths(root: foreign).catalogStore)
+        #expect(model(["app", "-store", foreign.path]).canResetCatalog)
+        #expect(model(["app", "-store", tempRoot().path]).canResetCatalog == false)
+    }
+
     /// A store file cut short: Core Data cannot read its metadata (SQLITE_CORRUPT). It is moved aside and downloaded again.
     @MainActor @Test func aTruncatedStoreIsMovedAsideAndDownloadedAgain() async throws {
         let root = tempRoot()

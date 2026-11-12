@@ -373,13 +373,13 @@ actor CatalogStore: ModelActor {
         return try modelContext.fetch(descriptor).first?.record
     }
 
-    /// The Rarity and Type menu values of a game: one scan of its products. Both lists are sorted; Magic's types are
-    /// only the current card types, in the order of `MagicTypes.all` (rows not fetched again after rule 2 still carry
-    /// old words).
+    /// The Rarity and Type menu values of a game: one scan of its products. Both lists are sorted, except for a game
+    /// with a `facetOrder`: its types are only those, in that order (Magic: the current card types; rows not fetched
+    /// again after rule 2 still carry old words).
     func facetLists(game: String) throws -> FacetLists {
         let rarities = Set(try distinct(game: game) { [$0.rarity] })
         let facets = Set(try distinct(game: game) { $0.typeFacets })
-        let types = game == "magic-the-gathering" ? MagicTypes.all.filter(facets.contains) : facets.sorted()
+        let types = Games.game(game)?.facetOrder.map { $0.filter(facets.contains) } ?? facets.sorted()
         return FacetLists(rarities: rarities.sorted(), types: types)
     }
 

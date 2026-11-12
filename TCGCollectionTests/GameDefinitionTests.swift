@@ -13,6 +13,10 @@ struct GameDefinitionTests {
         #expect(Games.all.map(\.pictures) == [.tcgplayer, .ygoprodeck, .tcgplayer, .tcgplayer])
         #expect(Games.all.map(\.name) == ["Magic: The Gathering", "Yu-Gi-Oh!", "Riftbound", "Cyberpunk TCG"])
     }
+    /// M15: the order of the Type menu is data of the game: Magic's 15 card types in their order; the others sort.
+    @Test func theTypeMenuOrderIsPartOfTheGame() {
+        #expect(Games.all.map(\.facetOrder) == [MagicTypes.all, nil, nil, nil])
+    }
     @Test func typeFacetsPerGame() {
         let m = Games.game("magic-the-gathering")!, y = Games.game("yu-gi-oh")!, r = Games.game("riftbound")!
         #expect(m.typeFacets("Legendary Creature — Human Officer") == ["Creature"])

@@ -68,7 +68,7 @@ struct CatalogSearchView: View {
     }
 
     /// The game has no card at all. "Downloading" only while a sync runs; otherwise the reason, and a way to try again.
-    /// With no store file open (P8), the reason and a reset that the next launch does.
+    /// With no store file open (P8), the reason and a reset that the next launch does (not for a lack of disk space).
     @ViewBuilder private var emptyCatalog: some View {
         if let failure = model.storeFailure {
             ContentUnavailableView {
@@ -78,7 +78,7 @@ struct CatalogSearchView: View {
             } actions: {
                 if model.catalogResetRequested {
                     Text("Quit and open the app again to reset the catalog.")
-                } else {
+                } else if model.canResetCatalog {
                     Button("Reset the catalog…") { confirmReset = true }
                         .accessibilityIdentifier("reset-catalog")
                 }

@@ -137,6 +137,9 @@ final class AppModel {
     /// The status line when no catalog store file is open: the app then runs on an empty store in memory and downloads
     /// nothing. Nil when a store file is open.
     @ObservationIgnored let storeFailure: String?
+    /// True when the store-failure state offers "Reset the catalog…". Not for a lack of disk space (M8): a reset frees
+    /// nothing, and its download would fill the disk further.
+    @ObservationIgnored let canResetCatalog: Bool
     /// The person asked for a reset in this run (in the store-failure state); the next launch does it.
     private(set) var catalogResetRequested = false
     /// When this launch set the store aside (reset, or unreadable): `lastCatalogFetchDay` as it was then. Nil otherwise.
@@ -149,7 +152,8 @@ final class AppModel {
     @ObservationIgnored private var launchTask: Task<Void, Never>?
 
     init(options: LaunchOptions, catalogClient: any TCGCSVFetching, archiveClient: any ArchiveFetching,
-         fetcher: any DataFetching, now: @escaping () -> Date = { Date() }) {
+         fetcher: any DataFetching, now: @escaping () -> Date = { Date() },
+         availableCapacity: @Sendable (URL) -> Int? = StoreFile.availableCapacity) {
         self.options = options
         self.now = now
         let paths = AppPaths(root: options.storeRoot)
@@ -160,9 +164,10 @@ final class AppModel {
             ? UserDefaults.standard
             : UserDefaults(suiteName: paths.support.appending(path: "preferences").path) ?? .standard
         self.defaults = defaults
-        let opened = Self.openStore(paths: paths, now: now(), defaults: defaults)
+        let opened = Self.openStore(paths: paths, now: now(), defaults: defaults, availableCapacity: availableCapacity)
         store = opened.store
         storeFailure = opened.failure
+        canResetCatalog = opened.failure != nil && opened.canReset
         // A notice means the store was set aside and a fresh one opened.
         setAsideFetchDay = opened.notice == nil ? nil : defaults.string(forKey: Self.lastFetchDayKey)
         #if DEBUG
@@ -201,36 +206,41 @@ final class AppModel {
     /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
     /// and a fresh store is made at the normal path; so is any file after "Reset the catalog…" in the last run. Any
     /// other open error keeps the file. When no store file is open in the end, the store lives in memory and `failure`
-    /// is the status line that says why. `notice` is the status line after a store was set aside.
-    private nonisolated static func openStore(paths: AppPaths, now: Date, defaults: UserDefaults)
-        -> (store: CatalogStore, notice: String?, failure: String?) {
+    /// is the status line that says why; `canReset` is false when a reset cannot help (no space for a migration). `notice`
+    /// is the status line after a store was set aside.
+    private nonisolated static func openStore(paths: AppPaths, now: Date, defaults: UserDefaults,
+                                              availableCapacity: @Sendable (URL) -> Int?)
+        -> (store: CatalogStore, notice: String?, failure: String?, canReset: Bool) {
+        func open() throws -> CatalogStore { try CatalogStore(url: paths.catalogStore, availableCapacity: availableCapacity) }
         if defaults.bool(forKey: resetKey) {
             defaults.removeObject(forKey: resetKey)
             do {
                 try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
-                return (try CatalogStore(url: paths.catalogStore), StatusText.storeReset, nil)
+                return (try open(), StatusText.storeReset, nil, false)
             } catch {
                 // Not moved, or no fresh store: the open below judges what is at the path, as on any launch.
             }
         }
         let failure: String
+        var canReset = true
         do {
-            return (try CatalogStore(url: paths.catalogStore), nil, nil)
+            return (try open(), nil, nil, false)
         } catch {
             switch CatalogStore.classify(error) {
             case .other(let text):
                 failure = text
+                if case .notEnoughSpace? = error as? StoreOpenError { canReset = false }
             case .unreadable:
                 do {
                     try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
-                    return (try CatalogStore(url: paths.catalogStore), StatusText.storeRecovered, nil)
+                    return (try open(), StatusText.storeRecovered, nil, false)
                 } catch {
                     failure = StatusText.storeCannotOpen(CatalogStore.reason(error))
                 }
             }
         }
         do {
-            return (try CatalogStore.inMemory(), nil, failure)
+            return (try CatalogStore.inMemory(), nil, failure, canReset)
         } catch {
             // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
             fatalError("The catalog schema cannot be loaded: \(error)")
@@ -275,8 +285,8 @@ final class AppModel {
         await sync(rebuild: false)
     }
 
-    /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once,
-    /// through the reader store, so the menus do not wait for a sync.
+    /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once
+    /// (`storeFacetLists`), so the menus do not wait for a sync.
     private func writeMissingFacetLists() async {
         let chosen = gameID
         var wrote = false
@@ -288,8 +298,11 @@ final class AppModel {
     }
 
     /// Reads a game's lists from the store, keeps them in memory and writes the file. False when the store read failed.
+    /// The scan (2.6 s for Magic) runs on a store of its own on the same container, released after it, so a search or a
+    /// card page on `reader` does not wait behind it (M1).
     private func storeFacetLists(of game: GameDefinition) async -> Bool {
-        guard let lists = try? await reader.facetLists(game: game.id) else { return false }
+        let scan = CatalogStore(modelContainer: store.modelContainer)
+        guard let lists = try? await scan.facetLists(game: game.id) else { return false }
         facetLists[game.id] = lists
         try? lists.write(to: paths.facets(game.id))
         return true
@@ -333,7 +346,9 @@ final class AppModel {
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 newSets: first.newSets.merging(rest.newSets, uniquingKeysWith: +))
-        let indexFailure = await refreshYGOIndexIfNeeded(newSets: result.newSets["yu-gi-oh", default: 0], now: now)
+        // The new sets of the game whose pictures come from YGOPRODeck: the index maps their printings to pictures.
+        let indexSets = Games.all.filter { $0.pictures == .ygoprodeck }.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
+        let indexFailure = await refreshYGOIndexIfNeeded(newSets: indexSets, now: now)
         let pending = await rulesPendingCount(now: now)
         let done = StatusText.done(result: result, priceDay: prices.day(game: gameID), rulesPending: pending)
         if result.failedSetLists > 0 {
