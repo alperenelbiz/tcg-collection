@@ -31,6 +31,14 @@ nonisolated enum CollectionRules {
         return result
     }
 
+    /// The finishes the card page offers for one product (B5): the price table's finishes in its order, or `Normal` when
+    /// it has none; then each owned finish it does not list (a CSV's unusual `Printing`), in the order given.
+    static func finishes(priced: [String], owned: [String]) -> [String] {
+        var result = priced.isEmpty ? ["Normal"] : priced
+        for finish in owned where !result.contains(finish) { result.append(finish) }
+        return result
+    }
+
     nonisolated enum PlaysetFilter: Sendable { case any, moreThanAPlayset, aPlaysetOrFewer }
 
     static func matches(_ filter: PlaysetFilter, copiesOfCard: Int, playset: Int) -> Bool {

@@ -173,8 +173,9 @@ struct CatalogSearchView: View {
     }
 }
 
-/// A gallery cell before its card is known: the picture's `surface` block and the two text lines' height, blank.
-private struct PlaceholderCell: View {
+/// A gallery cell before its card is known: the picture's `surface` block and the two text lines' height, blank. All
+/// cards and the Collection use it.
+struct PlaceholderCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Theme.surface

@@ -37,6 +37,9 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "1200"]).fixtureDelay == 1200)
         #expect(LaunchOptions(arguments: ["app"]).fixtureDelay == nil)
         #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "soon"]).fixtureDelay == nil)
+        #expect(LaunchOptions(arguments: ["app", "-writeDelay", "1500"]).writeDelay == 1500)
+        #expect(LaunchOptions(arguments: ["app"]).writeDelay == nil)
+        #expect(LaunchOptions(arguments: ["app", "-writeDelay", "later"]).writeDelay == nil)
     }
     /// I3: `-fixtures` is honoured only in a Debug build with `-store`. Otherwise the run is offline (as `-offline YES`),
     /// never on the real network, and the app prints one line that says why. Without `-fixtures` the network is real.

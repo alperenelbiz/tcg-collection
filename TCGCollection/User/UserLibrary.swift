@@ -35,6 +35,11 @@ final class UserLibrary {
     private(set) var isLoaded = false
     /// Tests only: runs on the main actor before each game file is read, so a test can act while a read is in progress.
     @ObservationIgnored var beforeRead: (@MainActor (URL) async -> Void)?
+    #if DEBUG
+    /// `-writeDelay` (DEBUG): each write of a game file waits this long first, so a UI test can quit the app while a write
+    /// is still queued (the quit must wait for it).
+    @ObservationIgnored var writeDelay: Duration?
+    #endif
 
     @ObservationIgnored private let watcher: (any UserFileWatching)?
     @ObservationIgnored private let now: () -> Date
@@ -82,6 +87,13 @@ final class UserLibrary {
         CollectionRules.count(rows(game: game), for: key)
     }
 
+    /// False where a change of the game is refused: before the folder is loaded, with no folder or a missing one, for a
+    /// game whose file is refused, and for an unknown game id. Controls that change the collection disable themselves on
+    /// it, so a refused change is never a silent one; `problem` says why.
+    func canChange(game: String) -> Bool {
+        isLoaded && folder != nil && !folderIsMissing && refused[game] == nil && Games.game(game) != nil
+    }
+
     func clearNotice() { notice = nil }
 
     // MARK: Changing
@@ -99,8 +111,8 @@ final class UserLibrary {
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.
     private func change(_ game: String, _ edit: ([CollectionRow]) -> [CollectionRow]) {
-        // Only a known game: its id becomes a file name.
-        guard isLoaded, let folder, !folderIsMissing, refused[game] == nil, Games.game(game) != nil else { return }
+        // Only a known game (`canChange`): its id becomes a file name.
+        guard canChange(game: game), let folder else { return }
         var file = files[game] ?? GameUserFile()
         let rows = edit(file.collection)
         guard rows != file.collection else { return }
@@ -117,6 +129,10 @@ final class UserLibrary {
     private func write(_ game: String, change number: Int, to target: URL) async {
         guard changes[game] == number else { return }
         defer { written[game] = number }
+        #if DEBUG
+        // After the check above, so a write that a later change replaced (it is skipped) does not wait.
+        if let writeDelay { try? await Task.sleep(for: writeDelay) }
+        #endif
         guard folder == target, let folder, let file = files[game] else { return }
         let error: (any Error)?
         do {

@@ -259,17 +259,4 @@ final class CatalogFlowTests: UITestCase {
             self.givenRoot = nil
         }
     }
-
-    // MARK: - Helpers
-
-    /// The `.searchable` field: SwiftUI gives it no identifier of ours on macOS, so it is found by type.
-    private func searchField(_ app: XCUIApplication) -> XCUIElement {
-        app.searchFields.firstMatch
-    }
-
-    /// The whole fixture sync has ended (every game, prices, the Yu-Gi-Oh! index).
-    private func waitUntilSynced(_ app: XCUIApplication) -> Bool {
-        let status = app.staticTexts["status-line"]
-        return waitUntil(timeout: 20) { status.exists && self.text(status).hasPrefix("Catalog up to date") }
-    }
 }

@@ -77,8 +77,8 @@ struct CardPageView: View {
         #endif
     }
 
-    /// Groups are separated by 1 px rules, never boxed: the title block (with the stats), the prices, the rules text,
-    /// the other printings.
+    /// Groups are separated by 1 px rules, never boxed: the title block (with the stats), what the user owns of the shown
+    /// printing with its prices and count controls, the rules text, the other printings.
     private func details(shown: ProductRecord, game: GameDefinition, printings: [ProductRecord]) -> some View {
         let stats = CardFacts.stats(shown, game: game)
         let finishes = model.prices.prices(game: game.id, productID: shown.productID)
@@ -108,15 +108,8 @@ struct CardPageView: View {
                 .padding(.top, 18)
             }
             RuleLine()
-            if finishes.isEmpty {
-                Text("No price")
-                    .font(Theme.bodyFont)
-                    .foregroundStyle(Theme.muted)
-            } else {
-                HStack(alignment: .top, spacing: 28) {
-                    ForEach(finishes, id: \.finish) { LabeledValue(label: $0.finish, value: CardFacts.priceText($0.price.shown)) }
-                }
-            }
+            OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name,
+                          offered: finishes.map(\.finish), prices: finishes)
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -134,7 +127,9 @@ struct CardPageView: View {
     }
 
     private func otherPrintings(_ printings: [ProductRecord], game: GameDefinition) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Copies owned per product, over its finishes.
+        let owned = Dictionary(model.library.rows(game: game.id).map { ($0.productID, $0.count) }, uniquingKeysWith: +)
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Other printings")
                 .font(Theme.labelFont)
                 .foregroundStyle(Theme.muted)
@@ -152,6 +147,12 @@ struct CardPageView: View {
                             .foregroundStyle(Theme.muted)
                             .fixedSize()
                         Spacer(minLength: 8)
+                        if let count = owned[printing.productID] {
+                            Text("×\(count)")
+                                .foregroundStyle(Theme.muted)
+                                .monospacedDigit()
+                                .fixedSize()
+                        }
                         Text(CardFacts.priceText(model.prices.cheapest(game: game.id, productIDs: [printing.productID])))
                             .foregroundStyle(Theme.text)
                             .monospacedDigit()
@@ -178,7 +179,60 @@ struct CardPageView: View {
     }
 }
 
-/// A label (11 pt, `muted`) over a value, for stats and prices.
+/// What the user owns of one product and how to change it (B5): the line "In your collection: N" (`card-owned`, N over
+/// every finish of the product), then one line per finish: its name, its price and a `CountControl` labelled with the
+/// finish. The finishes are `offered` (the price table's, or `Normal` when there are none) and then every owned finish
+/// that `offered` does not list. The controls are off while the library refuses changes of the game; the Collection's
+/// problem line, or the sidebar's, says why.
+struct OwnedFinishes: View {
+    let gameID: String
+    let productID: Int
+    /// Saved in a new row: what a reader of the file sees, and what the Collection shows if the product leaves the catalog.
+    let name: String
+    let offered: [String]
+    let prices: [FinishPrice]
+
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let library = model.library
+        let rows = library.rows(game: gameID).filter { $0.productID == productID }
+        let finishes = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish))
+        VStack(alignment: .leading, spacing: 8) {
+            Text("In your collection: \(CollectionRules.copies(rows))")
+                .font(Theme.labelFont)
+                .foregroundStyle(Theme.muted)
+                .monospacedDigit()
+                .accessibilityIdentifier("card-owned")
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                ForEach(finishes, id: \.self) { finish in
+                    let count = CollectionRules.count(rows, for: PrintingKey(productID: productID, finish: finish))
+                    GridRow {
+                        Text(finish)
+                            .foregroundStyle(Theme.text)
+                        Text(CardFacts.priceText(prices.first { $0.finish == finish }?.price.shown))
+                            .foregroundStyle(Theme.text)
+                            .monospacedDigit()
+                            .gridColumnAlignment(.trailing)
+                        CountControl(count: count, label: finish) { step(by: $0 - count, finish: finish) }
+                    }
+                }
+            }
+            .font(Theme.bodyFont)
+            .disabled(!library.canChange(game: gameID))
+        }
+    }
+
+    /// The control sends the count it shows ± 1. Two clicks before the next render would both send the same number, so
+    /// the step goes onto the library's current count: every click counts, and a count never goes below 0 (a row that
+    /// reaches 0 is removed).
+    private func step(by delta: Int, finish: String) {
+        let library = model.library, key = PrintingKey(productID: productID, finish: finish)
+        library.setCount(library.count(game: gameID, key: key) + delta, game: gameID, key: key, name: name)
+    }
+}
+
+/// A label (11 pt, `muted`) over a value, for stats.
 private struct LabeledValue: View {
     let label: String
     let value: String

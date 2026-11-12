@@ -104,9 +104,78 @@ class UITestCase: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'card-cell-'"))
     }
 
+    /// Every cell of the Collection's gallery (`collection-cell-<productID>-<finish>`).
+    func collectionCells(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'collection-cell-'"))
+    }
+
     /// The identifiers of the elements of `query`, sorted.
     func identifiers(_ query: XCUIElementQuery) -> [String] {
         query.allElementsBoundByIndex.map(\.identifier).sorted()
+    }
+
+    /// The identifiers of the elements of `query` in reading order: by row, then left to right.
+    func identifiersInOrder(_ query: XCUIElementQuery) -> [String] {
+        let placed: [(frame: CGRect, id: String)] = query.allElementsBoundByIndex.map { ($0.frame, $0.identifier) }
+        let ordered = placed.sorted { (a: (frame: CGRect, id: String), b: (frame: CGRect, id: String)) -> Bool in
+            let sameRow = abs(a.frame.minY - b.frame.minY) <= 1
+            return sameRow ? a.frame.minX < b.frame.minX : a.frame.minY < b.frame.minY
+        }
+        return ordered.map(\.id)
+    }
+
+    /// The `.searchable` field: SwiftUI gives it no identifier of ours on macOS, so it is found by type.
+    func searchField(_ app: XCUIApplication) -> XCUIElement {
+        app.searchFields.firstMatch
+    }
+
+    /// The whole fixture sync has ended (every game, prices, the Yu-Gi-Oh! index).
+    func waitUntilSynced(_ app: XCUIApplication) -> Bool {
+        let status = app.staticTexts["status-line"]
+        return waitUntil(timeout: 20) { status.exists && self.text(status).hasPrefix("Catalog up to date") }
+    }
+
+    // MARK: The user folder
+
+    /// One row of a game's collection file, as the app writes it (`CollectionRow`).
+    struct StoredRow: Equatable {
+        var productID: Int
+        var finish: String
+        var count: Int
+        var condition = ""
+        var name: String
+    }
+
+    /// Writes `<root>/user/<game>.json` in the form the app keeps a game's collection in (`GameUserFile`):
+    /// `{"version": 1, "collection": [rows]}`. For `launch(prepare:)`, before the app starts. The UI test target cannot
+    /// import the app module, so the JSON is written here by hand.
+    func writeCollection(_ rows: [StoredRow], game: String, in root: URL) throws {
+        let folder = root.appending(path: "user", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let collection = rows.map { ["productID": $0.productID, "finish": $0.finish, "count": $0.count,
+                                     "condition": $0.condition, "name": $0.name] as [String: Any] }
+        let data = try JSONSerialization.data(withJSONObject: ["version": 1, "collection": collection], options: [.sortedKeys])
+        try data.write(to: folder.appending(path: "\(game).json"))
+    }
+
+    /// The rows of `<root>/user/<game>.json` of the running test's root, as the app last wrote them; [] with no file.
+    func storedCollection(game: String) throws -> [StoredRow] {
+        let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let rows = try XCTUnwrap(object["collection"] as? [[String: Any]], "no collection array in \(file.path)")
+        return try rows.map { row in
+            StoredRow(productID: try XCTUnwrap(row["productID"] as? Int), finish: try XCTUnwrap(row["finish"] as? String),
+                      count: try XCTUnwrap(row["count"] as? Int), condition: row["condition"] as? String ?? "",
+                      name: row["name"] as? String ?? "")
+        }
+    }
+
+    /// Quits the app as a person does (Cmd+Q: the app's own quit, which waits for queued writes; `terminate()` is a kill)
+    /// and waits until it has ended.
+    func quit(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 20), "the app did not quit on Cmd+Q", file: file, line: line)
     }
 
     /// The text a static text shows: macOS keeps it in `value`, or in `label`. A selectable text

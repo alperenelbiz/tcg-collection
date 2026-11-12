@@ -501,6 +501,22 @@ struct UserLibraryTests {
         #expect(lib.rows(game: "riftbound").isEmpty); #expect(lib.problem == nil)
     }
 
+    /// The views disable their controls on it: false wherever `setCount` would be refused.
+    @MainActor @Test func canChangeIsFalseWhereAChangeIsRefused() async throws {
+        let dir = tempDir()
+        try UserFiles.write(Data(#"{"version":2,"collection":[]}"#.utf8), to: dir.appending(path: "riftbound.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        #expect(!lib.canChange(game: "cyberpunk"))                                  // not loaded yet
+        await lib.load()
+        #expect(lib.canChange(game: "cyberpunk"))
+        #expect(!lib.canChange(game: "riftbound"))                                  // newer file: refused
+        #expect(!lib.canChange(game: "not-a-game"))
+        let gone = UserLibrary(folder: tempDir().appending(path: "not-there"), watcher: nil); await gone.load()
+        #expect(!gone.canChange(game: "cyberpunk"))                                 // missing folder
+        let none = UserLibrary(folder: nil, watcher: nil); await none.load()
+        #expect(!none.canChange(game: "cyberpunk"))                                 // no folder chosen yet
+    }
+
     @MainActor @Test func countsAndReplace() async throws {
         let dir = tempDir(); let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
         lib.setCount(2, game: "riftbound", key: riftFoil, name: "A")

@@ -205,6 +205,9 @@ final class AppModel {
         Self.prepareUserFolder(setup, defaults: defaults)
         needsUserFolder = setup.choice == .none
         library = UserLibrary(folder: setup.choice.url, watcher: FolderPresenter())
+        #if DEBUG
+        library.writeDelay = options.writeDelay.map { .milliseconds($0) }
+        #endif
         let opened = Self.openStore(paths: paths, now: now(), defaults: defaults, availableCapacity: availableCapacity)
         store = opened.store
         storeFailure = opened.failure

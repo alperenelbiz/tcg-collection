@@ -5,6 +5,8 @@ struct RootView: View {
     @State private var confirmRebuild = false
     /// All cards' search, filters, results and card pages, for the life of this window.
     @State private var catalog = CatalogMemory()
+    /// The Collection's search, filters, sort, scroll position and pages, for the life of this window.
+    @State private var collection = CollectionMemory()
 
     var body: some View {
         NavigationSplitView {
@@ -12,10 +14,12 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
             // One screen at a time: a hidden screen would still fill the toolbar (its menus, search field and title).
-            // All cards keeps what it showed in `catalog`, so a visit to the Collection loses nothing.
+            // Each screen keeps what it showed (`collection`, `catalog`), so a visit to the other one loses nothing.
             switch model.screen {
             case .collection:
-                CollectionPlaceholder()
+                CollectionStack(state: collection.state(game: model.gameID))
+                    // Search text, filters and the open pages belong to one game.
+                    .id(model.gameID)
             case .allCards:
                 CatalogStack(gameID: model.gameID, state: catalog.state(game: model.gameID, search: model.options.search),
                              confirmRebuild: $confirmRebuild)
@@ -69,16 +73,13 @@ private struct CatalogStack: View {
     }
 }
 
-/// The Collection until Task 5 builds it: the title, one sentence, and what the user folder needs said.
-private struct CollectionPlaceholder: View {
+/// The Collection and the card pages pushed on it.
+private struct CollectionStack: View {
+    @Bindable var state: CollectionScreenState
+
     var body: some View {
-        NavigationStack {
-            EmptyMessage(sentence: "No cards in this collection yet.")
-                .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
-                .background { Theme.ground.ignoresSafeArea() }
-                .navigationTitle("Collection")
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("collection-screen")
+        NavigationStack(path: $state.path) {
+            CollectionView(state: state)
         }
     }
 }
@@ -173,9 +174,9 @@ private struct SidebarRow: View {
 }
 
 /// What the user folder needs said: a problem (the folder is missing, a file is refused, a write failed) and a settled
-/// conflict, each with its one action. Shown on the Collection screen, or in the sidebar's status area while another
-/// screen is showing; the identifier `collection-problem` is in one place at a time.
-private struct LibraryLines: View {
+/// conflict, each with its one action. Shown on the Collection screen and the pages pushed on it, or in the sidebar's
+/// status area while another screen is showing; the identifier `collection-problem` is in one place at a time.
+struct LibraryLines: View {
     let inSidebar: Bool
     @Environment(AppModel.self) private var model
 

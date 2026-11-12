@@ -399,6 +399,20 @@ actor CatalogStore: ModelActor {
         return try modelContext.fetch(descriptor).first?.record
     }
 
+    /// The products with these ids, by id; an id the store does not hold is left out. Read in batches of 500 ids, so a
+    /// collection of thousands of rows never builds one huge `IN` list.
+    func products(ids: [Int]) throws -> [Int: ProductRecord] {
+        let unique = Array(Set(ids))
+        var found: [Int: ProductRecord] = [:]
+        for start in stride(from: 0, to: unique.count, by: 500) {
+            let batch = Array(unique[start..<min(start + 500, unique.count)])
+            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { batch.contains($0.productID) })) {
+                found[row.productID] = row.record
+            }
+        }
+        return found
+    }
+
     /// The Rarity and Type menu values of a game: one scan of its products. Both lists are sorted, except for a game
     /// with a `facetOrder`: its types are only those, in that order (Magic: the current card types; rows not fetched
     /// again after rule 2 still carry old words).
