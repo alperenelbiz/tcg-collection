@@ -153,7 +153,7 @@ struct StoreStillOpen: Error {}
 /// Writes a catalog store with `products` (and their set 1) at `url` and closes it (`waitUntilClosed`).
 func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)]) async throws {
     do {
-        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
+        let schema = Schema(versionedSchema: CatalogSchemaCurrent.self)
         let container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
                                            configurations: ModelConfiguration(schema: schema, url: url))
         let context = ModelContext(container)

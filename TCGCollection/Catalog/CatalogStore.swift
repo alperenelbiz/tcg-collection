@@ -68,7 +68,7 @@ nonisolated enum StoreFile {
     }
 
     /// The entity hashes of the current schema, as Core Data writes them into a store's metadata.
-    private static let currentHashes = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV2.models)?
+    private static let currentHashes = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaCurrent.models)?
         .entityVersionHashesByName
 
     /// True when the file was written with another schema than the current one: opening it migrates it.
@@ -92,7 +92,7 @@ nonisolated enum StoreFile {
     /// file open. Returns the time it took; nil when it failed, which is logged and changes nothing else.
     static func vacuum(_ url: URL) -> Duration? {
         let clock = ContinuousClock(), start = clock.now
-        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV2.models) else {
+        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaCurrent.models) else {
             log.error("The catalog store was not vacuumed: no model for the current schema.")
             return nil
         }
@@ -193,7 +193,7 @@ actor CatalogStore: ModelActor {
             if let available = availableCapacity(url), available < needed { throw StoreOpenError.notEnoughSpace(needed: needed) }
             migrates = true
         }
-        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
+        let schema = Schema(versionedSchema: CatalogSchemaCurrent.self)
         func open() throws -> ModelContainer {
             do {
                 return try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
@@ -215,7 +215,7 @@ actor CatalogStore: ModelActor {
 
     /// An empty store that lives in memory only: the last fallback when no store file can be opened. It needs no disk.
     static func inMemory() throws -> CatalogStore {
-        let schema = Schema(versionedSchema: CatalogSchemaV2.self)
+        let schema = Schema(versionedSchema: CatalogSchemaCurrent.self)
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         return CatalogStore(modelContainer: try ModelContainer(for: schema, configurations: configuration))
     }

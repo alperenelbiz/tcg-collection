@@ -68,6 +68,28 @@ struct CatalogSchemaTests {
                 "V1 must stay exactly as phase 1 shipped it; a real store would not be recognised")
     }
 
+    /// Drift guard: V2 is on the owner's disk; add a V3, never edit V2. His installed app migrated his store to V2 on
+    /// 2026-11-12. The constants are the hashes Core Data wrote into it: the kept read-only copy of that store (a SQLite
+    /// `.backup` of 2026-11-12, after the re-fetch under rules version 2), `Z_METADATA` → `NSStoreModelVersionHashes`
+    /// (base64), version identifier 2.0.0. An edit to V2 would make his store match no version: the app would run on an
+    /// empty catalog in memory, and Reset would be the only way out.
+    @Test func theV2SchemaIsTheOneOnTheOwnersDisk() throws {
+        let shipped = ["CatalogProduct": "os4PXThEgDT10Cvr4NZCWHgFwGmeSFa0RcbpZyJD27k=",
+                       "CatalogSet": "dwPjHdtmdPLYV/YC8bUsT8GvkExb/FAijM1mgO0sZHs="]
+        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV2.models))
+        #expect(model.entityVersionHashesByName.mapValues { $0.base64EncodedString() } == shipped,
+                "V2 must stay exactly as the owner's store has it; add a V3 instead")
+    }
+
+    /// The current schema is named in one place (`CatalogSchemaCurrent`): it is the newest version of the migration plan,
+    /// and the models the app names are its models.
+    @Test func theCurrentSchemaIsTheNewestOfTheMigrationPlan() throws {
+        let newest = try #require(CatalogMigrationPlan.schemas.last)
+        #expect(ObjectIdentifier(newest) == ObjectIdentifier(CatalogSchemaCurrent.self))
+        #expect(ObjectIdentifier(CatalogSet.self) == ObjectIdentifier(CatalogSchemaCurrent.CatalogSet.self))
+        #expect(ObjectIdentifier(CatalogProduct.self) == ObjectIdentifier(CatalogSchemaCurrent.CatalogProduct.self))
+    }
+
     /// Fix round 1, item 3: a store that needs a migration is opened only when the volume has 2 × its size + 100 MB free.
     /// Without that space the file is not opened and not changed. A store that needs no migration, or no file, is
     /// opened whatever the space.

@@ -90,6 +90,8 @@ nonisolated enum CatalogSchemaV1: VersionedSchema {
 
 /// Phase 2A: a set keeps the rules version of its products (P3); a product keeps its type facets only in `facetText`
 /// (P5: the encoded array was 37.6 MB of the 243 MB store).
+/// Shipped: the owner's store is V2 since 2026-11-12. Never change these two classes; add a `CatalogSchemaV3` instead
+/// (`theV2SchemaIsTheOneOnTheOwnersDisk` pins their hashes).
 nonisolated enum CatalogSchemaV2: VersionedSchema {
     static let versionIdentifier = Schema.Version(2, 0, 0)
     static var models: [any PersistentModel.Type] { [CatalogSet.self, CatalogProduct.self] }
