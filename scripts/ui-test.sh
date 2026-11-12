@@ -2,11 +2,20 @@
 # Runs the Mac UI tests (scheme TCGCollectionUI) and exports their screenshots.
 # The tests take the pointer and bring the app window to the front while they run.
 # Every test runs the Debug app on a fresh temporary store and the fixture network: no network, no real store.
+# The one exception, RealCatalogTests, runs only with TCG_REAL_STORE (below), offline.
 # Usage: scripts/ui-test.sh [output dir]   (default: build/ui)
+#        TCG_REAL_STORE=<store root> scripts/ui-test.sh [output dir]
+#   With TCG_REAL_STORE, RealCatalogTests also runs, offline, on that root (it needs <root>/support/catalog.store).
+#   Give it a copy of a real store; the test leaves the root. Without it, RealCatalogTests is skipped.
 # Output: <dir>/ui.xcresult, <dir>/xcodebuild.log, <dir>/shots/*.png (+ manifest.json; a failed test also
 # keeps a screen recording, .mp4). macOS may ask the owner to "Enable UI Automation" (Touch ID or password):
 # the runner waits 60 s for it, then fails with "Timed out while enabling automation mode."
 set -e -o pipefail
+if [[ -n "${TCG_REAL_STORE:-}" ]]; then
+  # xcodebuild passes TEST_RUNNER_<name> to the test runner as <name>. Absolute, from the caller's folder.
+  export TEST_RUNNER_TCG_REAL_STORE="${TCG_REAL_STORE:A}"
+  echo "real store root: $TEST_RUNNER_TCG_REAL_STORE"
+fi
 cd "${0:A:h:h}"
 OUT="${1:-build/ui}"
 

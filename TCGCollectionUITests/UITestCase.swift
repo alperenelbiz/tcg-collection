@@ -1,7 +1,8 @@
 import XCTest
 
 /// Starts the Debug app on a fresh temporary store and the fixture network, and keeps pictures of its window.
-/// After every test, also a failed one, the app is terminated and the store root is removed.
+/// After every test, also a failed one, the app is terminated and a fresh store root is removed. A root the test was
+/// given (`launch(storeRoot:)`) is left as it is.
 @MainActor
 class UITestCase: XCTestCase {
     /// The unit test fixtures, copied into this bundle as the folder `Fixtures`.
@@ -13,6 +14,8 @@ class UITestCase: XCTestCase {
     private var app: XCUIApplication?
     /// The store root of the running test (`-store`).
     private(set) var root: URL?
+    /// False when the root was given to `launch(storeRoot:)`: tearDown leaves it.
+    private var removesRoot = true
 
     override func setUp() async throws {
         try await super.setUp()
@@ -21,12 +24,13 @@ class UITestCase: XCTestCase {
 
     override func tearDown() async throws {
         app?.terminate()
-        if let root {
+        if let root, removesRoot {
             try? FileManager.default.removeItem(at: root)
             XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "the store root is left: \(root.path)")
         }
         app = nil
         root = nil
+        removesRoot = true
         try await super.tearDown()
     }
 
@@ -42,6 +46,14 @@ class UITestCase: XCTestCase {
         self.root = root                                         // tearDown removes it, also when `prepare` fails
         try prepare(root)
         return start(root: root, game: game, extra: extra, fixtures: fixtures)
+    }
+
+    /// Launches the app on a store root that exists already, such as a copy of a real store: `-store <storeRoot>
+    /// -offline YES`, no fixtures, and `-game`. `-offline YES` comes before `extra`, so `extra` cannot turn it off (the
+    /// first value of a flag wins). tearDown leaves the root.
+    func launch(storeRoot: URL, game: String? = nil, extra: [String] = []) -> XCUIApplication {
+        removesRoot = false
+        return start(root: storeRoot, game: game, extra: ["-offline", "YES"] + extra, fixtures: false)
     }
 
     private func newRoot() -> URL {
@@ -77,6 +89,11 @@ class UITestCase: XCTestCase {
     /// Every gallery cell (`card-cell-<card key>`).
     func cardCells(_ app: XCUIApplication) -> XCUIElementQuery {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'card-cell-'"))
+    }
+
+    /// The identifiers of the elements of `query`, sorted.
+    func identifiers(_ query: XCUIElementQuery) -> [String] {
+        query.allElementsBoundByIndex.map(\.identifier).sorted()
     }
 
     /// The text a static text shows: macOS keeps it in `value`, or in `label`. A selectable text

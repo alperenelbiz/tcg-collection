@@ -194,15 +194,41 @@ final class CatalogFlowTests: UITestCase {
         shot("18-after-reset")
     }
 
+    /// `launch(storeRoot:)`: the app runs offline on the given root, without fixtures, and tearDown leaves the root
+    /// (checked in `tearDown` below, after the base class has run).
+    func testAGivenStoreRootIsOfflineAndKept() throws {
+        let given = FileManager.default.temporaryDirectory.appending(path: "tcg-ui-given-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: given, withIntermediateDirectories: true)
+        givenRoot = given
+        let app = launch(storeRoot: given)
+        XCTAssertEqual(root, given)
+        let empty = element(app, "empty-state")
+        XCTAssertTrue(empty.waitForExistence(timeout: 20))
+        // Offline on an empty store: nothing was downloaded from the fixtures.
+        let message = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
+                                  "Offline. The catalog is empty.", "Offline. The catalog is empty.")
+        XCTAssertTrue(empty.descendants(matching: .staticText).matching(message).firstMatch.exists)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: given.appending(path: "support/catalog.store").path),
+                      "the app did not open its store in the given root")
+    }
+
+    /// The root of `testAGivenStoreRootIsOfflineAndKept`.
+    private var givenRoot: URL?
+
+    override func tearDown() async throws {
+        try await super.tearDown()
+        if let givenRoot {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: givenRoot.path), "tearDown removed a given store root")
+            try? FileManager.default.removeItem(at: givenRoot)
+            self.givenRoot = nil
+        }
+    }
+
     // MARK: - Helpers
 
     /// The `.searchable` field: SwiftUI gives it no identifier of ours on macOS, so it is found by type.
     private func searchField(_ app: XCUIApplication) -> XCUIElement {
         app.searchFields.firstMatch
-    }
-
-    private func identifiers(_ query: XCUIElementQuery) -> [String] {
-        query.allElementsBoundByIndex.map(\.identifier).sorted()
     }
 
     /// The whole fixture sync has ended (every game, prices, the Yu-Gi-Oh! index).
