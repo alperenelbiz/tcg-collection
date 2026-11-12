@@ -40,6 +40,7 @@ nonisolated struct AppPaths: Sendable {
         return support.appending(path: "unreadable-\(formatter.string(from: date))", directoryHint: .isDirectory)
     }
     func prices(_ gameID: String) -> URL { support.appending(path: "prices-\(gameID).json") }
+    func facets(_ gameID: String) -> URL { support.appending(path: "facets-\(gameID).json") }
     var ygoIndex: URL { support.appending(path: "ygo-index.json") }
     var archives: URL { caches.appending(path: "archives", directoryHint: .isDirectory) }
     var pictures: URL { caches.appending(path: "pictures", directoryHint: .isDirectory) }

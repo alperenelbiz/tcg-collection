@@ -2,22 +2,6 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
-/// A store in a fresh temporary directory: the 14 Riftbound sets of groups-89.json, and each game's
-/// fixture products in its set (Magic 24684, Yu-Gi-Oh! 24815, Riftbound 24819, Cyberpunk 24884).
-/// Cyberpunk and the others have no row in groups-89.json, so `replaceProducts` creates their set rows.
-private func filledStore() async throws -> CatalogStore {
-    let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
-    let store = try CatalogStore(url: url)
-    try await store.upsertSets(try ProductParser.sets(fixture("groups-89.json"), game: Games.game("riftbound")!))
-    let date = Date(timeIntervalSince1970: 1_800_000_000)
-    for (file, game, group) in [("products-1.json", "magic-the-gathering", 24684), ("products-2.json", "yu-gi-oh", 24815),
-                                ("products-89.json", "riftbound", 24819), ("products-92.json", "cyberpunk", 24884)] {
-        let (cards, _) = try ProductParser.products(fixture(file), game: Games.game(game)!)
-        try await store.replaceProducts(of: group, with: cards, at: date)
-    }
-    return store
-}
-
 struct CatalogStoreTests {
     @Test func searchFindsACardByAnyWordOrder() async throws {
         let s = try await filledStore()

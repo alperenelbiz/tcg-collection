@@ -32,6 +32,10 @@ struct AppModelTests {
         #expect(StatusText.done(result: .init(fetched: 2, failed: 0, newSets: [:]), priceDay: "2026-11-10") == "Catalog up to date · prices of 2026-11-10")
         #expect(StatusText.done(result: .init(fetched: 2, failed: 3, newSets: [:]), priceDay: nil) == "Catalog: 3 sets failed, they are tried again next time · no prices yet")
         #expect(StatusText.done(result: .init(fetched: 2, failed: 1, newSets: [:]), priceDay: nil) == "Catalog: 1 set failed, it is tried again next time · no prices yet")
+        #expect(StatusText.done(result: .init(fetched: 2, failed: 0, newSets: [:]), priceDay: "2026-11-10", rulesPending: 0) == "Catalog up to date · prices of 2026-11-10")
+        #expect(StatusText.done(result: .init(fetched: 2, failed: 0, newSets: [:]), priceDay: "2026-11-10", rulesPending: 3) == "Catalog up to date · 3 sets are updated tomorrow · prices of 2026-11-10")
+        #expect(StatusText.done(result: .init(fetched: 2, failed: 0, newSets: [:]), priceDay: nil, rulesPending: 1) == "Catalog up to date · 1 set is updated tomorrow · no prices yet")
+        #expect(StatusText.done(result: .init(fetched: 2, failed: 1, newSets: [:]), priceDay: nil, rulesPending: 5) == "Catalog: 1 set failed, it is tried again next time · no prices yet")
         #expect(StatusText.offline(priceDay: "2026-11-10") == "Offline · prices of 2026-11-10")
         #expect(StatusText.pricesLoaded(day: "2026-11-10") == "Loaded prices of 2026-11-10")
         #expect(StatusText.pricesLoaded(day: nil) == "No prices yet")
@@ -251,5 +255,45 @@ struct AppModelTests {
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 0, writtenAt: yesterday, now: evening) == false)
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: yesterday, now: evening))
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: morning, now: evening) == false)
+    }
+
+    @MainActor @Test func theFilterListsAreWrittenAfterASyncAndReadAtTheNextLaunch() async throws {
+        let root = tempRoot()
+        let first = model(["app", "-store", root.path])
+        #expect(first.facets(game: "riftbound") == nil)
+        await first.start()
+        let paths = AppPaths(root: root)
+        let lists = try #require(first.facets(game: "riftbound"))
+        #expect(lists.types.contains("Gear")); #expect(FacetLists.read(paths.facets("riftbound")) == lists)
+        let second = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(second.facets(game: "riftbound") == lists)                          // before any store read
+    }
+
+    /// The owner's migrated store has no facets files: the lists are computed once at launch, also offline.
+    @MainActor @Test func aMissingFilterFileIsMadeFromTheStoreAtLaunch() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore, products: try ProductParser.products(fixture("products-89.json"), game: Games.game("riftbound")!).cards)
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.facets(game: "riftbound") == nil)
+        let before = model.filtersVersion
+        await model.start()
+        #expect(model.facets(game: "riftbound")?.types.contains("Gear") == true)
+        #expect(FacetLists.read(paths.facets("riftbound")) == model.facets(game: "riftbound"))
+        #expect(model.facets(game: "yu-gi-oh") == nil)                              // no products: no file
+        #expect(model.filtersVersion > before)
+        #expect(await fakeCatalog.groupCalls == 0)
+    }
+
+    /// After a rule change the sets fetched today wait for the next day; the status line says how many.
+    @MainActor @Test func theStatusCountsTheSetsThatWaitForTheNextDay() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path])
+        await model.start()
+        #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
+        try await model.store.setRulesVersion(1, game: "riftbound")
+        await model.refresh(rebuild: false)                                          // same day: nothing is fetched
+        #expect(await fakeCatalog.productCalls == 14)
+        #expect(model.status == .idle("Catalog up to date · 14 sets are updated tomorrow · prices of 2026-01-02"))
     }
 }

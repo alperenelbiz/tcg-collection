@@ -199,3 +199,29 @@ func sizeAndDate(_ url: URL) throws -> (size: Int, date: Date) {
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     return (try #require(attributes[.size] as? Int), try #require(attributes[.modificationDate] as? Date))
 }
+
+/// A store in a fresh temporary directory: the 14 Riftbound sets of groups-89.json, and each game's
+/// fixture products in its set (Magic 24684, Yu-Gi-Oh! 24815, Riftbound 24819, Cyberpunk 24884).
+/// Cyberpunk and the others have no row in groups-89.json, so `replaceProducts` creates their set rows.
+func filledStore() async throws -> CatalogStore {
+    let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
+    let store = try CatalogStore(url: url)
+    try await store.upsertSets(try ProductParser.sets(fixture("groups-89.json"), game: Games.game("riftbound")!))
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+    for (file, game, group) in [("products-1.json", "magic-the-gathering", 24684), ("products-2.json", "yu-gi-oh", 24815),
+                                ("products-89.json", "riftbound", 24819), ("products-92.json", "cyberpunk", 24884)] {
+        let (cards, _) = try ProductParser.products(fixture(file), game: Games.game(game)!)
+        try await store.replaceProducts(of: group, with: cards, at: date)
+    }
+    return store
+}
+
+extension CatalogStore {
+    /// Test only: sets the rules version of every set of a game, as a store written under older rules has it.
+    func setRulesVersion(_ version: Int, game: String) throws {
+        for row in try modelContext.fetch(FetchDescriptor<CatalogSet>(predicate: #Predicate { $0.gameID == game })) {
+            row.rulesVersion = version
+        }
+        try modelContext.save()
+    }
+}

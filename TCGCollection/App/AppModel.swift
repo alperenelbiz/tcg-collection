@@ -43,7 +43,9 @@ nonisolated enum StatusText {
         return progress.failed > 0 ? line + " · \(progress.failed) failed" : line
     }
 
-    static func done(result: SyncResult, priceDay: String?) -> String {
+    /// `rulesPending`: sets that wait for the next UTC day to be fetched again after a rule change (they were fetched
+    /// today). Shown only when the catalog is otherwise up to date.
+    static func done(result: SyncResult, priceDay: String?, rulesPending: Int = 0) -> String {
         var problems: [String] = []
         switch result.failedSetLists {
         case 0: break
@@ -55,8 +57,13 @@ nonisolated enum StatusText {
         case 1: problems.append("1 set failed, it is tried again next time")
         default: problems.append("\(result.failed) sets failed, they are tried again next time")
         }
-        let catalog = problems.isEmpty ? "Catalog up to date" : "Catalog: " + problems.joined(separator: "; ")
+        var catalog = problems.isEmpty ? "Catalog up to date" : "Catalog: " + problems.joined(separator: "; ")
+        if problems.isEmpty, rulesPending > 0 { catalog = Self.rulesPending(rulesPending) }
         return catalog + " · " + priceLine(priceDay)
+    }
+
+    static func rulesPending(_ count: Int) -> String {
+        "Catalog up to date · \(count) \(count == 1 ? "set is" : "sets are") updated tomorrow"
     }
 
     static func offline(priceDay: String?) -> String {
@@ -104,6 +111,10 @@ final class AppModel {
     /// Goes up when a catalog step that changed the store has ended, so the filter menus read their values again.
     /// It does not follow the periodic steps of `catalogVersion`: those values come from every product of a game.
     private(set) var filtersVersion = 0
+
+    /// The Rarity and Type menu values per game: read from `facets-<game>.json` at launch, rewritten after a catalog
+    /// step that changed the game. A game with no entry shows empty menus.
+    @ObservationIgnored private var facetLists: [String: FacetLists] = [:]
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
@@ -156,12 +167,19 @@ final class AppModel {
         priceSync = PriceSync(paths: paths, client: archiveClient)
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
+        for game in Games.all {
+            if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
+        }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
         if let notice = opened.notice {
             status = .idle(notice)
             checkingText = notice
         }
     }
+
+    /// The filter menu values of a game. Nil until a file exists or a sync wrote one. Views read it again when
+    /// `filtersVersion` changes.
+    func facets(game: String) -> FacetLists? { facetLists[game] }
 
     /// "Reset the catalog…" in the store-failure state: the next launch sets the store file aside and downloads the
     /// catalog again. Nothing happens to the file in this run.
@@ -231,6 +249,7 @@ final class AppModel {
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()
+        await writeMissingFacetLists()
         if let storeFailure {
             status = .failed(storeFailure)
             return
@@ -240,6 +259,26 @@ final class AppModel {
             return
         }
         await sync(rebuild: false)
+    }
+
+    /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once,
+    /// through the reader store, so the menus do not wait for a sync.
+    private func writeMissingFacetLists() async {
+        let chosen = gameID
+        var wrote = false
+        for game in Games.all.sorted(by: { $0.id == chosen && $1.id != chosen }) where facetLists[game.id] == nil {
+            guard (try? await reader.progress(game: game.id))?.fetched ?? 0 > 0 else { continue }
+            wrote = await storeFacetLists(of: game) || wrote
+        }
+        if wrote { filtersVersion += 1 }
+    }
+
+    /// Reads a game's lists from the store, keeps them in memory and writes the file. False when the store read failed.
+    private func storeFacetLists(of game: GameDefinition) async -> Bool {
+        guard let lists = try? await reader.facetLists(game: game.id) else { return false }
+        facetLists[game.id] = lists
+        try? lists.write(to: paths.facets(game.id))
+        return true
     }
 
     /// `-card <productId>`: switches to the product's game and asks the window to open its card page.
@@ -273,7 +312,8 @@ final class AppModel {
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 newSets: first.newSets.merging(rest.newSets, uniquingKeysWith: +))
         let indexFailure = await refreshYGOIndexIfNeeded(newSets: result.newSets["yu-gi-oh", default: 0], now: now)
-        let done = StatusText.done(result: result, priceDay: prices.day(game: gameID))
+        let pending = await rulesPendingCount(now: now)
+        let done = StatusText.done(result: result, priceDay: prices.day(game: gameID), rulesPending: pending)
         if result.failedSetLists > 0 {
             // The catalog failure first: with no network at first launch it is the one that matters.
             status = .failed([done, priceFailure ?? indexFailure].compactMap { $0 }.joined(separator: " · "))
@@ -284,15 +324,32 @@ final class AppModel {
         }
     }
 
+    /// Sets of every game that are stored under older rules and were fetched today: they wait for the next UTC day.
+    private func rulesPendingCount(now: Date) async -> Int {
+        var count = 0
+        for game in Games.all {
+            guard let versions = try? await reader.rulesVersions(game: game.id),
+                  let dates = try? await reader.fetchDates(game: game.id) else { continue }
+            count += versions.filter { SyncPlan.isOld($0.value) && dates[$0.key].map { SyncPlan.fetchedToday($0, now: now) } == true }.count
+        }
+        return count
+    }
+
     private func syncCatalog(of games: [GameDefinition], now: Date, rebuild: Bool) async -> SyncResult {
         status = .syncing(checkingText)
         checkingText = StatusText.checking
         // A stream keeps the progress lines in order and ends before the step's result is used.
         let (updates, sink) = AsyncStream.makeStream(of: SyncProgress.self)
         async let result = Self.run(catalogSync, games: games, now: now, rebuild: rebuild, reportingTo: sink)
-        for await progress in updates { show(progress) }
+        var touched = Set<String>()
+        for await progress in updates {
+            touched.insert(progress.gameID)
+            show(progress)
+        }
         let done = await result
         if done.fetched > 0 {
+            // A game that reported progress had a set stored or failed; its lists are read again before the menus are told.
+            for game in games where touched.contains(game.id) { _ = await storeFacetLists(of: game) }
             catalogVersion += 1
             filtersVersion += 1
         }

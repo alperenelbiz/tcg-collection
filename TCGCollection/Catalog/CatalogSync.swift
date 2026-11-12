@@ -21,16 +21,27 @@ nonisolated enum SyncPlan {
     private static let recentDays = 90.0
 
     /// The group ids to fetch, in the order of `sets` (D5). No set is fetched twice in one day (UTC), not even by a
-    /// rebuild: `rebuild` fetches every set that was not fetched today.
-    static func due(sets: [SetRecord], fetchDates: [Int: Date], now: Date, rebuild: Bool) -> [Int] {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
-        return sets.filter { set in
+    /// rebuild or a rule change: `rebuild` fetches every set that was not fetched today. A set stored under an older
+    /// `CatalogRules.version` is fetched once more (P3). A set missing from `rulesVersions` (no products) counts as current.
+    static func due(sets: [SetRecord], fetchDates: [Int: Date], rulesVersions: [Int: Int], now: Date, rebuild: Bool) -> [Int] {
+        sets.filter { set in
             guard let fetched = fetchDates[set.groupID] else { return true }
-            if calendar.isDate(fetched, inSameDayAs: now) { return false }
-            if rebuild { return true }
+            if fetchedToday(fetched, now: now) { return false }
+            if rebuild || isOld(rulesVersions[set.groupID]) { return true }
             return set.publishedOn.map { now.timeIntervalSince($0) < recentDays * 86_400 } ?? true
         }.map(\.groupID)
+    }
+
+    /// True when `version` is below the app's rules version. Nil (no row) is current.
+    static func isOld(_ version: Int?) -> Bool {
+        version.map { $0 < CatalogRules.version } ?? false
+    }
+
+    /// Same UTC day as `now`.
+    static func fetchedToday(_ fetched: Date, now: Date) -> Bool {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.isDate(fetched, inSameDayAs: now)
     }
 }
 
@@ -109,7 +120,8 @@ actor CatalogSync {
             try await store.upsertSets(try ProductParser.sets(body, game: game))
             let sets = try await store.sets(game: game.id)
             let dates = try await store.fetchDates(game: game.id)
-            let due = SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: rebuild)
+            let versions = try await store.rulesVersions(game: game.id)
+            let due = SyncPlan.due(sets: sets, fetchDates: dates, rulesVersions: versions, now: now, rebuild: rebuild)
             return (due, Set(due.filter { dates[$0] == nil }), sets.count, dates.count)
         } catch {
             return nil

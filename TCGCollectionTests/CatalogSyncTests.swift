@@ -40,8 +40,46 @@ struct CatalogSyncTests {
         let sets = [set(1, "2025-07-30"), set(2, "2026-10-23"), set(3, "2027-01-29"), set(4, "2025-07-30"), set(5, nil)]
         let today = TCGDate.date("2026-11-11T01:00:00")!, yesterday = TCGDate.date("2026-11-10T23:00:00")!
         let dates = [1: yesterday, 2: yesterday, 3: today, 5: yesterday]            // 4 was never fetched
-        #expect(SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: false) == [2, 4, 5])
-        #expect(SyncPlan.due(sets: sets, fetchDates: dates, now: now, rebuild: true) == [1, 2, 4, 5])   // 3: fetched today
+        let current = Dictionary(uniqueKeysWithValues: (1...5).map { ($0, CatalogRules.version) })
+        #expect(SyncPlan.due(sets: sets, fetchDates: dates, rulesVersions: current, now: now, rebuild: false) == [2, 4, 5])
+        #expect(SyncPlan.due(sets: sets, fetchDates: dates, rulesVersions: current, now: now, rebuild: true) == [1, 2, 4, 5])   // 3: fetched today
+    }
+
+    @Test func anOldRulesVersionMakesASetDueButNotOnTheDayItWasFetched() {      // Review Focus 3
+        let now = TCGDate.date("2026-11-13T10:00:00")!
+        func set(_ id: Int) -> SetRecord { .init(groupID: id, gameID: "riftbound", name: "", abbreviation: "", publishedOn: TCGDate.date("2025-01-01T00:00:00")) }
+        let today = TCGDate.date("2026-11-13T01:00:00")!, yesterday = TCGDate.date("2026-11-12T20:00:00")!
+        let due = SyncPlan.due(sets: [set(1), set(2), set(3)], fetchDates: [1: yesterday, 2: today, 3: yesterday],
+                               rulesVersions: [1: 1, 2: 1, 3: CatalogRules.version], now: now, rebuild: false)
+        #expect(due == [1])                                               // 2 was fetched today; 3 is current
+    }
+
+    @Test func aSetMissingFromTheRulesVersionsCountsAsCurrent() {
+        let now = TCGDate.date("2026-11-13T10:00:00")!
+        let old = SetRecord(groupID: 1, gameID: "riftbound", name: "", abbreviation: "", publishedOn: TCGDate.date("2025-01-01T00:00:00"))
+        let yesterday = TCGDate.date("2026-11-12T20:00:00")!
+        #expect(SyncPlan.due(sets: [old], fetchDates: [1: yesterday], rulesVersions: [:], now: now, rebuild: false).isEmpty)
+    }
+
+    @Test func aRunWritesTheCurrentRulesVersion() async throws {
+        let rig = try await Rig()
+        _ = await rig.run()
+        #expect(Set(try await rig.store.rulesVersions(game: "riftbound").values) == [CatalogRules.version])
+    }
+
+    @Test func afterARuleChangeEverySetIsFetchedOnceOnTheNextDay() async throws {
+        let rig = try await Rig()
+        _ = await rig.run()
+        try await rig.store.setRulesVersion(1, game: "riftbound")
+        await rig.fake.resetCounts()
+        _ = await rig.run(at: rig.now.addingTimeInterval(3600))
+        #expect(await rig.fake.productCalls == 0)                             // same UTC day
+        _ = await rig.run(at: rig.now.addingTimeInterval(86_400))
+        #expect(await rig.fake.productCalls == 14)
+        await rig.fake.resetCounts()
+        _ = await rig.run(at: rig.now.addingTimeInterval(2 * 86_400))
+        // No second rules re-fetch: only the 3 sets the recent-set rule keeps due (published 2026-10-23, 2026-12-04, 2027-01-29).
+        #expect(await rig.fake.productCalls == 3)
     }
 
     /// I4: "Rebuild catalog" fetches every set that was not fetched today (UTC), so a second rebuild that day fetches none.

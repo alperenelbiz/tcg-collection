@@ -14,8 +14,6 @@ struct CatalogSearchView: View {
     @State private var hasMore = false
     @State private var catalogEmpty = false
     @State private var sets: [SetRecord] = []
-    @State private var rarities: [String] = []
-    @State private var types: [String] = []
     @State private var confirmReset = false
 
     init(search: String) {
@@ -34,13 +32,13 @@ struct CatalogSearchView: View {
             .toolbar {
                 ToolbarItemGroup {
                     FilterMenu(title: "Set", selection: $filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
-                    FilterMenu(title: "Rarity", selection: $filter.rarity, choices: rarities.map { ($0, $0) })
-                    FilterMenu(title: "Type", selection: $filter.typeFacet, choices: types.map { ($0, $0) })
+                    FilterMenu(title: "Rarity", selection: $filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
+                    FilterMenu(title: "Type", selection: $filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
                 }
             }
             .task(id: SearchKey(text: text, filter: filter, catalogVersion: model.catalogVersion)) { await search() }
-            // The rarity and type lists read every product of the game: once per game, and again after a sync step.
-            .task(id: model.filtersVersion) { await loadFilterChoices() }
+            // The set list is cheap; the rarity and type lists come from `model.facets` (a file, P4).
+            .task(id: model.filtersVersion) { await loadSets() }
     }
 
     @ViewBuilder private var content: some View {
@@ -130,11 +128,8 @@ struct CatalogSearchView: View {
         catalogEmpty = empty
     }
 
-    private func loadFilterChoices() async {
-        let game = model.gameID, store = model.reader
-        sets = (try? await store.sets(game: game)) ?? []
-        rarities = (try? await store.rarities(game: game)) ?? []
-        types = (try? await store.typeFacets(game: game)) ?? []
+    private func loadSets() async {
+        sets = (try? await model.reader.sets(game: model.gameID)) ?? []
     }
 }
 
