@@ -56,6 +56,30 @@ struct CatalogSchemaTests {
         #expect(try await store.rulesVersions(game: "riftbound") == [24819: CatalogRules.version])
     }
 
+    /// Fix round 1, item 3: a store that needs a migration is opened only when the volume has 2 × its size + 100 MB free.
+    /// Without that space the file is not opened and not changed. A store that needs no migration, or no file, is
+    /// opened whatever the space.
+    @Test func aStoreIsMigratedOnlyWithTheSpaceForIt() async throws {
+        let url = try newStoreURL()
+        try await writePhase1Store(at: url)
+        let before = try sizeAndDate(url)
+        let needed = 2 * before.size + 100_000_000
+        do {
+            _ = try CatalogStore(url: url, availableCapacity: { _ in needed - 1 })
+            Issue.record("a store that needs a migration was opened without the space for it")
+        } catch {
+            let megabytes = Int((Double(needed) / 1_000_000).rounded(.up))
+            #expect(CatalogStore.classify(error) == .other("Not enough free disk space to update the catalog (needs about \(megabytes) MB). Free some space and open the app again."))
+        }
+        let after = try sizeAndDate(url)
+        #expect(after.size == before.size); #expect(after.date == before.date)
+
+        let migrated = try CatalogStore(url: url, availableCapacity: { _ in needed })
+        #expect(try await migrated.rulesVersions(game: "riftbound") == [24819: 1])
+        _ = try CatalogStore(url: url, availableCapacity: { _ in 0 })            // up to date: no migration, no check
+        _ = try CatalogStore(url: try newStoreURL(), availableCapacity: { _ in 0 })   // no file
+    }
+
     /// `|a|b|` holds the type facets; an empty text and `||` hold none.
     @Test func theTypeFacetsComeFromTheFacetText() {
         let row = CatalogProduct(product(id: 1, cardType: "Champion Unit"))

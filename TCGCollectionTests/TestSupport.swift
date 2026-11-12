@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import Testing
 @testable import TCGCollection2
 
 func product(id: Int = 1, game: String = "riftbound", groupID: Int = 1, name: String = "Card", number: String = "",
@@ -146,12 +147,10 @@ enum ForeignSchema: VersionedSchema {
     }
 }
 
-/// The store was still open after `writeClosedStore` waited 5 s for it to close.
+/// The store was still open after `waitUntilClosed` waited 5 s for it to close.
 struct StoreStillOpen: Error {}
 
-/// Writes a catalog store with `products` (and their set 1) at `url`, waits until it is closed, and removes its `-wal`
-/// and `-shm` files: the store file alone holds every row then. Core Data empties the -wal when it closes a store, but
-/// it closes a released container later, on its own schedule (seen: an autorelease pool is not enough).
+/// Writes a catalog store with `products` (and their set 1) at `url` and closes it (`waitUntilClosed`).
 func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)]) async throws {
     do {
         let schema = Schema(versionedSchema: CatalogSchemaV2.self)
@@ -163,6 +162,28 @@ func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)])
         for record in products { context.insert(CatalogProduct(record)) }
         try context.save()
     }
+    try await waitUntilClosed(url)
+}
+
+/// Writes a phase 1 store (the V1 schema) at `url`: set 24819 and the Riftbound fixture products. Closes it.
+func writePhase1Store(at url: URL) async throws {
+    do {
+        let container = try ModelContainer(for: Schema(versionedSchema: CatalogSchemaV1.self), configurations: ModelConfiguration(url: url))
+        let context = ModelContext(container)
+        context.insert(CatalogSchemaV1.CatalogSet(groupID: 24819, gameID: "riftbound", name: "Radiance", abbreviation: "RAD",
+                                                  publishedOn: nil, fetchedAt: Date(timeIntervalSince1970: 1_800_000_000)))
+        for record in try ProductParser.products(fixture("products-89.json"), game: Games.game("riftbound")!).cards {
+            context.insert(CatalogSchemaV1.CatalogProduct(record))
+        }
+        try context.save()
+    }
+    try await waitUntilClosed(url)
+}
+
+/// Waits until the store at `url` is closed, then removes its `-wal` and `-shm` files: the store file alone holds every
+/// row then. Core Data empties the -wal when it closes a store, but it closes a released container later, on its own
+/// schedule (seen: an autorelease pool is not enough).
+func waitUntilClosed(_ url: URL) async throws {
     func walSize() -> Int { (try? FileManager.default.attributesOfItem(atPath: url.path + "-wal")[.size] as? Int) ?? 0 }
     let end = ContinuousClock.now + .seconds(5)
     while walSize() > 0 {
@@ -170,4 +191,10 @@ func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)])
         try await Task.sleep(for: .milliseconds(10))
     }
     for suffix in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+}
+
+/// The byte size and the modification date of a file.
+func sizeAndDate(_ url: URL) throws -> (size: Int, date: Date) {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    return (try #require(attributes[.size] as? Int), try #require(attributes[.modificationDate] as? Date))
 }

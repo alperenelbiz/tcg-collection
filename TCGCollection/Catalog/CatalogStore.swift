@@ -41,18 +41,51 @@ nonisolated enum StoreOpenError: Error {
     /// SwiftData could not open the file. `fileError` is what Core Data threw when it read the file's metadata; nil when
     /// it read them, or when there is no file.
     case cannotOpen(any Error, fileError: (any Error)?)
+    /// The file needs a migration and the volume has less than `needed` bytes free for it. The file was not opened.
+    case notEnoughSpace(needed: Int)
 
     /// `error` from opening the store at `url`, with what a metadata read of that file says.
     init(opening url: URL, failedWith error: any Error) {
-        var fileError: (any Error)?
-        if FileManager.default.fileExists(atPath: url.path) {
-            do {
-                _ = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
-            } catch {
-                fileError = error
-            }
-        }
-        self = .cannotOpen(error, fileError: fileError)
+        self = .cannotOpen(error, fileError: StoreFile.metadata(url)?.failure)
+    }
+}
+
+/// What Core Data says about a store file before anything opens it.
+nonisolated enum StoreFile {
+    /// The file's metadata, or the error of reading them; nil when there is no file.
+    static func metadata(_ url: URL) -> Result<[String: Any], any Error>? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return Result { try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url) }
+    }
+
+    /// The entity hashes of the current schema, as Core Data writes them into a store's metadata.
+    private static let currentHashes = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV2.models)?
+        .entityVersionHashesByName
+
+    /// True when the file was written with another schema than the current one: opening it migrates it.
+    static func needsMigration(_ metadata: [String: Any]) -> Bool {
+        guard let currentHashes else { return false }
+        return metadata[NSStoreModelVersionHashesKey] as? [String: Data] != currentHashes
+    }
+
+    /// The bytes free for important use on the volume of `url`; nil when the system cannot say.
+    static func availableCapacity(_ url: URL) -> Int? {
+        let values = try? url.deletingLastPathComponent().resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage.map(Int.init)
+    }
+
+    /// The free space a migration of the file at `url` needs: twice the file (the migration copies the products table
+    /// through the -wal) and 100 MB.
+    static func spaceForMigration(_ url: URL) -> Int {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        return 2 * size + 100_000_000
+    }
+}
+
+private extension Result {
+    /// The error of a failed result; nil for a success.
+    nonisolated var failure: Failure? {
+        if case .failure(let error) = self { error } else { nil }
     }
 }
 
@@ -110,17 +143,24 @@ actor CatalogStore: ModelActor {
         self.modelContainer = modelContainer
     }
 
-    /// Opens the store file at `url` with the current schema, and migrates a store of an older version first.
+    /// Opens the store file at `url` with the current schema, and migrates a store of an older version first. A
+    /// migration needs free space (`StoreFile.spaceForMigration`); `availableCapacity` says how much the volume has.
     /// What it throws is judged by `classify(_:)`.
-    init(url: URL) throws {
+    init(url: URL, availableCapacity: (URL) -> Int? = StoreFile.availableCapacity) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let metadata = StoreFile.metadata(url)
+        if case .success(let values)? = metadata, StoreFile.needsMigration(values) {
+            // Not opened at all: a migration that runs out of space fails half way, and the file is kept anyway.
+            let needed = StoreFile.spaceForMigration(url)
+            if let available = availableCapacity(url), available < needed { throw StoreOpenError.notEnoughSpace(needed: needed) }
+        }
         let schema = Schema(versionedSchema: CatalogSchemaV2.self)
         let container: ModelContainer
         do {
             container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
                                            configurations: ModelConfiguration(schema: schema, url: url))
         } catch {
-            throw StoreOpenError(opening: url, failedWith: error)
+            throw StoreOpenError.cannotOpen(error, fileError: metadata?.failure)
         }
         self.init(modelContainer: container)
     }
@@ -342,9 +382,14 @@ extension CatalogStore {
     /// the metadata read of the file decides: a file whose metadata Core Data reads is always kept, whatever stopped the
     /// open (a failed migration, an unknown schema, no space, no permission). Any other error is judged by its causes.
     nonisolated static func classify(_ error: any Error) -> StoreOpenFailure {
-        if let open = error as? StoreOpenError, case .cannotOpen(let openError, let fileError) = open {
+        switch error as? StoreOpenError {
+        case .cannotOpen(let openError, let fileError)?:
             if let fileError, causes(of: fileError).contains(where: isBadFile) { return .unreadable }
             return .other(statusText(openError))
+        case .notEnoughSpace(let needed)?:
+            return .other(StatusText.notEnoughSpace(megabytes: Int((Double(needed) / 1_000_000).rounded(.up))))
+        case nil:
+            break
         }
         return causes(of: error).contains(where: isBadFile) ? .unreadable : .other(statusText(error))
     }

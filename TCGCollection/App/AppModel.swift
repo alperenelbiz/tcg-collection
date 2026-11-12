@@ -28,6 +28,10 @@ nonisolated enum StatusText {
         "The catalog could not be updated to this version (\(reason)). Free some disk space and open the app again."
     }
 
+    static func notEnoughSpace(megabytes: Int) -> String {
+        "Not enough free disk space to update the catalog (needs about \(megabytes) MB). Free some space and open the app again."
+    }
+
     static func storeCannotOpen(_ reason: String) -> String {
         "Catalog: the store cannot be opened (\(reason))"
     }
