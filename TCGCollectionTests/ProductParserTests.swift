@@ -42,6 +42,18 @@ struct ProductParserTests {
         #expect(TCGDate.date("not a date") == nil)
     }
 
+    /// The search matches its words in the stored card key (`CatalogProduct.cardKey`, `CardName.searchKey(cardName)`),
+    /// because that key is in the index the search walks. That finds the same rows as `searchKey` only while every
+    /// product's search key is the search key of its card name (phase 2B task 8).
+    @Test func aProductsSearchKeyIsItsCardKey() throws {
+        for (file, game) in [("products-1.json", "magic-the-gathering"), ("products-2.json", "yu-gi-oh"),
+                             ("products-89.json", "riftbound"), ("products-92.json", "cyberpunk")] {
+            let (cards, _) = try ProductParser.products(fixture(file), game: Games.game(game)!)
+            #expect(!cards.isEmpty)
+            for card in cards { #expect(card.searchKey == CardName.searchKey(card.cardName), "\(card.name)") }
+        }
+    }
+
     @Test func aMagicCardKeepsItsFields() throws {
         let (cards, dropped) = try ProductParser.products(fixture("products-1.json"), game: Games.game("magic-the-gathering")!)
         #expect(dropped == 1)                                   // the sealed product

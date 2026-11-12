@@ -116,6 +116,73 @@ struct CatalogStoreTests {
         }
     }
 
+    /// Phase 2B task 8 changed the search query for speed. These results were taken from the query before the change:
+    /// the same cards in the same order, each with the same printings (in product id order) and the same cover, for
+    /// every batch size. A card's line is `<card key> [<product ids>] <cover product id>`.
+    @Test func searchResultsArePinned() async throws {
+        let s = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
+        try await s.upsertSets(try ProductParser.sets(fixture("groups-89.json"), game: Games.game("riftbound")!))
+        func record(_ id: Int, _ name: String, group: Int, rarity: String, type: String) -> ProductRecord {
+            ProductRecord(productID: id, gameID: "riftbound", groupID: group, name: name, cardName: name,
+                          searchKey: CardName.searchKey(name), number: "", rarity: rarity, cardType: type,
+                          typeFacets: [type], rulesText: "", url: "", fields: [:])
+        }
+        // Sets by date: 24832 (2027-01-29) newest, then 24819 (2026-10-23), then 24344 (2025-10-31). Rows go in out of
+        // key order and out of id order.
+        let newest = [record(50, "Lightning Dragon", group: 24832, rarity: "Rare", type: "Unit"),
+                      record(20, "Dragon Whelp", group: 24832, rarity: "Common", type: "Unit")]
+        let middle = [record(44, "Shivan Dragon", group: 24819, rarity: "Rare", type: "Unit"),
+                      record(1, "Zap", group: 24819, rarity: "Common", type: "Spell"),
+                      record(41, "Card 2", group: 24819, rarity: "Common", type: "Gear"),
+                      record(33, "Dragon Whelp", group: 24819, rarity: "Rare", type: "Unit"),
+                      record(12, "Ancient Dragon", group: 24819, rarity: "Rare", type: "Unit"),
+                      record(11, "The Dragon's Hoard", group: 24819, rarity: "Common", type: "Gear"),
+                      record(9, "Lightning Bolt", group: 24819, rarity: "Rare", type: "Spell"),
+                      record(8, "Dragonlord", group: 24819, rarity: "Common", type: "Unit"),
+                      record(5, "Bolt of Lightning", group: 24819, rarity: "Common", type: "Spell")]
+        let oldest = [record(60, "Thermal Bolt", group: 24344, rarity: "Common", type: "Spell"),
+                      record(40, "Card 10", group: 24344, rarity: "Common", type: "Gear"),
+                      record(35, "Lightning Bolt", group: 24344, rarity: "Common", type: "Spell"),
+                      record(31, "Ancient Dragon", group: 24344, rarity: "Common", type: "Unit"),
+                      record(7, "Dragon Whelp", group: 24344, rarity: "Common", type: "Unit"),
+                      record(3, "Shivan Dragon", group: 24344, rarity: "Common", type: "Unit"),
+                      record(2, "Card 10", group: 24344, rarity: "Common", type: "Gear")]
+        for (group, rows) in [(24819, middle), (24344, oldest), (24832, newest)] {
+            try await s.replaceProducts(of: group, with: rows, at: .now)
+        }
+        let all = ["ancient dragon [12, 31] 12", "bolt of lightning [5] 5", "card 10 [2, 40] 40", "card 2 [41] 41",
+                   "dragon whelp [7, 20, 33] 20", "dragonlord [8] 8", "lightning bolt [9, 35] 9",
+                   "lightning dragon [50] 50", "shivan dragon [3, 44] 44", "the dragon s hoard [11] 11",
+                   "thermal bolt [60] 60", "zap [1] 1"]
+        let dragon = ["ancient dragon [12, 31] 12", "dragon whelp [7, 20, 33] 20", "dragonlord [8] 8",
+                      "lightning dragon [50] 50", "shivan dragon [3, 44] 44", "the dragon s hoard [11] 11"]
+        let cases: [(text: String, filter: CardFilter, limit: Int, expected: [String])] = [
+            ("", .init(), 50, all),
+            ("", .init(), 3, Array(all.prefix(3))),                         // the limit ends the scan after a whole card
+            ("dragon", .init(), 50, dragon),
+            ("dragon", .init(), 2, Array(dragon.prefix(2))),
+            ("a", .init(), 50, all.filter { !$0.hasPrefix("bolt of") && !$0.hasPrefix("lightning bolt") }),
+            ("the", .init(), 50, ["the dragon s hoard [11] 11", "thermal bolt [60] 60"]),
+            ("lightning bolt", .init(), 50, ["bolt of lightning [5] 5", "lightning bolt [9, 35] 9"]),
+            ("bolt lightning", .init(), 50, ["bolt of lightning [5] 5", "lightning bolt [9, 35] 9"]),
+            ("DRAGON  whelp", .init(), 50, ["dragon whelp [7, 20, 33] 20"]),
+            ("wyrm", .init(), 50, []),
+            ("dragon", .init(rarity: "Rare"), 50, ["ancient dragon [12] 12", "dragon whelp [33] 33",
+                                                   "lightning dragon [50] 50", "shivan dragon [44] 44"]),
+            ("", .init(typeFacet: "Spell"), 50, ["bolt of lightning [5] 5", "lightning bolt [9, 35] 9",
+                                                 "thermal bolt [60] 60", "zap [1] 1"]),
+            ("dragon", .init(groupID: 24344), 50, ["ancient dragon [31] 31", "dragon whelp [7] 7", "shivan dragon [3] 3"]),
+        ]
+        for item in cases {
+            for size in [1, 2, 3, 5, 400] {
+                let found = try await s.search(game: "riftbound", text: item.text, filter: item.filter, limit: item.limit,
+                                               batchSize: size)
+                let lines = found.map { "\($0.id) \($0.productIDs) \($0.cover.productID)" }
+                #expect(lines == item.expected, "text \"\(item.text)\", \(item.filter), limit \(item.limit), batch \(size)")
+            }
+        }
+    }
+
     @Test func productLookupKeepsEveryField() async throws {
         let s = try await filledStore()
         let (cards, _) = try ProductParser.products(fixture("products-1.json"), game: Games.game("magic-the-gathering")!)

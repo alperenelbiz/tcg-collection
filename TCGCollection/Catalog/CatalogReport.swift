@@ -248,25 +248,60 @@ nonisolated enum CatalogReport {
         support.appending(path: "facets-\(gameID).json")
     }
 
+    /// The texts of the search timings: one letter, a word of six letters, two words, a common word, and the empty text
+    /// (the gallery before anything is typed).
+    private static let timedSearches = ["a", "dragon", "lightning bolt", "the", ""]
+
     private static func timings(store: CatalogStore) async throws -> [String] {
-        var lines = ["== Times (median; search: limit 301 as in the gallery, 5 runs; filter lists: 3 runs)"]
+        var lines = ["== Times (search: limit 301 as in the gallery, 7 runs, median / worst; filter lists: 3 runs, median)"]
         for game in Games.all {
-            var parts: [String] = []
-            for text in ["a", "dragon"] {
-                let time = try await median(5) { _ = try await store.search(game: game.id, text: text, filter: .init(), limit: 301) }
-                parts.append("search \"\(text)\" \(milliseconds(time))")
+            lines.append("\(game.name):")
+            for text in timedSearches {
+                var found: [CardSummary] = []
+                let times = try await durations(7) {
+                    found = try await store.search(game: game.id, text: text, filter: .init(), limit: 301)
+                }
+                lines.append("  search \"\(text)\" \(milliseconds(times.median)) / \(milliseconds(times.worst)); "
+                             + resultLine(found))
             }
-            let lists = try await median(3) {
+            let lists = try await durations(3) {
                 _ = try await store.rarities(game: game.id)
                 _ = try await store.typeFacets(game: game.id)
             }
-            parts.append("rarities + typeFacets \(milliseconds(lists))")
-            lines.append("\(game.name): " + parts.joined(separator: ", "))
+            lines.append("  rarities + typeFacets \(milliseconds(lists.median))")
+        }
+        // The Collection's join reads its products by id (`products(ids:game:)`): ids spread over the whole game.
+        let magic = try await store.productIDs(game: "magic-the-gathering")
+        for count in [500, 2_000] where magic.count >= count {
+            let ids = stride(from: 0, to: magic.count, by: magic.count / count).prefix(count).map { magic[$0] }
+            var found = 0
+            let times = try await durations(7) { found = try await store.products(ids: ids, game: "magic-the-gathering").count }
+            lines.append("Magic products(ids:) of \(count) ids: \(milliseconds(times.median)) / \(milliseconds(times.worst)); "
+                         + "\(found) found")
         }
         return lines
     }
 
-    private static func median(_ runs: Int, _ work: () async throws -> Void) async rethrows -> Duration {
+    /// What a search returned, short enough to compare two runs: cards, printings, and a digest of every card key and
+    /// product id in their order (FNV-1a, the same in every run).
+    private static func resultLine(_ cards: [CardSummary]) -> String {
+        var digest: UInt64 = 0xcbf2_9ce4_8422_2325
+        for card in cards {
+            for byte in "\(card.id)|\(card.cover.productID)|\(card.productIDs)\n".utf8 {
+                digest = (digest ^ UInt64(byte)) &* 0x0000_0100_0000_01b3
+            }
+        }
+        let printings = cards.map(\.printings).reduce(0, +)
+        return "\(cards.count) cards, \(printings) printings, digest \(String(digest, radix: 16))"
+    }
+
+    private struct Durations {
+        let sorted: [Duration]
+        var median: Duration { sorted[sorted.count / 2] }
+        var worst: Duration { sorted[sorted.count - 1] }
+    }
+
+    private static func durations(_ runs: Int, _ work: () async throws -> Void) async rethrows -> Durations {
         let clock = ContinuousClock()
         var times: [Duration] = []
         for _ in 0..<runs {
@@ -274,7 +309,7 @@ nonisolated enum CatalogReport {
             try await work()
             times.append(clock.now - start)
         }
-        return times.sorted()[runs / 2]
+        return Durations(sorted: times.sorted())
     }
 
     private static func median(_ runs: Int, _ work: () -> Void) -> Duration {
@@ -307,6 +342,14 @@ extension CatalogStore {
     /// Every product of one game. Only for the report: it holds the whole game in memory.
     func allProducts(game: String) throws -> [ProductRecord] {
         try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game })).map(\.record)
+    }
+
+    /// Every product id of one game, ascending. Only for the report's timing of `products(ids:game:)`.
+    func productIDs(game: String) throws -> [Int] {
+        var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game },
+                                                         sortBy: [SortDescriptor(\.productID)])
+        descriptor.propertiesToFetch = [\.productID]
+        return try modelContext.fetch(descriptor).map(\.productID)
     }
 }
 #endif

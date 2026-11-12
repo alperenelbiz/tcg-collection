@@ -321,6 +321,11 @@ actor CatalogStore: ModelActor {
     /// Cards that match every word of `text`, sorted by card key (the folded name), `limit` cards at most.
     /// A card's printings are only those that pass `filter`.
     /// `batchSize` is how many products one fetch reads; search stops reading once it has `limit` complete cards.
+    ///
+    /// The words are matched in the card key, not in `searchKey`: both hold `CardName.searchKey(cardName)` (`ProductParser`
+    /// and `CatalogProduct.init`), and only the card key is in the `(gameID, cardKey)` index that gives the order. SQLite
+    /// then tests each index entry without reading its row from the table; with `searchKey` it read one row per entry,
+    /// and a rare word read most of the game (phase 2B task 8: Magic "dragon" 240 ms).
     func search(game: String, text: String, filter: CardFilter, limit: Int, batchSize: Int = 400) throws -> [CardSummary] {
         guard limit > 0, batchSize > 0 else { return [] }
         let words = CardName.searchKey(text).split(separator: " ").map(String.init)
@@ -335,16 +340,19 @@ actor CatalogStore: ModelActor {
         // two batches, and rows it inserts before an offset would push rows already read into the next batch.
         // The key sort is `.lexical`, the order of `>` in the predicate. The default for a String
         // (`.localizedStandard`) puts "card 2" before "card 10", and the next batch would then skip "card 10".
+        // `cardKey >= lastKey` is said on its own so that SQLite starts the batch at that key in the index. Core Data binds
+        // `lastKey` once per use, and from `cardKey > ? OR (cardKey = ? AND …)` alone SQLite cannot tell that the two are
+        // one value: every batch read the game's index again from its first key.
         func batch(after last: (key: String, id: Int)?) throws -> [CatalogProduct] {
             let paging = last != nil, lastKey = last?.key ?? "", lastID = last?.id ?? 0
             var descriptor = FetchDescriptor<CatalogProduct>(
                 predicate: #Predicate {
                     $0.gameID == game
-                        && (first == "" || $0.searchKey.contains(first))
+                        && (first == "" || $0.cardKey.contains(first))
                         && (!useGroup || $0.groupID == group)
                         && (!useRarity || $0.rarity == rarity)
                         && (!useFacet || $0.facetText.contains(facet))
-                        && (!paging || $0.cardKey > lastKey || ($0.cardKey == lastKey && $0.productID > lastID))
+                        && (!paging || ($0.cardKey >= lastKey && ($0.cardKey > lastKey || $0.productID > lastID)))
                 },
                 sortBy: [SortDescriptor(\.cardKey, comparator: .lexical), SortDescriptor(\.productID)])
             descriptor.fetchLimit = batchSize
@@ -368,7 +376,7 @@ actor CatalogStore: ModelActor {
         scan: while true {
             let batch = try batch(after: last)
             for product in batch {
-                if !others.allSatisfy({ product.searchKey.contains($0) }) { continue }
+                if !others.allSatisfy({ product.cardKey.contains($0) }) { continue }
                 if product.cardKey != currentKey {
                     closeCard()
                     if cards.count == limit { break scan }
@@ -409,12 +417,17 @@ actor CatalogStore: ModelActor {
     /// The products of `game` with these ids, by id; an id the store does not hold for that game is left out (a row whose
     /// id belongs to another game is then an unknown printing, not a card of the wrong game). Read in batches of 500 ids,
     /// so a collection of thousands of rows never builds one huge `IN` list.
+    ///
+    /// The game is checked here, not in the query: with `gameID == game` in it, SQLite walked the game's whole
+    /// `(gameID, cardKey)` index for each batch instead of looking the ids up in the product id index (phase 2B task 8:
+    /// 571 ms for 2,000 Magic ids).
     func products(ids: [Int], game: String) throws -> [Int: ProductRecord] {
         let unique = Array(Set(ids))
         var found: [Int: ProductRecord] = [:]
         for start in stride(from: 0, to: unique.count, by: 500) {
             let batch = Array(unique[start..<min(start + 500, unique.count)])
-            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game && batch.contains($0.productID) })) {
+            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(predicate: #Predicate { batch.contains($0.productID) }))
+            where row.gameID == game {
                 found[row.productID] = row.record
             }
         }
