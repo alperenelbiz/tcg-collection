@@ -41,6 +41,11 @@ struct AppModelTests {
         #expect(StatusText.pricesLoaded(day: nil) == "No prices yet")
     }
 
+    /// I2: the status line and the empty screen while a fresh store waits for the next UTC day.
+    @Test func theLineOfAStoreThatWaitsForTheNextDay() {
+        #expect(StatusText.resetWaits == "The catalog is downloaded again tomorrow: its sets were already fetched today.")
+    }
+
     /// I2: a set list that could not be loaded is counted apart from failed sets, and named.
     @Test func statusLineNamesTheSetListsThatCouldNotBeLoaded() {
         #expect(StatusText.done(result: .init(fetched: 0, failed: 0, failedSetLists: 4, newSets: [:]), priceDay: nil) == "Catalog: the set list of 4 games could not be loaded · no prices yet")
@@ -236,6 +241,55 @@ struct AppModelTests {
         await next.start()
         #expect(try await next.store.progress(game: "riftbound").fetched == 14)
         #expect(next.status == .idle("Catalog up to date · prices of 2026-01-02"))
+    }
+
+    /// I2: tcgcsv's day rule outlives the store. A reset on a UTC day when the sets were already fetched opens the fresh
+    /// store and fetches nothing that day, also not from Refresh, Rebuild or Try again. One UTC day later the sync runs.
+    @MainActor @Test func aResetOnTheDayOfAFetchWaitsForTheNextUTCDay() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let preferences = try #require(UserDefaults(suiteName: paths.support.appending(path: "preferences").path))
+        do {                                                                    // the launch that fetches, on day1
+            let first = model(["app", "-store", root.path])
+            await first.start()
+            #expect(try await first.store.progress(game: "riftbound").fetched == 14)
+            #expect(preferences.string(forKey: "lastCatalogFetchDay") == "2026-01-03")
+            first.requestCatalogReset()
+        }
+        try await waitUntilClosed(paths.catalogStore)                           // the app has quit
+        let groups = await fakeCatalog.groupCalls, products = await fakeCatalog.productCalls
+
+        var today = Self.day1
+        let next = model(["app", "-store", root.path], now: { today })          // the next launch, the same UTC day
+        await next.start()
+        await next.refresh(rebuild: false)                                       // Refresh, and Try again
+        await next.refresh(rebuild: true)                                        // Rebuild
+        #expect(await fakeCatalog.groupCalls == groups); #expect(await fakeCatalog.productCalls == products)
+        #expect(next.status == .idle("The catalog is downloaded again tomorrow: its sets were already fetched today."))
+        #expect(try await next.store.progress(game: "riftbound").fetched == 0)  // the fresh store
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }.count == 1)
+        #expect(next.catalogWaits)                                               // the empty screen: no Try again
+
+        today = Self.day2                                                        // one UTC day later
+        #expect(next.catalogWaits == false)
+        await next.refresh(rebuild: false)
+        #expect(await fakeCatalog.groupCalls == groups + 4)
+        #expect(try await next.store.progress(game: "riftbound").fetched == 14)
+        #expect(preferences.string(forKey: "lastCatalogFetchDay") == "2026-01-04")
+    }
+
+    /// I2, the other way a store is set aside: a file that cannot be read, on the UTC day of the last fetch.
+    @MainActor @Test func anUnreadableStoreOnTheDayOfAFetchWaitsForTheNextUTCDay() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let preferences = try #require(UserDefaults(suiteName: paths.support.appending(path: "preferences").path))
+        preferences.set("2026-01-03", forKey: "lastCatalogFetchDay")
+        try Data("not a database".utf8).write(to: paths.catalogStore)
+        let model = model(["app", "-store", root.path])
+        #expect(model.status == .idle("The catalog could not be read and is downloaded again."))
+        await model.start()
+        #expect(await fakeCatalog.groupCalls == 0); #expect(await fakeCatalog.productCalls == 0)
+        #expect(model.status == .idle("The catalog is downloaded again tomorrow: its sets were already fetched today."))
     }
 
     @MainActor @Test func theChosenGameIsRemembered() {

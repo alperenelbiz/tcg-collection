@@ -21,6 +21,9 @@ nonisolated enum StatusText {
     static let storeRecovered = "The catalog could not be read and is downloaded again."
     /// The person asked for a reset in the last run; the store was set aside and the sync fills a fresh one.
     static let storeReset = "The catalog was reset and is downloaded again."
+    /// The store was set aside in this launch on a UTC day when its sets were already fetched: the fresh store waits for
+    /// the next UTC day (tcgcsv: never the same set twice in one day). Also the empty screen's text then.
+    static let resetWaits = "The catalog is downloaded again tomorrow: its sets were already fetched today."
     /// The store file is kept and the app runs on an empty store in memory (P8).
     static let storeFromNewerVersion = "This catalog was written by a newer version of the app. Update the app, or reset the catalog."
 
@@ -122,6 +125,9 @@ final class AppModel {
     private static let gameKey = "game"
     /// Set by "Reset the catalog…" (`requestCatalogReset`); the next launch sets the store aside and clears it.
     private nonisolated static let resetKey = "resetCatalogOnNextLaunch"
+    /// The UTC day (`yyyy-MM-dd`) of the last catalog step that fetched at least one set. It outlives the store, so a
+    /// store set aside on that day does not lead to a second fetch of the same sets.
+    private nonisolated static let lastFetchDayKey = "lastCatalogFetchDay"
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
@@ -133,6 +139,8 @@ final class AppModel {
     @ObservationIgnored let storeFailure: String?
     /// The person asked for a reset in this run (in the store-failure state); the next launch does it.
     private(set) var catalogResetRequested = false
+    /// When this launch set the store aside (reset, or unreadable): `lastCatalogFetchDay` as it was then. Nil otherwise.
+    @ObservationIgnored private let setAsideFetchDay: String?
     /// The status of the first catalog check. After a store was moved aside it says so, until the first set is in.
     @ObservationIgnored private var checkingText = StatusText.checking
     @ObservationIgnored private var isRunning = false
@@ -155,6 +163,8 @@ final class AppModel {
         let opened = Self.openStore(paths: paths, now: now(), defaults: defaults)
         store = opened.store
         storeFailure = opened.failure
+        // A notice means the store was set aside and a fresh one opened.
+        setAsideFetchDay = opened.notice == nil ? nil : defaults.string(forKey: Self.lastFetchDayKey)
         #if DEBUG
         if let migration = store.opening.migration {
             let vacuum = store.opening.vacuum.map { "vacuumed in \(Int($0 / .milliseconds(1))) ms" } ?? "not vacuumed"
@@ -258,6 +268,10 @@ final class AppModel {
             status = .idle(StatusText.offline(priceDay: prices.day(game: gameID)))
             return
         }
+        if catalogWaits {
+            status = .idle(StatusText.resetWaits)
+            return
+        }
         await sync(rebuild: false)
     }
 
@@ -292,9 +306,17 @@ final class AppModel {
     /// False offline and with a store that cannot be opened: then nothing is downloaded.
     var canSync: Bool { !options.offline && storeFailure == nil }
 
-    /// Does nothing when the app cannot sync, or while a sync runs.
+    /// True while the store set aside in this launch was the one that fetched the sets today (UTC): the fresh store waits
+    /// for the next UTC day. No sync runs then, not from Refresh, Rebuild or Try again either.
+    var catalogWaits: Bool { setAsideFetchDay == SyncPlan.utcDay(now()) }
+
+    /// Does nothing when the app cannot sync, or while a sync runs. Held while `catalogWaits`.
     func refresh(rebuild: Bool) async {
         guard canSync else { return }
+        if catalogWaits {
+            status = .idle(StatusText.resetWaits)
+            return
+        }
         await sync(rebuild: rebuild)
     }
 
@@ -352,6 +374,7 @@ final class AppModel {
             for game in games where touched.contains(game.id) { _ = await storeFacetLists(of: game) }
             catalogVersion += 1
             filtersVersion += 1
+            defaults.set(SyncPlan.utcDay(now), forKey: Self.lastFetchDayKey)
         }
         return done
     }

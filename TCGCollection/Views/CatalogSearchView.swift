@@ -83,7 +83,7 @@ struct CatalogSearchView: View {
                         .accessibilityIdentifier("reset-catalog")
                 }
             }
-            .confirmationDialog("The catalog on this Mac is set aside and downloaded again. About 1,100 requests and 190 MB.",
+            .confirmationDialog("The catalog on this Mac is set aside and downloaded again. About 1,100 requests and 205 MB. If its sets were already fetched today, the download starts tomorrow.",
                                 isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset the catalog") { model.requestCatalogReset() }
             }
@@ -96,6 +96,11 @@ struct CatalogSearchView: View {
         } else if model.options.offline {
             ContentUnavailableView {
                 Text("Offline. The catalog is empty.")
+            }
+        } else if model.catalogWaits {
+            // A store set aside on the day its sets were fetched: no Try again before the next UTC day.
+            ContentUnavailableView {
+                Text(StatusText.resetWaits)
             }
         } else {
             ContentUnavailableView {

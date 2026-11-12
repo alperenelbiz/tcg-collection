@@ -54,6 +54,13 @@ struct CatalogSyncTests {
         #expect(due == [1])                                               // 2 was fetched today; 3 is current
     }
 
+    /// I2: the day kept as `lastCatalogFetchDay` is the UTC day, also where the local day has already changed.
+    @Test func theDayOfADateIsItsUTCDay() {
+        #expect(SyncPlan.utcDay(TCGDate.date("2026-11-12T23:30:00")!) == "2026-11-12")   // 02:30 on the 13th in Istanbul
+        #expect(SyncPlan.utcDay(TCGDate.date("2026-11-13T00:00:00")!) == "2026-11-13")
+        #expect(SyncPlan.utcDay(TCGDate.date("2027-01-02T10:00:00")!) == "2027-01-02")
+    }
+
     @Test func aSetMissingFromTheRulesVersionsCountsAsCurrent() {
         let now = TCGDate.date("2026-11-13T10:00:00")!
         let old = SetRecord(groupID: 1, gameID: "riftbound", name: "", abbreviation: "", publishedOn: TCGDate.date("2025-01-01T00:00:00"))

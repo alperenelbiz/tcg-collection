@@ -39,9 +39,19 @@ nonisolated enum SyncPlan {
 
     /// Same UTC day as `now`.
     static func fetchedToday(_ fetched: Date, now: Date) -> Bool {
+        utc.isDate(fetched, inSameDayAs: now)
+    }
+
+    /// The UTC day of `date` as `yyyy-MM-dd`.
+    static func utcDay(_ date: Date) -> String {
+        let parts = utc.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year!, parts.month!, parts.day!)
+    }
+
+    private static var utc: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
-        return calendar.isDate(fetched, inSameDayAs: now)
+        return calendar
     }
 }
 
