@@ -251,13 +251,69 @@ struct ImportModelTests {
         #expect(!model.isPreparing && model.canApply)
     }
 
-    /// Fix round 1, item 3: the sheet prepares again only when one of the file's games becomes settled, not when a step
-    /// starts or the catalog only grows.
-    @Test func aPrepareIsDueOnlyWhenAGameBecomesSettled() {
-        #expect(ImportModel.prepareIsDue(settled: ["riftbound"], before: []))
-        #expect(ImportModel.prepareIsDue(settled: ["riftbound", "yu-gi-oh"], before: ["riftbound"]))
-        #expect(!ImportModel.prepareIsDue(settled: [], before: ["riftbound"]))            // a Refresh started
-        #expect(!ImportModel.prepareIsDue(settled: ["riftbound"], before: ["riftbound"]))
+    /// Fix round 2, item 1: a first `prepare` on a settled catalog leaves nothing due (the sheet runs no second one).
+    @Test func aFirstPrepareOnASettledCatalogLeavesNoPrepareDue() async throws {
+        let (library, _) = try await library()
+        let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
+        #expect(!model.needsPrepare)
+        await model.prepare()
+        #expect(!model.needsPrepare && model.canApply)
+    }
+
+    /// Fix round 2, item 1: a comparison made while the game's catalog downloaded is due again once the catalog is
+    /// settled, and only then; the `prepare` that follows leaves nothing due.
+    @Test func aComparisonMadeDuringADownloadIsDueOnceSettled() async throws {
+        let (library, _) = try await library()
+        let catalogStep = CatalogStep()
+        let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog(),
+                              settled: { _ in catalogStep.settled })
+        await model.prepare()
+        #expect(!model.needsPrepare)                                            // still downloading: nothing to gain yet
+        catalogStep.settled = true
+        #expect(model.needsPrepare)
+        await model.prepare()
+        #expect(!model.needsPrepare && model.canApply)
+    }
+
+    /// Fix round 2, item 2: a row added elsewhere whose product the last lookup did not read is not compared from the
+    /// cached lookup: Import is off, a full `prepare` is due, and after it the product is known (its set's name).
+    @Test func aRowOfAProductNotLookedUpAsksForAFullPrepare() async throws {
+        let (library, _) = try await library()
+        let reader = try await catalog()
+        let elsewhere = product(id: 900002, game: "riftbound", groupID: 98, name: "Elsewhere", number: "E01", rarity: "Common", cardType: "Unit")
+        try await reader.upsertSets([SetRecord(groupID: 98, gameID: "riftbound", name: "Elsewhere Set", abbreviation: "", publishedOn: nil)])
+        try await reader.replaceProducts(of: 98, with: [elsewhere], at: Date(timeIntervalSince1970: 1_800_000_000))
+        let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: reader)
+        await model.prepare()
+        let key = PrintingKey(productID: 900002, finish: "Normal")
+        library.setCount(1, game: "riftbound", key: key, name: "Elsewhere")
+        let version = library.version
+        #expect(model.refreshComparison())                                      // not the comparison shown any more
+        #expect(model.needsPrepare && !model.canApply && model.apply() == nil)
+        #expect(library.version == version)
+        #expect(model.notice == "Your collection changed while this sheet was open. Check the comparison again.")
+        await model.prepare()
+        #expect(!model.needsPrepare && model.canApply)
+        #expect(model.comparisons.first?.missing.map(\.key) == [key, onlyHere])  // by name: Elsewhere, Only Here
+        #expect(model.setName(of: key) == "Elsewhere Set")
+    }
+
+    /// Fix round 2, item 3: a first `prepare` that is cancelled (the sheet closed while it ran) never says the file or the
+    /// catalog failed; the next `prepare` works.
+    @Test(.timeLimit(.minutes(1))) func aCancelledPrepareDoesNotFail() async throws {
+        let (library, _) = try await library()
+        let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
+        let gate = ReadGate()
+        model.beforeLookup = { await gate.pass(URL(fileURLWithPath: "/lookup")) }
+        let first = Task { await model.prepare() }
+        try await gate.waitUntilHolding()
+        first.cancel()
+        gate.open()
+        await first.value
+        #expect(model.state == .reading && !model.isPreparing)
+        model.beforeLookup = nil
+        await model.prepare()
+        #expect(model.state == .ready)
     }
 
     /// A settled catalog with no product of the game (offline on an empty catalog, every set failed): blocked as well.

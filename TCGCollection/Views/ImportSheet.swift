@@ -11,7 +11,7 @@ struct ImportSheet: View {
     let importModel: ImportModel
     /// "Not imported" is collapsed until clicked.
     @State private var showsSkipped = false
-    /// Goes up when a game of the file becomes settled; each value runs one `prepare` (the first at once).
+    /// Goes up when `importModel.needsPrepare` turns true; each value runs one `prepare` (the first at once).
     @State private var prepareRound = 0
 
     /// What the body shows under the title.
@@ -53,13 +53,13 @@ struct ImportSheet: View {
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("import-sheet")
-        // Again when a catalog step of a game of the file ends: its products may be in the catalog now. A step that starts
-        // blocks the game live (`block`), and a batch of a download changes nothing that is shown.
+        // Again when `needsPrepare` turns true: a game compared during its download is settled now, or the collection holds
+        // a product the last lookup did not read. A first comparison on a settled catalog needs no second `prepare`.
         .task(id: prepareRound) { await importModel.prepare() }
-        .onChange(of: importModel.settledGames()) { before, settled in
-            if ImportModel.prepareIsDue(settled: settled, before: before) { prepareRound += 1 }
+        .onChange(of: importModel.needsPrepare) { _, due in
+            if due { prepareRound += 1 }
         }
-        // The collection changed: compared again at once from the lines and products already read.
+        // The collection changed: compared again at once from the lines and products already read (or a full `prepare`).
         .onChange(of: model.library.version) { importModel.refreshComparison() }
     }
 

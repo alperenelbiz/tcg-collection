@@ -90,6 +90,11 @@ final class ImportModel: Identifiable {
     private var products: [Int: ProductRecord] = [:]
     private var setNames: [Int: String] = [:]
     private var catalogAtCompare: [String: CatalogState] = [:]
+    /// The product ids the last `prepare` asked the catalog for: the file's and the collection's, of the file's games.
+    @ObservationIgnored private var lookedUp: Set<Int> = []
+    /// The collection holds a product of a game of the file that the last lookup did not read (a row added elsewhere):
+    /// the comparison is not trusted, and Import is off, until a full `prepare` (`needsPrepare`) has read it.
+    private(set) var lookupIsStale = false
     /// `library.version` when `comparisons` were made.
     @ObservationIgnored private var comparedVersion: Int?
     /// Each `prepare` takes the next number; only the latest one stores what it made.
@@ -119,9 +124,9 @@ final class ImportModel: Identifiable {
     // MARK: Preparing
 
     /// Waits for the collection's first read, parses the file (once), looks the products up (through `reader`, off the
-    /// main thread) and compares. Called again when a game of the file becomes settled (`prepareIsDue`): the comparison
-    /// then stays on screen, with Import off (`isPreparing`), until the new one is made; a Remove choice that still
-    /// applies is kept. A `prepare` that a later one overtook stores nothing.
+    /// main thread) and compares. Called again when `needsPrepare` turns true: the comparison then stays on screen, with
+    /// Import off (`isPreparing`), until the new one is made; a Remove choice that still applies is kept. A `prepare` that
+    /// a later one overtook, or that was cancelled, stores nothing and never fails.
     func prepare() async {
         guard let data else {
             state = .failed(readFailure ?? Self.notAnExport)
@@ -148,18 +153,24 @@ final class ImportModel: Identifiable {
         }
         await beforeLookup?()
         var found: [Int: ProductRecord] = [:], names: [Int: String] = [:], catalogs: [String: CatalogState] = [:]
+        var queried: Set<Int> = []
         for game in Games.all {
             let fileIDs = file.lines.filter { Games.game(productLine: $0.productLine)?.id == game.id }.map(\.productID)
             guard !fileIDs.isEmpty else { continue }
             // Read before the lookup: a step that ends during the lookup may have left products out of it.
             let settled = catalogSettled(game.id)
             do {
+                // A closed sheet cancels its `prepare`: no lookup is started for it.
+                try Task.checkCancellation()
                 let ids = fileIDs + library.rows(game: game.id).map(\.productID)
+                queried.formUnion(ids)
                 found.merge(try await reader.products(ids: ids, game: game.id)) { first, _ in first }
                 for set in try await reader.sets(game: game.id) { names[set.groupID] = set.name }
                 let hasProducts = try await reader.hasProducts(game: game.id)
                 catalogs[game.id] = !settled ? .downloading : hasProducts ? .ready : .empty
             } catch {
+                // A cancelled `prepare` (the sheet closed, or a newer one took over) is no failure.
+                guard !(error is CancellationError), !Task.isCancelled else { return }
                 // A comparison already shown stays; a first one cannot be made.
                 if state != .ready { state = .failed("The catalog could not be read (\(error.localizedDescription)).") }
                 return
@@ -169,9 +180,12 @@ final class ImportModel: Identifiable {
         products = found
         setNames = names
         catalogAtCompare = catalogs
+        lookedUp = queried
         let (made, otherGames) = compare(file.lines)
         comparisons = made
         comparedVersion = library.version
+        // A row added during the lookup may hold a product it did not read: then one more `prepare`.
+        lookupIsStale = collectionHasUnreadProducts
         skipped = (file.skipped + otherGames).sorted { $0.line < $1.line }
         remove.formIntersection(missingKeys)
         state = .ready
@@ -195,15 +209,21 @@ final class ImportModel: Identifiable {
         return CollectionImport.compare(lines: lines, current: current, known: { known[$0] }, games: Games.all)
     }
 
-    /// The sheet prepares again only when a game of the file becomes settled (a catalog step of it ended): not when a step
-    /// starts (the game is then blocked live), and not for each batch of a download.
-    nonisolated static func prepareIsDue(settled: Set<String>, before: Set<String>) -> Bool {
-        !settled.isSubset(of: before)
+    /// A row of a game of the file holds a product id the last lookup did not ask for.
+    private var collectionHasUnreadProducts: Bool {
+        comparisons.contains { comparison in
+            library.rows(game: comparison.gameID).contains { !lookedUp.contains($0.productID) }
+        }
     }
 
-    /// The games of the file whose catalog is settled now (`prepareIsDue`).
-    func settledGames() -> Set<String> {
-        Set(comparisons.map(\.gameID).filter { catalogSettled($0) })
+    /// True when the sheet must run `prepare` again (it does when this turns true): a game whose comparison was made while
+    /// its catalog downloaded is settled now, or the collection holds a product the last lookup did not read
+    /// (`lookupIsStale`). Not while a `prepare` runs. A first `prepare` on a settled catalog leaves nothing due. A game
+    /// recorded as `.empty` (settled, no products) is not due: its `prepare` would record the same and run again forever;
+    /// the sheet tells the user to import the file again.
+    var needsPrepare: Bool {
+        guard !isPreparing, state == .ready else { return false }
+        return lookupIsStale || comparisons.contains { catalogAtCompare[$0.gameID] == .downloading && catalogSettled($0.gameID) }
     }
 
     private var missingKeys: Set<PrintingKey> { Set(comparisons.flatMap { $0.missing.map(\.key) }) }
@@ -239,7 +259,7 @@ final class ImportModel: Identifiable {
     }
 
     /// True when Import is on: the comparison is made, no `prepare` runs, and Import would write.
-    var canApply: Bool { state == .ready && !isPreparing && writes }
+    var canApply: Bool { state == .ready && !isPreparing && !lookupIsStale && writes }
 
     /// What Import does, over the games it imports: "12 new, 3 changed, 2 not in the file (kept)", or one sentence.
     var summary: String {
@@ -304,7 +324,14 @@ final class ImportModel: Identifiable {
     func refreshComparison() -> Bool {
         guard state == .ready, comparedVersion != library.version else { return false }
         comparedVersion = library.version
-        // The lines of the last `prepare`: no file read and no catalog lookup, so the new comparison is there at once.
+        // A row of a product the last lookup did not read: the cached products cannot describe it. A full `prepare` comes
+        // (`needsPrepare`); until it has run, Import is off.
+        if collectionHasUnreadProducts {
+            lookupIsStale = true
+            notice = Self.collectionChanged
+            return true
+        }
+        // The lines and products of the last `prepare`: no file read and no lookup, so the new comparison is there at once.
         let fresh = compare(parsed?.lines ?? []).comparisons
         guard fresh != comparisons else { return false }
         comparisons = fresh
