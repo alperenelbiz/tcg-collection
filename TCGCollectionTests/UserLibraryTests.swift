@@ -22,8 +22,169 @@ final class FakeWatcher: UserFileWatching, @unchecked Sendable {
     func fire(_ url: URL) async { await changed?(url) }
 }
 
+/// Holds the library's game-file reads (its `beforeRead` seam) until the test lets them go, so a test can act while a
+/// read is in progress.
+@MainActor final class ReadGate {
+    private var held: [CheckedContinuation<Void, Never>] = []
+    /// Which reads are held; the others pass.
+    var holds: (URL) -> Bool = { _ in true }
+
+    var waiting: Int { held.count }
+
+    func pass(_ url: URL) async {
+        guard holds(url) else { return }
+        await withCheckedContinuation { held.append($0) }
+    }
+
+    func release() {
+        let all = held
+        held = []
+        for continuation in all { continuation.resume() }
+    }
+
+    /// Lets every read pass from now on.
+    func open() {
+        holds = { _ in false }
+        release()
+    }
+
+    func waitUntilHolding() async throws {
+        let end = ContinuousClock.now + .seconds(10)
+        while held.isEmpty {
+            guard ContinuousClock.now < end else { throw GateTimeout() }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    struct GateTimeout: Error {}
+}
+
 struct UserLibraryTests {
     private let riftFoil = PrintingKey(productID: 721334, finish: "Foil")
+    /// A file in the owner's own form (compact, keys in another order): any rewrite by this app changes its bytes.
+    private let ownersFile = Data(#"{"collection":[{"count":2,"finish":"Normal","productID":7,"name":"Owner"}],"version":1}"#.utf8)
+
+    // MARK: Fix round 1: the folder switch (Important 1), isLoaded (item 9), the guards (Important 2)
+
+    /// Important 1, variant 2: the launch's `load()` of A is still reading when "Collection Folder…" switches to B. The
+    /// overtaken load must not mark the library loaded while B is read; a change then is refused, and B's file stays as
+    /// it is.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aLoadThatASwitchOvertookNeverMarksTheLibraryLoaded() async throws {
+        let a = tempDir(), b = tempDir(), bFile = b.appending(path: "riftbound.json")
+        try ownersFile.write(to: bFile)
+        let lib = UserLibrary(folder: a, watcher: nil), gate = ReadGate()
+        lib.beforeRead = { await gate.pass($0) }
+        let first = Task { await lib.load() }                                   // the launch's load, reading A
+        try await gate.waitUntilHolding()
+        let switching = Task { await lib.use(folder: b) }                        // "Collection Folder…" meanwhile
+        try await Task.sleep(for: .milliseconds(50))                             // use() waits for A's read
+        gate.holds = { UserFolder.isInside($0, b) }
+        gate.release()                                                          // A's read ends; B's first read waits
+        try await gate.waitUntilHolding()
+        await first.value
+        #expect(!lib.isLoaded)
+        lib.setCount(1, game: "riftbound", key: .init(productID: 7, finish: "Normal"), name: "")
+        #expect(lib.rows(game: "riftbound").isEmpty)
+        gate.open()
+        await switching.value; await lib.flush()
+        #expect(lib.isLoaded); #expect(lib.folder == b)
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2])
+        #expect(try Data(contentsOf: bFile) == ownersFile)
+    }
+
+    /// Important 1, variant 1: a change made while `use(folder:)` runs goes to the old folder (before the switch) or
+    /// nowhere (after it, until the new folder is read). The new folder's file is never written with the old rows.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aChangeDuringAFolderSwitchNeverReachesTheNewFolder() async throws {
+        let a = tempDir(), b = tempDir(), bFile = b.appending(path: "riftbound.json")
+        try ownersFile.write(to: bFile)
+        let lib = UserLibrary(folder: a, watcher: nil); await lib.load()
+        let gate = ReadGate()
+        lib.beforeRead = { await gate.pass($0) }
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A")             // queued for A: the switch waits for it
+        let switching = Task { await lib.use(folder: b) }
+        while lib.folder != b { await Task.yield() }
+        lib.setCount(5, game: "riftbound", key: riftFoil, name: "A")             // B is set, B is not read yet
+        try await gate.waitUntilHolding()
+        lib.setCount(6, game: "riftbound", key: riftFoil, name: "A")             // B is being read
+        #expect(!lib.isLoaded)
+        gate.open()
+        await switching.value; await lib.flush()
+        #expect(try Data(contentsOf: bFile) == ownersFile)
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [7])
+        #expect(try stored(a, "riftbound").map(\.count) == [1])
+    }
+
+    /// Item 9: false before the first load, true after it, false while a folder is switched and when the folder is missing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func isLoadedFollowsTheFolder() async throws {
+        let a = tempDir(), b = tempDir()
+        let lib = UserLibrary(folder: a, watcher: nil)
+        #expect(!lib.isLoaded)
+        await lib.load(); #expect(lib.isLoaded)
+        let gate = ReadGate()
+        lib.beforeRead = { await gate.pass($0) }
+        let switching = Task { await lib.use(folder: b) }
+        try await gate.waitUntilHolding()
+        #expect(!lib.isLoaded)
+        gate.open(); await switching.value
+        #expect(lib.isLoaded)
+        await lib.use(folder: b.appending(path: "not-there"))
+        #expect(!lib.isLoaded)
+        #expect(!UserLibrary(folder: nil, watcher: nil).isLoaded)
+    }
+
+    /// Important 2, the `isLoaded` guard: a change before the first load, or while it reads, would start from an empty
+    /// file and replace the owner's whole file with one row.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aChangeBeforeTheFirstLoadLeavesTheFileAsItIs() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        try ownersFile.write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A")
+        lib.replace(game: "riftbound", rows: [.init(productID: 1, finish: "Normal", count: 1, condition: "", name: "B")])
+        #expect(lib.rows(game: "riftbound").isEmpty)
+        await lib.flush()
+        #expect(try Data(contentsOf: file) == ownersFile)
+        let gate = ReadGate()
+        lib.beforeRead = { await gate.pass($0) }
+        let loading = Task { await lib.load() }
+        try await gate.waitUntilHolding()
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A")             // during the first load
+        gate.open(); await loading.value; await lib.flush()
+        #expect(try Data(contentsOf: file) == ownersFile)
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [7])
+    }
+
+    /// Important 2, the re-check after a reload's read: a change made here during the read is newer than what was read.
+    /// Our write goes to the file and the read is dropped; the change is not lost.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aChangeDuringAReloadReadIsKept() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        var other = GameUserFile(); other.collection = [.init(productID: 9, finish: "Normal", count: 7, condition: "", name: "Other")]
+        try UserFiles.write(try other.data(), to: file)                         // another device
+        let gate = ReadGate()
+        lib.beforeRead = { await gate.pass($0) }
+        let reload = lib.fileChanged(file)
+        try await gate.waitUntilHolding()
+        lib.setCount(2, game: "riftbound", key: riftFoil, name: "A")             // during the read
+        gate.open(); await reload?.value; await lib.flush()
+        let mine = [CollectionRow(productID: 721334, finish: "Foil", count: 2, condition: "", name: "A")]
+        #expect(lib.rows(game: "riftbound") == mine); #expect(try stored(dir, "riftbound") == mine)
+    }
+
+    /// Important 2, the game guard: an unknown game id, or one that leaves the folder, writes nothing anywhere.
+    @MainActor @Test func anUnknownGameWritesNothing() async throws {
+        let parent = tempDir(), dir = parent.appending(path: "folder")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        lib.setCount(1, game: "../x", key: riftFoil, name: "A")
+        lib.setCount(1, game: "pokemon", key: riftFoil, name: "A")
+        lib.replace(game: "../../y", rows: [.init(productID: 1, finish: "Normal", count: 1, condition: "", name: "B")])
+        lib.setCount(1, game: "", key: riftFoil, name: "A")
+        await lib.flush()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path) == ["folder"])
+        #expect(lib.rows(game: "../x").isEmpty); #expect(lib.problem == nil)
+    }
 
     @MainActor @Test func aChangeReachesTheFileAndSurvivesAReload() async throws {
         let dir = tempDir(); let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()

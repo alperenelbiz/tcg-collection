@@ -26,8 +26,12 @@ final class UserLibrary {
     private var refused: [String: String] = [:]
     /// Games whose last write (or conflict step) failed, with the sentence. The next successful write clears it.
     private var failures: [String: String] = [:]
-    /// False until the first read of the folder is done: a change before it would be lost by that read.
-    private var loaded = false
+    /// False until the first `load()` of the current folder has finished, and again while the folder is switched or
+    /// missing. A change while it is false is refused: it would start from an empty file and replace the owner's file.
+    /// Controls that change the collection disable themselves on it.
+    private(set) var isLoaded = false
+    /// Tests only: runs on the main actor before each game file is read, so a test can act while a read is in progress.
+    @ObservationIgnored var beforeRead: (@MainActor (URL) async -> Void)?
 
     @ObservationIgnored private let watcher: (any UserFileWatching)?
     @ObservationIgnored private let now: () -> Date
@@ -40,6 +44,8 @@ final class UserLibrary {
     @ObservationIgnored private var written: [String: Int] = [:]
     /// Per game: the number of the last reload asked for; an older queued reload is skipped.
     @ObservationIgnored private var reloads: [String: Int] = [:]
+    /// Goes up at every `load()` and every folder switch: a load that a later one overtook never sets `isLoaded`.
+    @ObservationIgnored private var loadGeneration = 0
 
     init(folder: URL?, watcher: (any UserFileWatching)?, now: @escaping () -> Date = { Date() }) {
         self.folder = folder
@@ -76,10 +82,13 @@ final class UserLibrary {
 
     // MARK: Changing
 
+    /// Refused (nothing changes, nothing is written) while `isLoaded` is false, for a game whose file is refused, and for
+    /// an unknown game id.
     func setCount(_ count: Int, game: String, key: PrintingKey, name: String) {
         change(game) { CollectionRules.setting($0, count: count, for: key, name: name) }
     }
 
+    /// Refused as `setCount` is.
     func replace(game: String, rows: [CollectionRow]) {
         change(game) { _ in rows }
     }
@@ -87,7 +96,7 @@ final class UserLibrary {
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.
     private func change(_ game: String, _ edit: ([CollectionRow]) -> [CollectionRow]) {
         // Only a known game: its id becomes a file name.
-        guard loaded, folder != nil, !folderIsMissing, refused[game] == nil, Games.game(game) != nil else { return }
+        guard isLoaded, let folder, !folderIsMissing, refused[game] == nil, Games.game(game) != nil else { return }
         var file = files[game] ?? GameUserFile()
         let rows = edit(file.collection)
         guard rows != file.collection else { return }
@@ -96,14 +105,15 @@ final class UserLibrary {
         version += 1
         let number = changes[game, default: 0] + 1
         changes[game] = number
-        enqueue { await self.write(game, change: number) }
+        enqueue { await self.write(game, change: number, to: folder) }
     }
 
-    /// Writes the game's state of change `number`, unless a later change is queued: its write has the newer state.
-    private func write(_ game: String, change number: Int) async {
+    /// Writes the game's state of change `number` into `target`, the folder of the change, unless a later change is
+    /// queued (its write has the newer state) or the folder was switched since (the state belonged to the old folder).
+    private func write(_ game: String, change number: Int, to target: URL) async {
         guard changes[game] == number else { return }
         defer { written[game] = number }
-        guard let folder, let file = files[game] else { return }
+        guard folder == target, let folder, let file = files[game] else { return }
         let error: (any Error)?
         do {
             error = await Self.store(try file.data(), at: folder.appending(path: "\(game).json"))
@@ -125,10 +135,14 @@ final class UserLibrary {
     /// nothing is read, watched or written then. Nothing happens without a folder (the first-run sheet is open).
     func load() async {
         guard let folder else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoaded = false
         // A queued write keeps its state: it is written before memory is read again.
         await flush()
+        // A later load or a folder switch took over during the wait.
+        guard generation == loadGeneration, self.folder == folder else { return }
         watcher?.stop()
-        loaded = false
         files = [:]
         refused = [:]
         failures = [:]
@@ -143,11 +157,16 @@ final class UserLibrary {
         watcher?.start(folder: folder) { [weak self] url in await self?.fileChanged(url)?.value }
         await enqueue {
             for game in Games.all {
-                let result = await Self.read(folder.appending(path: "\(game.id).json"), now: self.now())
+                guard generation == self.loadGeneration else { return }
+                let url = folder.appending(path: "\(game.id).json")
+                await self.beforeRead?(url)
+                let result = await Self.read(url, now: self.now())
+                guard generation == self.loadGeneration else { return }
                 self.apply(result, to: game.id)
             }
         }.value
-        loaded = true
+        guard generation == loadGeneration else { return }
+        isLoaded = true
         version += 1
     }
 
@@ -155,9 +174,17 @@ final class UserLibrary {
     /// copy or move a file.
     func use(folder: URL) async {
         await flush()
+        // No `await` from here to `load()`: the old folder's state is gone before the new folder is set, so no change can
+        // write the old rows into the new folder, and a load of the old folder that is still running never sets `isLoaded`.
+        isLoaded = false
+        loadGeneration += 1
+        files = [:]
+        refused = [:]
+        failures = [:]
+        notice = nil
+        folderIsMissing = false
         watcher?.stop()
         self.folder = folder
-        notice = nil
         await load()
     }
 
@@ -167,29 +194,31 @@ final class UserLibrary {
     func fileChanged(_ url: URL) -> Task<Void, Never>? {
         guard let folder, !folderIsMissing, let game = UserFiles.gameID(ofFileNamed: url.lastPathComponent),
               UserFolder.isSameFolder(url.deletingLastPathComponent(), folder) else { return nil }
-        return queueReload(game)
+        return queueReload(game, in: folder)
     }
 
     @discardableResult
-    private func queueReload(_ game: String) -> Task<Void, Never> {
+    private func queueReload(_ game: String, in folder: URL) -> Task<Void, Never> {
         let number = reloads[game, default: 0] + 1
         reloads[game] = number
-        return enqueue { await self.reload(game, number: number) }
+        return enqueue { await self.reload(game, number: number, in: folder) }
     }
 
-    private func reload(_ game: String, number: Int) async {
-        guard reloads[game] == number, let folder, !folderIsMissing else { return }
+    private func reload(_ game: String, number: Int, in folder: URL) async {
+        guard reloads[game] == number, self.folder == folder, !folderIsMissing else { return }
         // A write of ours for this game is queued: it goes first, then the file is read again (the last writer wins).
         guard changes[game, default: 0] == written[game, default: 0] else {
-            queueReload(game)
+            queueReload(game, in: folder)
             return
         }
         let before = changes[game, default: 0]
-        let result = await Self.read(folder.appending(path: "\(game).json"), now: now())
+        let url = folder.appending(path: "\(game).json")
+        await beforeRead?(url)
+        let result = await Self.read(url, now: now())
         guard self.folder == folder else { return }
         // A change was made here during the read: memory is newer than what was read.
         guard changes[game, default: 0] == before else {
-            queueReload(game)
+            queueReload(game, in: folder)
             return
         }
         let shown = rows(game: game)
