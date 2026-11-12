@@ -19,6 +19,8 @@ nonisolated enum StatusText {
     static let checking = "Checking the catalog…"
     /// The store file could not be opened; it was moved aside and the sync fills a fresh one.
     static let storeRecovered = "The catalog could not be read and is downloaded again."
+    /// The person asked for a reset in the last run; the store was set aside and the sync fills a fresh one.
+    static let storeReset = "The catalog was reset and is downloaded again."
     /// The store file is kept and the app runs on an empty store in memory (P8).
     static let storeFromNewerVersion = "This catalog was written by a newer version of the app. Update the app, or reset the catalog."
 
@@ -103,15 +105,19 @@ final class AppModel {
     var pendingCard: CardTarget?
 
     private static let gameKey = "game"
+    /// Set by "Reset the catalog…" (`requestCatalogReset`); the next launch sets the store aside and clears it.
+    private nonisolated static let resetKey = "resetCatalogOnNextLaunch"
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
     @ObservationIgnored private let priceSync: PriceSync
     @ObservationIgnored private let ygoLoader: YGOIndexLoader
     @ObservationIgnored private let now: () -> Date
-    /// Set when no catalog store could be opened, not even a fresh one: the app then runs on an empty store in memory
-    /// and downloads nothing.
-    @ObservationIgnored private let storeFailure: String?
+    /// The status line when no catalog store file is open: the app then runs on an empty store in memory and downloads
+    /// nothing. Nil when a store file is open.
+    @ObservationIgnored let storeFailure: String?
+    /// The person asked for a reset in this run (in the store-failure state); the next launch does it.
+    private(set) var catalogResetRequested = false
     /// The status of the first catalog check. After a store was moved aside it says so, until the first set is in.
     @ObservationIgnored private var checkingText = StatusText.checking
     @ObservationIgnored private var isRunning = false
@@ -125,7 +131,13 @@ final class AppModel {
         self.now = now
         let paths = AppPaths(root: options.storeRoot)
         self.paths = paths
-        let opened = Self.openStore(paths: paths, now: now())
+        // With `-store`, the preferences live in `<root>/support/preferences.plist`, never in the real ones.
+        // A suite name is nil only for the app's own id or the global domain.
+        let defaults = options.storeRoot == nil
+            ? UserDefaults.standard
+            : UserDefaults(suiteName: paths.support.appending(path: "preferences").path) ?? .standard
+        self.defaults = defaults
+        let opened = Self.openStore(paths: paths, now: now(), defaults: defaults)
         store = opened.store
         storeFailure = opened.failure
         reader = CatalogStore(modelContainer: store.modelContainer)
@@ -133,27 +145,39 @@ final class AppModel {
         ygoLoader = YGOIndexLoader(paths: paths, fetcher: fetcher)
         priceSync = PriceSync(paths: paths, client: archiveClient)
         catalogSync = CatalogSync(store: store, client: catalogClient)
-        // With `-store`, the preferences live in `<root>/support/preferences.plist`, never in the real ones.
-        // A suite name is nil only for the app's own id or the global domain.
-        defaults = options.storeRoot == nil
-            ? .standard
-            : UserDefaults(suiteName: paths.support.appending(path: "preferences").path) ?? .standard
         let saved = defaults.string(forKey: Self.gameKey)
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
-        if opened.movedAside {
-            status = .idle(StatusText.storeRecovered)
-            checkingText = StatusText.storeRecovered
+        if let notice = opened.notice {
+            status = .idle(notice)
+            checkingText = notice
         }
     }
 
+    /// "Reset the catalog…" in the store-failure state: the next launch sets the store file aside and downloads the
+    /// catalog again. Nothing happens to the file in this run.
+    func requestCatalogReset() {
+        defaults.set(true, forKey: Self.resetKey)
+        catalogResetRequested = true
+    }
+
     /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
-    /// and a fresh store is made at the normal path. Any other open error keeps the file. When no store file is open in
-    /// the end, the store lives in memory and `failure` is the status line that says why.
-    private nonisolated static func openStore(paths: AppPaths, now: Date)
-        -> (store: CatalogStore, movedAside: Bool, failure: String?) {
+    /// and a fresh store is made at the normal path; so is any file after "Reset the catalog…" in the last run. Any
+    /// other open error keeps the file. When no store file is open in the end, the store lives in memory and `failure`
+    /// is the status line that says why. `notice` is the status line after a store was set aside.
+    private nonisolated static func openStore(paths: AppPaths, now: Date, defaults: UserDefaults)
+        -> (store: CatalogStore, notice: String?, failure: String?) {
+        if defaults.bool(forKey: resetKey) {
+            defaults.removeObject(forKey: resetKey)
+            do {
+                try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
+                return (try CatalogStore(url: paths.catalogStore), StatusText.storeReset, nil)
+            } catch {
+                // Not moved, or no fresh store: the open below judges what is at the path, as on any launch.
+            }
+        }
         let failure: String
         do {
-            return (try CatalogStore(url: paths.catalogStore), false, nil)
+            return (try CatalogStore(url: paths.catalogStore), nil, nil)
         } catch {
             switch CatalogStore.classify(error) {
             case .other(let text):
@@ -161,14 +185,14 @@ final class AppModel {
             case .unreadable:
                 do {
                     try moveAside(paths.catalogStore, into: paths.unreadable(at: now))
-                    return (try CatalogStore(url: paths.catalogStore), true, nil)
+                    return (try CatalogStore(url: paths.catalogStore), StatusText.storeRecovered, nil)
                 } catch {
                     failure = StatusText.storeCannotOpen(CatalogStore.reason(error))
                 }
             }
         }
         do {
-            return (try CatalogStore.inMemory(), false, failure)
+            return (try CatalogStore.inMemory(), nil, failure)
         } catch {
             // An in-memory store needs no disk: only a broken schema fails here, and the store above failed first.
             fatalError("The catalog schema cannot be loaded: \(error)")

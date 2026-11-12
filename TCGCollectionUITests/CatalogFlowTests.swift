@@ -158,6 +158,42 @@ final class CatalogFlowTests: UITestCase {
         shot("14-offline-empty")
     }
 
+    /// Fix round 1, item 2. A store file the app may not read (mode 000) is kept: the app runs on an empty store in
+    /// memory. The empty screen offers "Reset the catalog…"; after the confirmation the next launch sets the file aside
+    /// and downloads the catalog again.
+    func testResetCatalogAfterAStoreFailure() throws {
+        let app = try launch(game: "riftbound") { root in
+            let support = root.appending(path: "support", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            let store = support.appending(path: "catalog.store")
+            try Data("no permission".utf8).write(to: store)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.path)
+        }
+        let reset = element(app, "reset-catalog")
+        XCTAssertTrue(reset.waitForExistence(timeout: 20))
+        XCTAssertTrue(text(app.staticTexts["status-line"]).hasPrefix("Catalog: the store cannot be opened"))
+        XCTAssertFalse(element(app, "catalog-menu").isEnabled, "the Catalog menu does nothing while the store is in memory")
+        shot("15-store-failure")
+        reset.click()
+        // The confirmation is a sheet; the Touch Bar shows the same button, which cannot be clicked.
+        let confirm = app.sheets.buttons["Reset the catalog"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5)); shot("16-reset-confirmation")
+        confirm.click()
+        let quit = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
+                               "Quit and open the app again", "Quit and open the app again")
+        XCTAssertTrue(element(app, "empty-state").descendants(matching: .staticText).matching(quit).firstMatch.waitForExistence(timeout: 5))
+        shot("17-reset-asked")
+
+        app.terminate()                                          // the next launch, on the same root
+        app.launch()
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        let support = try XCTUnwrap(root).appending(path: "support")
+        let aside = try FileManager.default.contentsOfDirectory(atPath: support.path).filter { $0.hasPrefix("unreadable-") }
+        XCTAssertEqual(aside.count, 1)
+        shot("18-after-reset")
+    }
+
     // MARK: - Helpers
 
     /// The `.searchable` field: SwiftUI gives it no identifier of ours on macOS, so it is found by type.

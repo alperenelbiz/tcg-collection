@@ -16,6 +16,7 @@ struct CatalogSearchView: View {
     @State private var sets: [SetRecord] = []
     @State private var rarities: [String] = []
     @State private var types: [String] = []
+    @State private var confirmReset = false
 
     init(search: String) {
         _text = State(initialValue: search)
@@ -69,8 +70,26 @@ struct CatalogSearchView: View {
     }
 
     /// The game has no card at all. "Downloading" only while a sync runs; otherwise the reason, and a way to try again.
+    /// With no store file open (P8), the reason and a reset that the next launch does.
     @ViewBuilder private var emptyCatalog: some View {
-        if model.status.isSyncing {
+        if let failure = model.storeFailure {
+            ContentUnavailableView {
+                Text("The catalog cannot be opened.")
+            } description: {
+                Text(failure)
+            } actions: {
+                if model.catalogResetRequested {
+                    Text("Quit and open the app again to reset the catalog.")
+                } else {
+                    Button("Reset the catalog…") { confirmReset = true }
+                        .accessibilityIdentifier("reset-catalog")
+                }
+            }
+            .confirmationDialog("The catalog on this Mac is set aside and downloaded again. About 1,100 requests and 190 MB.",
+                                isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("Reset the catalog") { model.requestCatalogReset() }
+            }
+        } else if model.status.isSyncing {
             ContentUnavailableView {
                 Text("Downloading the catalog…")
             } description: {
@@ -86,10 +105,7 @@ struct CatalogSearchView: View {
             } description: {
                 Text(model.status.text)
             } actions: {
-                // Not with a store that cannot be opened: a sync would do nothing there.
-                if model.canSync {
-                    Button("Try again") { Task { await model.refresh(rebuild: false) } }
-                }
+                Button("Try again") { Task { await model.refresh(rebuild: false) } }
             }
         }
     }

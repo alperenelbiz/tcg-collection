@@ -207,6 +207,33 @@ struct AppModelTests {
         #expect(try await model.store.progress(game: "riftbound").fetched == 14)
     }
 
+    /// Fix round 1, item 2: in the store-failure state "Reset the catalog…" sets a flag in the model's preferences. The
+    /// next launch on the same root sets the store aside, opens a fresh one, clears the flag, and syncs normally.
+    @MainActor @Test func aResetAskedForAfterAStoreFailureHappensAtTheNextLaunch() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try ForeignSchema.writeStore(at: paths.catalogStore)                   // kept: the model runs in memory
+        let failed = model(["app", "-store", root.path])
+        #expect(failed.storeFailure == StatusText.storeFromNewerVersion)
+        #expect(failed.catalogResetRequested == false)
+        failed.requestCatalogReset()
+        #expect(failed.catalogResetRequested)
+        let preferences = try #require(UserDefaults(suiteName: paths.support.appending(path: "preferences").path))
+        #expect(preferences.bool(forKey: "resetCatalogOnNextLaunch"))
+
+        let next = model(["app", "-store", root.path])                         // the next launch
+        #expect(next.storeFailure == nil); #expect(next.canSync)
+        #expect(next.status == .idle("The catalog was reset and is downloaded again."))
+        #expect(preferences.bool(forKey: "resetCatalogOnNextLaunch") == false)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: paths.support.path).filter { $0.hasPrefix("unreadable-") }
+        let folder = try #require(aside.first)
+        #expect(aside.count == 1)
+        #expect(FileManager.default.fileExists(atPath: paths.support.appending(path: "\(folder)/catalog.store").path))
+        await next.start()
+        #expect(try await next.store.progress(game: "riftbound").fetched == 14)
+        #expect(next.status == .idle("Catalog up to date · prices of 2026-01-02"))
+    }
+
     @MainActor @Test func theChosenGameIsRemembered() {
         let root = tempRoot().path
         let first = model(["app", "-store", root])

@@ -11,7 +11,8 @@ class UITestCase: XCTestCase {
     }
 
     private var app: XCUIApplication?
-    private var root: URL?
+    /// The store root of the running test (`-store`).
+    private(set) var root: URL?
 
     override func setUp() async throws {
         try await super.setUp()
@@ -31,8 +32,23 @@ class UITestCase: XCTestCase {
 
     /// Launches the app with `-store <fresh root>`, `-fixtures <Fixtures>` (unless `fixtures` is false) and `-game`.
     func launch(game: String? = nil, extra: [String] = [], fixtures: Bool = true) -> XCUIApplication {
-        let root = FileManager.default.temporaryDirectory
-            .appending(path: "tcg-ui-\(UUID().uuidString)", directoryHint: .isDirectory)
+        start(root: newRoot(), game: game, extra: extra, fixtures: fixtures)
+    }
+
+    /// As `launch`, with `prepare` getting the fresh root before the app starts, to put files into it.
+    func launch(game: String? = nil, extra: [String] = [], fixtures: Bool = true,
+                prepare: (URL) throws -> Void) throws -> XCUIApplication {
+        let root = newRoot()
+        self.root = root                                         // tearDown removes it, also when `prepare` fails
+        try prepare(root)
+        return start(root: root, game: game, extra: extra, fixtures: fixtures)
+    }
+
+    private func newRoot() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "tcg-ui-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    private func start(root: URL, game: String?, extra: [String], fixtures: Bool) -> XCUIApplication {
         var arguments = ["-store", root.path]
         if fixtures { arguments += ["-fixtures", Self.fixturesDirectory.path] }
         if let game { arguments += ["-game", game] }

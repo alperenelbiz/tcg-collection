@@ -37,7 +37,8 @@ private struct CatalogStack: View {
                             Button("Refresh") { Task { await model.refresh(rebuild: false) } }
                             Button("Rebuild catalog…") { confirmRebuild = true }
                         }
-                        .disabled(model.options.offline || model.status.isSyncing)
+                        // Not with a store in memory (`storeFailure`): a sync would do nothing there.
+                        .disabled(model.options.offline || model.status.isSyncing || model.storeFailure != nil)
                         .accessibilityIdentifier("catalog-menu")
                     }
                 }
