@@ -6,7 +6,8 @@ import Observation
 /// - It keeps each game's `GameUserFile`, not only its rows, so that what a newer app wrote survives a rewrite.
 /// - A game whose file was refused (newer, unreadable, not downloaded) is read-only for this run: no rows, no change,
 ///   and the file is never touched. The other games keep working.
-/// - A folder that is missing at launch is said (`problem`) and nothing is written; a write never makes a folder.
+/// - A folder that is missing at launch is said (`problem`) and nothing is written; a write never makes a folder. A
+///   folder that a reload finds gone is said the same way; memory keeps its rows until a reload finds the folder back.
 /// - When another device changed a file (the watcher), the file is read again on the same serial path. A write of ours
 ///   that is still queued for that game goes first, then the file is read again: the last writer wins on disk.
 @Observable
@@ -17,7 +18,8 @@ final class UserLibrary {
     private(set) var notice: String?
     /// Goes up on every change of the rows (here or from another device), so views read them again.
     private(set) var version = 0
-    /// True when `load` found no folder at `folder`: changes are refused until another folder is used.
+    /// True when `load` found no folder at `folder`, or a reload found it gone: changes are refused until another folder
+    /// is used, or (gone after the load) until a reload finds it back.
     private(set) var folderIsMissing = false
 
     /// Each game's file as read or changed here. No entry: the game has no file yet (or it is refused).
@@ -29,8 +31,9 @@ final class UserLibrary {
     private var writeFailures: [String: String] = [:]
     /// Games whose conflict versions could not be settled at the last read, with the sentence.
     private var conflictFailures: [String: String] = [:]
-    /// False until the first `load()` of the current folder has finished, and again while the folder is switched or
-    /// missing. A change while it is false is refused: it would start from an empty file and replace the owner's file.
+    /// False until the first `load()` of the current folder has finished, and again while the folder is switched; it stays
+    /// false for a folder missing at load (one that goes away later is `folderIsMissing` only). A change while it is false
+    /// is refused: it would start from an empty file and replace the owner's file.
     /// Controls that change the collection disable themselves on it.
     private(set) var isLoaded = false
     /// Tests only: runs on the main actor before each game file is read, so a test can act while a read is in progress.
@@ -234,13 +237,17 @@ final class UserLibrary {
     }
 
     /// A file of the folder changed (the watcher). Queues a read of it when it is a game file of this folder; returns that
-    /// read, or nil.
+    /// read, or nil. Not for a folder that was missing at load (nothing of it was read); a folder that went away after
+    /// the load is read again, so its return is seen.
     @discardableResult
     func fileChanged(_ url: URL) -> Task<Void, Never>? {
-        guard let folder, !folderIsMissing, let game = UserFiles.gameID(ofFileNamed: url.lastPathComponent),
+        guard let folder, readsAgain, let game = UserFiles.gameID(ofFileNamed: url.lastPathComponent),
               UserFolder.isSameFolder(url.deletingLastPathComponent(), folder) else { return nil }
         return queueReload(game, in: folder)
     }
+
+    /// A reload may run: the folder is there, or it went away after its load had ended (`isLoaded`).
+    private var readsAgain: Bool { !folderIsMissing || isLoaded }
 
     @discardableResult
     private func queueReload(_ game: String, in folder: URL) -> Task<Void, Never> {
@@ -250,7 +257,7 @@ final class UserLibrary {
     }
 
     private func reload(_ game: String, number: Int, in folder: URL) async {
-        guard reloads[game] == number, self.folder == folder, !folderIsMissing else { return }
+        guard reloads[game] == number, self.folder == folder, readsAgain else { return }
         // A write of ours for this game is queued: it goes first, then the file is read again (the last writer wins).
         guard changes[game, default: 0] == written[game, default: 0] else {
             queueReload(game, in: folder)
@@ -269,6 +276,13 @@ final class UserLibrary {
             queueReload(game, in: folder)
             return
         }
+        // The folder itself is gone (moved away while the app runs): its files read as missing, but the rows are not
+        // gone. Memory keeps them, and changes are refused while the folder is missing, so no write can leave a file of
+        // only the new rows. A reload after the folder is back reads its file.
+        var isDirectory: ObjCBool = false
+        let folderThere = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        if folderIsMissing == folderThere { folderIsMissing = !folderThere }
+        guard folderThere else { return }
         let shown = rows(game: game)
         apply(result, to: game)
         if rows(game: game) != shown { version += 1 }

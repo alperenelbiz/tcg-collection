@@ -39,6 +39,15 @@ final class CollectionScreenState {
     /// True when the search text has a word to match.
     var searching: Bool { !CardName.searchKey(text).isEmpty }
 
+    /// What the Collection lists (`CollectionList.content`); nil until a join of this game has ended. The catalog counts
+    /// as settled as it was for the join that made the entries (`joined`), not as it is now: when a step ends, its last
+    /// batch's products are not in the entries until the next join, and would read as "not in the catalog any more".
+    func content(rows: [CollectionRow]) -> CollectionContent? {
+        guard let joined else { return nil }
+        return CollectionList.content(rows: rows, joined: entries, joinFailed: joinFailed,
+                                      catalogHasProducts: catalogHasProducts, catalogSettled: joined.catalogSettled)
+    }
+
     func clearFilters() {
         groupID = nil
         rarity = nil
@@ -68,7 +77,7 @@ nonisolated struct CollectionJoin: Equatable {
     /// The game's price day: a new day's prices change the entries' prices.
     let priceDay: String?
     /// The game's catalog step has ended in this run (`AppModel.catalogSettled`): only then may a Set or Rarity choice
-    /// go back to "All".
+    /// go back to "All", and a product the join did not find read as not in the catalog any more (`content(rows:)`).
     let catalogSettled: Bool
 }
 
@@ -102,9 +111,7 @@ struct CollectionView: View {
 
     var body: some View {
         // Nil until a join of this game has ended.
-        let listed = state.joined == nil ? nil : CollectionList.content(
-            rows: model.library.rows(game: state.gameID), joined: state.entries, joinFailed: state.joinFailed,
-            catalogHasProducts: state.catalogHasProducts, catalogSettled: model.catalogSettled(game: state.gameID))
+        let listed = state.content(rows: model.library.rows(game: state.gameID))
         let all = listed?.entries ?? []
         let shown = listed.map {
             CollectionList.shown($0, text: state.text, groupID: state.groupID, rarity: state.rarity, price: state.price,
@@ -209,7 +216,7 @@ struct CollectionView: View {
     /// page; a pending one (`CollectionCellLink.none`) opens nothing and takes no hover.
     @ViewBuilder private func cell(_ entry: CollectionEntry, link: CollectionCellLink) -> some View {
         let cell = CardCell(content: CellContent(product: entry.product, name: entry.name, left: entry.countText,
-                                                 price: entry.price, selected: false))
+                                                 price: entry.price))
         switch (link, entry.product) {
         case (.card, let product?):
             NavigationLink(value: CardTarget(gameID: state.gameID, cardKey: entry.cardKey, startProductID: product.productID)) { cell }

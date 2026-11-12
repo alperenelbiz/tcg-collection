@@ -20,7 +20,7 @@ nonisolated enum Theme {
     static let muted = Color(hex: "#B4B4B4")
     /// Meta, placeholders, the status line.
     static let faint = Color(hex: "#949494")
-    /// The selected sidebar row, the selection ring of a cell, the default button of a sheet. Nowhere else.
+    /// The selected sidebar row and the default button of a sheet. Nowhere else.
     static let accent = Color(hex: "#F2B33D")
     /// Only on a fact at risk (a row the import would remove). Never on a normal row.
     static let risk = Color(hex: "#E5484D")

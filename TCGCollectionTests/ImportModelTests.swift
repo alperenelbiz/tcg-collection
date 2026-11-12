@@ -69,7 +69,7 @@ struct ImportModelTests {
         let (library, folder) = try await library()
         let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
         await model.prepare()
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", summary: "2 new, 1 changed, 1 not in the file (kept)"))
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "2 new, 1 changed, 1 not in the file (kept)"))
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "722282 Normal 4", "721337 Normal 3"])
         // The import's own write is not "a change made while the sheet was open" (the sheet sees the version move).
         #expect(!model.refreshComparison() && model.notice == nil)
@@ -160,6 +160,40 @@ struct ImportModelTests {
         #expect(!model.canApply && model.apply() == nil)
     }
 
+    /// Final fix A1: a new row takes the price table's spelling of its finish (`Foil`, not the file's `foil`), so the card
+    /// page, the price lookup and `+` find it. The price table is the model's: the fixture prices have 721334 Normal and
+    /// Foil.
+    @Test func aNewRowTakesTheFinishSpellingOfThePriceTable() async throws {
+        let (library, _) = try await library(nil)
+        let csv = "Product ID,Product Line,Product Name,Printing,Add to Quantity\n"
+            + "721334,Riftbound: League of Legends Trading Card Game,Dockside Lock-Up,foil,2\n"
+        let model = ImportModel(data: Data(csv.utf8), fileName: "c.csv", library: library, reader: try await catalog(),
+                                prices: try filledTable(), catalogSettled: { _ in true })
+        await model.prepare()
+        #expect(model.comparisons.first?.new.map { "\($0.key.finish) \($0.new)" } == ["Foil 2"])
+        #expect(model.apply() != nil)
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 2"])
+    }
+
+    /// Final fix A7: the sheet's tables have a choice column only when a shown group offers Remove ("In your collection,
+    /// not in this file"); every row then keeps it, so the numbers stay in one column. Without one (a first import: all
+    /// New), the name takes that width.
+    @Test func theChoiceColumnIsThereOnlyWhenAGroupOffersRemove() async throws {
+        let reader = try await catalog()
+        let (empty, _) = try await library(nil)
+        let first = importing(try fixture("collection-riftbound.csv"), library: empty, reader: reader)
+        await first.prepare()
+        #expect(first.comparisons.first?.missing.isEmpty == true && !first.offersRemove)
+        let (owned, _) = try await library()
+        let again = importing(try fixture("collection-riftbound.csv"), library: owned, reader: reader)
+        await again.prepare()
+        #expect(again.offersRemove)
+        // A game whose groups are not shown (its catalog is not ready) offers nothing.
+        let downloading = importing(try fixture("collection-riftbound.csv"), library: owned, reader: reader, settled: { _ in false })
+        await downloading.prepare()
+        #expect(downloading.comparisons.first?.missing.isEmpty == false && !downloading.offersRemove)
+    }
+
     // MARK: The rulings of the dispatch
 
     /// `-importCSV` opens the sheet while the folder is still read: a comparison with an unread collection would call
@@ -216,13 +250,13 @@ struct ImportModelTests {
                               settled: { _ in catalogStep.settled })
         await model.prepare()
         #expect(model.state == .ready)
-        #expect(model.block(game: "riftbound") == .catalog("The catalog is still downloading. This game can be imported when it is ready."))
+        #expect(model.block(game: "riftbound") == .catalog("The catalog is being updated. This game can be imported when the update is done."))
         #expect(!model.canApply && model.apply() == nil)
         #expect(model.notImported.isEmpty)
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 1", "555 Normal 2"])
 
         catalogStep.settled = true
-        #expect(model.block(game: "riftbound") == .catalog("The catalog is still downloading. This game can be imported when it is ready."))
+        #expect(model.block(game: "riftbound") == .catalog("The catalog is being updated. This game can be imported when the update is done."))
         #expect(!model.canApply && model.apply() == nil)
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 1", "555 Normal 2"])
         model.setAllMissing(remove: true, game: "riftbound")
@@ -366,7 +400,7 @@ struct ImportModelTests {
         #expect(model.block(game: "riftbound") == nil)
         #expect(model.skipped.map(\.name) == ["Pikachu"])
         #expect(model.summary == "1 new, 1 changed, 1 not in the file (kept)")
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", summary: "1 new, 1 changed, 1 not in the file (kept)"))
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)"))
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 2", "555 Normal 2", "721337 Normal 1"])
         await library.flush()
         #expect(try Data(contentsOf: folder.appending(path: "yu-gi-oh.json")) == Data("not json".utf8))

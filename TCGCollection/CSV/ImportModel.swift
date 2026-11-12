@@ -40,9 +40,11 @@ final class ImportModel: Identifiable {
         }
     }
 
-    /// What `apply` did: the first game it imported (the Collection shows it) and the summary it applied.
+    /// What `apply` did: the first game it imported (the Collection shows it), every game it changed, in order (their
+    /// writes are queued; `AppModel.importApplied` waits for them), and the summary it applied.
     nonisolated struct Applied: Equatable, Sendable {
         let gameID: String
+        let games: [String]
         let summary: String
     }
 
@@ -51,7 +53,7 @@ final class ImportModel: Identifiable {
     nonisolated static let noGame = "This file has no cards of the four games."
     nonisolated static let nothingImportable = "Nothing in this file can be imported now."
     nonisolated static let nothingToImport = "Nothing to import: this file adds nothing to your collection."
-    nonisolated static let catalogDownloading = "The catalog is still downloading. This game can be imported when it is ready."
+    nonisolated static let catalogUpdating = "The catalog is being updated. This game can be imported when the update is done."
     nonisolated static let catalogEmpty = "The catalog has no cards of this game yet. Import the file again once it has downloaded."
     nonisolated static let noFolder = "No collection folder is chosen."
     nonisolated static let collectionChanged = "Your collection changed while this sheet was open. Check the comparison again."
@@ -73,6 +75,8 @@ final class ImportModel: Identifiable {
     @ObservationIgnored private let readFailure: String?
     @ObservationIgnored private let library: UserLibrary
     @ObservationIgnored private let reader: CatalogStore
+    /// The finishes it has for a product give a new row its finish's spelling (`CollectionImport.compare`).
+    @ObservationIgnored private let prices: PriceTable?
     @ObservationIgnored private let catalogSettled: @MainActor (String) -> Bool
     /// What a game's catalog was when the game's comparison was made. Only `.ready` makes the game importable: a
     /// comparison made during a download stays blocked until a `prepare` made after the step ended (fix round 1).
@@ -101,13 +105,15 @@ final class ImportModel: Identifiable {
     @ObservationIgnored private var preparation = 0
 
     /// `catalogSettled`: `AppModel.catalogSettled(game:)`, read whenever the sheet asks (it changes while the sheet is open).
-    init(data: Data, fileName: String, library: UserLibrary, reader: CatalogStore,
+    /// `prices`: the app's price table, read at every comparison; without one, a new row keeps the file's spelling.
+    init(data: Data, fileName: String, library: UserLibrary, reader: CatalogStore, prices: PriceTable? = nil,
          catalogSettled: @escaping @MainActor (String) -> Bool) {
         self.fileName = fileName
         self.data = data
         readFailure = nil
         self.library = library
         self.reader = reader
+        self.prices = prices
         self.catalogSettled = catalogSettled
     }
 
@@ -118,6 +124,7 @@ final class ImportModel: Identifiable {
         readFailure = Self.unreadable(reason)
         self.library = library
         self.reader = reader
+        prices = nil
         catalogSettled = { _ in false }
     }
 
@@ -205,8 +212,13 @@ final class ImportModel: Identifiable {
 
     private func compare(_ lines: [CSVLine]) -> (comparisons: [ImportComparison], otherGames: [SkippedLine]) {
         let current = Dictionary(uniqueKeysWithValues: Games.all.map { ($0.id, library.rows(game: $0.id)) })
-        let known = products
-        return CollectionImport.compare(lines: lines, current: current, known: { known[$0] }, games: Games.all)
+        let known = products, prices = prices
+        // The price table is per game: a product's finishes are looked up in its own game's.
+        let priced = { (id: Int) in
+            known[id].map { product in prices?.prices(game: product.gameID, productID: id).map(\.finish) ?? [] } ?? []
+        }
+        return CollectionImport.compare(lines: lines, current: current, known: { known[$0] }, pricedFinishes: priced,
+                                        games: Games.all)
     }
 
     /// A row of a game of the file holds a product id the last lookup did not ask for.
@@ -237,11 +249,11 @@ final class ImportModel: Identifiable {
         if !library.canChange(game: game) {
             return .collection(library.problem(game: game) ?? (library.folder == nil ? Self.noFolder : "Your collection is not read yet."))
         }
-        if !catalogSettled(game) { return .catalog(Self.catalogDownloading) }
+        if !catalogSettled(game) { return .catalog(Self.catalogUpdating) }
         switch catalogAtCompare[game] {
         case .ready?: return nil
         case .empty?: return .catalog(Self.catalogEmpty)
-        case .downloading?, nil: return .catalog(Self.catalogDownloading)
+        case .downloading?, nil: return .catalog(Self.catalogUpdating)
         }
     }
 
@@ -287,6 +299,13 @@ final class ImportModel: Identifiable {
         let lines = comparisons.filter { block(game: $0.gameID)?.hidesComparison != true }
             .flatMap { $0.notRecognised + $0.ignoredBasics }
         return (skipped + lines).sorted { $0.line < $1.line }
+    }
+
+    /// True when a shown group offers Remove ("In your collection, not in this file" of a game whose groups are shown):
+    /// the sheet's tables then keep a choice column in every row, so the numbers stay in one column. Else the names take
+    /// that width.
+    var offersRemove: Bool {
+        comparisons.contains { !$0.missing.isEmpty && block(game: $0.gameID)?.hidesComparison != true }
     }
 
     /// The name of the set of the printing's product; nil when the catalog does not have it.
@@ -342,13 +361,14 @@ final class ImportModel: Identifiable {
 
     /// One `library.replace` per game that can be imported: new and changed rows, and the missing rows set to Remove.
     /// Nil when nothing is written: nothing to import, a `prepare` runs, or the collection changed since the comparison
-    /// was shown (it is shown again first). `Applied.gameID` is the first game that is written.
+    /// was shown (it is shown again first). `Applied.gameID` is the first game that is written, `Applied.games` every one.
     @discardableResult
     func apply() -> Applied? {
         guard canApply, !refreshComparison() else { return nil }
         let games = importable
-        guard let first = games.first(where: writes) else { return nil }
-        let applied = Applied(gameID: first.gameID, summary: summary)
+        let changed = games.filter(writes).map(\.gameID)
+        guard let first = changed.first else { return nil }
+        let applied = Applied(gameID: first, games: changed, summary: summary)
         for comparison in games {
             let rows = library.rows(game: comparison.gameID)
             library.replace(game: comparison.gameID, rows: CollectionImport.apply(comparison, to: rows, remove: remove))

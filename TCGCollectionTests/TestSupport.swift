@@ -134,6 +134,12 @@ extension CatalogStore {
 
     /// True when this store's work runs on the main thread. It must never do (the views call it from the main actor).
     func runsOnMainThread() -> Bool { Thread.isMainThread }
+
+    /// Test only: every stored product row's name and its two stored keys, by product id.
+    func storedKeys() throws -> [(productID: Int, name: String, searchKey: String, cardKey: String)] {
+        try modelContext.fetch(FetchDescriptor<CatalogProduct>(sortBy: [SortDescriptor(\.productID)]))
+            .map { ($0.productID, $0.name, $0.searchKey, $0.cardKey) }
+    }
 }
 
 /// A store with a schema the catalog never had: SwiftData cannot say which version it is, Core Data reads its metadata.

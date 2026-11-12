@@ -119,6 +119,8 @@ struct CatalogStoreTests {
     /// Phase 2B task 8 changed the search query for speed. These results were taken from the query before the change:
     /// the same cards in the same order, each with the same printings (in product id order) and the same cover, for
     /// every batch size. A card's line is `<card key> [<product ids>] <cover product id>`.
+    /// Final fix B2: two names whose key is empty (`_____` and `______`, as the real Magic catalog has) are one card with
+    /// the empty key, first in key order; its two rows lie in two batches at batch size 1.
     @Test func searchResultsArePinned() async throws {
         let s = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
         try await s.upsertSets(try ProductParser.sets(fixture("groups-89.json"), game: Games.game("riftbound")!))
@@ -139,8 +141,10 @@ struct CatalogStoreTests {
                       record(11, "The Dragon's Hoard", group: 24819, rarity: "Common", type: "Gear"),
                       record(9, "Lightning Bolt", group: 24819, rarity: "Rare", type: "Spell"),
                       record(8, "Dragonlord", group: 24819, rarity: "Common", type: "Unit"),
-                      record(5, "Bolt of Lightning", group: 24819, rarity: "Common", type: "Spell")]
-        let oldest = [record(60, "Thermal Bolt", group: 24344, rarity: "Common", type: "Spell"),
+                      record(5, "Bolt of Lightning", group: 24819, rarity: "Common", type: "Spell"),
+                      record(70, "_____", group: 24819, rarity: "Common", type: "Unit")]
+        let oldest = [record(15, "______", group: 24344, rarity: "Common", type: "Unit"),
+                      record(60, "Thermal Bolt", group: 24344, rarity: "Common", type: "Spell"),
                       record(40, "Card 10", group: 24344, rarity: "Common", type: "Gear"),
                       record(35, "Lightning Bolt", group: 24344, rarity: "Common", type: "Spell"),
                       record(31, "Ancient Dragon", group: 24344, rarity: "Common", type: "Unit"),
@@ -150,7 +154,7 @@ struct CatalogStoreTests {
         for (group, rows) in [(24819, middle), (24344, oldest), (24832, newest)] {
             try await s.replaceProducts(of: group, with: rows, at: .now)
         }
-        let all = ["ancient dragon [12, 31] 12", "bolt of lightning [5] 5", "card 10 [2, 40] 40", "card 2 [41] 41",
+        let all = [" [15, 70] 70", "ancient dragon [12, 31] 12", "bolt of lightning [5] 5", "card 10 [2, 40] 40", "card 2 [41] 41",
                    "dragon whelp [7, 20, 33] 20", "dragonlord [8] 8", "lightning bolt [9, 35] 9",
                    "lightning dragon [50] 50", "shivan dragon [3, 44] 44", "the dragon s hoard [11] 11",
                    "thermal bolt [60] 60", "zap [1] 1"]
@@ -159,9 +163,10 @@ struct CatalogStoreTests {
         let cases: [(text: String, filter: CardFilter, limit: Int, expected: [String])] = [
             ("", .init(), 50, all),
             ("", .init(), 3, Array(all.prefix(3))),                         // the limit ends the scan after a whole card
+            ("", .init(), 1, [" [15, 70] 70"]),                             // the empty key is a whole card too
             ("dragon", .init(), 50, dragon),
             ("dragon", .init(), 2, Array(dragon.prefix(2))),
-            ("a", .init(), 50, all.filter { !$0.hasPrefix("bolt of") && !$0.hasPrefix("lightning bolt") }),
+            ("a", .init(), 50, all.filter { !$0.hasPrefix(" ") && !$0.hasPrefix("bolt of") && !$0.hasPrefix("lightning bolt") }),
             ("the", .init(), 50, ["the dragon s hoard [11] 11", "thermal bolt [60] 60"]),
             ("lightning bolt", .init(), 50, ["bolt of lightning [5] 5", "lightning bolt [9, 35] 9"]),
             ("bolt lightning", .init(), 50, ["bolt of lightning [5] 5", "lightning bolt [9, 35] 9"]),
@@ -181,6 +186,34 @@ struct CatalogStoreTests {
                 #expect(lines == item.expected, "text \"\(item.text)\", \(item.filter), limit \(item.limit), batch \(size)")
             }
         }
+    }
+
+    /// The search matches its words in the stored card key, which finds the rows `searchKey` would only while the two are
+    /// equal in every stored row (phase 2B task 8; final fix B1). Parsed products of the name rules that change a card
+    /// name go through the parser and the store: a Yu-Gi-Oh! Skill printing without the bracket (A5), one with the kept
+    /// `(Skill Card)` bracket, an official whole name (A3), a `//` split name and an accented name.
+    @Test func everyStoredRowsSearchKeyIsItsCardKey() async throws {
+        let s = try CatalogStore(url: URL.temporaryDirectory.appending(path: "\(UUID().uuidString)/catalog.store"))
+        func json(_ items: [(id: Int, name: String, type: String)], group: Int, typeField: String) throws -> Data {
+            let results: [[String: Any]] = items.map { item in
+                ["productId": item.id, "name": item.name, "groupId": group, "url": "",
+                 "extendedData": [["name": typeField, "value": item.type], ["name": "Number", "value": "\(item.id)"],
+                                  ["name": "Rarity", "value": "Common"]]]
+            }
+            return try JSONSerialization.data(withJSONObject: ["success": true, "results": results])
+        }
+        let yugioh = try #require(Games.game("yu-gi-oh")), magic = try #require(Games.game("magic-the-gathering"))
+        let (skills, _) = try ProductParser.products(json([(1, "Power of Dark", "Skill"), (2, "Power Bond (Skill Card)", "Skill")],
+                                                          group: 900, typeField: yugioh.typeField), game: yugioh)
+        let (cards, _) = try ProductParser.products(json([(3, "Erase (Not the Urza's Legacy One)", "Enchantment"),
+                                                          (4, "Fire // Ice", "Instant"), (5, "Jötun Grunt", "Creature")],
+                                                         group: 901, typeField: magic.typeField), game: magic)
+        try await s.replaceProducts(of: 900, with: skills, at: .now)
+        try await s.replaceProducts(of: 901, with: cards, at: .now)
+        let stored = try await s.storedKeys()
+        #expect(stored.map(\.cardKey) == ["power of dark skill card", "power bond skill card",
+                                          "erase not the urza s legacy one", "fire ice", "jotun grunt"])
+        for row in stored { #expect(row.searchKey == row.cardKey, "\(row.name)") }
     }
 
     @Test func productLookupKeepsEveryField() async throws {

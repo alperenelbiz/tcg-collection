@@ -140,6 +140,34 @@ struct ImportComparisonTests {
         #expect(both.new.map { "\($0.key.finish) \($0.new)" } == ["foil 3"])
     }
 
+    /// Final fix A1: the finish of an imported line is the spelling of a collection row of that product that matches
+    /// ignoring case, else the spelling of a priced finish of that product that matches ignoring case, else the file's
+    /// spelling, trimmed. The card page, the file's clean-up and the price lookup compare finishes case-sensitively.
+    @Test func aNewRowTakesTheSpellingOfThePriceTable() {
+        let priced: (Int) -> [String] = { $0 == 721334 ? ["Normal", "Foil"] : [] }
+        func compared(_ lines: [CSVLine], rows: [CollectionRow]) -> ImportComparison {
+            CollectionImport.compare(lines: lines, current: ["riftbound": rows], known: knownFixtureProducts,
+                                     pricedFinishes: priced, games: Games.all).comparisons[0]
+        }
+        // (1) A collection row of the product wins over the price table, also when it is spelt otherwise.
+        let row = CollectionRow(productID: 721334, finish: "FOIL", count: 1, condition: "", name: "Dockside Lock-Up")
+        let owned = compared([line(id: 721334, finish: "foil", quantity: 3)], rows: [row])
+        #expect(owned.changed.map { "\($0.key.finish) \($0.old)->\($0.new)" } == ["FOIL 1->3"] && owned.new.isEmpty && owned.missing.isEmpty)
+        // (2) No row: the price table's spelling.
+        let new = compared([line(id: 721334, finish: "foil", quantity: 2)], rows: [])
+        #expect(new.new.map { "\($0.key.finish) \($0.new)" } == ["Foil 2"])
+        #expect(CollectionImport.apply(new, to: [], remove: []).map(\.finish) == ["Foil"])
+        // (3) No row and no priced finish of that spelling: the file's own, trimmed.
+        let own = compared([line(id: 721334, finish: " Etched "), line(id: 721337, finish: "foil ")], rows: [])
+        #expect(own.new.map { "\($0.key.productID) \($0.key.finish)" } == ["721334 Etched", "721337 foil"])
+        // Two lines of one product spelt `foil` and `Foil` still sum into one row: the price table's spelling.
+        let both = compared([line(id: 721334, finish: "foil", quantity: 1), line(id: 721334, finish: "Foil", quantity: 2)], rows: [])
+        #expect(both.new.map { "\($0.key.finish) \($0.new)" } == ["Foil 3"])
+        // ... and in the first line's spelling when the price table has neither.
+        let unpriced = compared([line(id: 721337, finish: "foil", quantity: 1), line(id: 721337, finish: "Foil", quantity: 2)], rows: [])
+        #expect(unpriced.new.map { "\($0.key.finish) \($0.new)" } == ["foil 3"])
+    }
+
     @Test func aChangedRowKeepsItsConditionWhenTheFileHasNone() {
         let rows = [CollectionRow(productID: 721334, finish: "Foil", count: 1, condition: "Mint", name: "Dockside Lock-Up")]
         let c = compared([line(id: 721334, condition: "", finish: "Foil", quantity: 2)], rows: rows)

@@ -509,7 +509,9 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.element(app, "collection-cell-555-Normal").label == "Only Here, ×2, Normal, no price" },
                       element(app, "collection-cell-555-Normal").label)
         XCTAssertTrue(element(app, "collection-cell-721334-Foil").label.hasPrefix("Dockside Lock-Up, ×3, Foil, "))
-        XCTAssertEqual(text(app.staticTexts["status-line"]), "Imported: 2 new, 1 changed, 1 not in the file (kept)")
+        // Said once the write has run (final fix A2).
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil { self.text(status) == "Imported: 2 new, 1 changed, 1 not in the file (kept)" }, text(status))
         XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound")) == Self.importedRows(keepingOnlyHere: true) },
                       "\(String(describing: try? storedCollection(game: "riftbound")))")
         shot("import-03-collection-after-import")
@@ -558,10 +560,37 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.identifiers(self.collectionCells(app)) == three }, "\(identifiers(collectionCells(app)))")
         XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("10 copies · 3 printings") }, app.windows.firstMatch.title)
         XCTAssertTrue(element(app, "collection-cell-721334-Foil").label.hasPrefix("Dockside Lock-Up, ×3, Foil, "))
-        XCTAssertEqual(text(app.staticTexts["status-line"]), "Imported: 2 new, 1 changed, 1 not in the file (removed)")
+        // Said once the write has run (final fix A2).
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil { self.text(status) == "Imported: 2 new, 1 changed, 1 not in the file (removed)" }, text(status))
         XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound")) == Self.importedRows(keepingOnlyHere: false) },
                       "\(String(describing: try? storedCollection(game: "riftbound")))")
         shot("import-05-collection-after-removal")
+    }
+
+    /// Final fix A7: a long name wraps in the sheet's table instead of being cut on one line, at most to two lines; the
+    /// numbers stay right-aligned in one column. Saved names of rows the catalog does not have (556, 557) under "In your
+    /// collection, not in this file": one of about two lines, one of many.
+    func testALongNameWrapsToTwoLinesInTheImportSheet() throws {
+        let twoLines = "A Saved Name Long Enough to Need a Second Line in the Import Table"
+        let many = String(repeating: "A Very Long Saved Name That Goes On and On, ", count: 6)
+        let app = try launchImport("collection-riftbound.csv") { root in
+            try self.writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 1, name: "Dockside Lock-Up"),
+                                      StoredRow(productID: 555, finish: "Normal", count: 2, name: "Only Here"),
+                                      StoredRow(productID: 556, finish: "Normal", count: 1, name: twoLines),
+                                      StoredRow(productID: 557, finish: "Normal", count: 1, name: many)],
+                                     game: "riftbound", in: root)
+        }
+        let sheet = try waitForTheComparison(app)
+        XCTAssertEqual(text(element(app, "import-missing-riftbound")), "In your collection, not in this file · 3")
+        let short = element(app, "import-row-555-Normal").frame.height
+        let wrapped = element(app, "import-row-556-Normal").frame.height
+        let capped = element(app, "import-row-557-Normal").frame.height
+        XCTAssertGreaterThan(wrapped, short * 1.5, "the long name did not wrap: \(short) / \(wrapped)")
+        XCTAssertLessThanOrEqual(abs(capped - wrapped), 1, "a name takes more than two lines: \(wrapped) / \(capped)")
+        let counts = ["722282-Normal", "721334-Foil", "555-Normal", "556-Normal", "557-Normal"].map { element(app, "import-count-\($0)").frame.maxX }
+        XCTAssertLessThanOrEqual((counts.max() ?? 0) - (counts.min() ?? 0), 1, "the counts are not right-aligned: \(counts)")
+        shot("import-09-long-names", of: sheet)
     }
 
     /// Cancel writes nothing: the file is byte for byte what it was, after Cmd+Q (which waits for queued writes) and
@@ -609,7 +638,7 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// The dispatch's ruling: while Riftbound's catalog step runs (`-fixtureDelay 2000`: 14 sets, 4 at a time), the sheet
-    /// says the catalog is still downloading and offers only Close, not a comparison of lines it cannot know yet. When the
+    /// says the catalog is being updated and offers only Close, not a comparison of lines it cannot know yet. When the
     /// step has ended, the comparison comes without a new import, with Import.
     func testImportWaitsForTheCatalog() throws {
         let app = try launchImport("collection-riftbound.csv", extra: ["-fixtureDelay", "2000"]) { try self.writeTask6Rows($0) }
@@ -617,7 +646,7 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(sheet.waitForExistence(timeout: 20))
         let blocked = element(app, "import-blocked-riftbound")
         XCTAssertTrue(blocked.waitForExistence(timeout: 10), sheet.debugDescription)
-        XCTAssertEqual(text(blocked), "The catalog is still downloading. This game can be imported when it is ready.")
+        XCTAssertEqual(text(blocked), "The catalog is being updated. This game can be imported when the update is done.")
         XCTAssertEqual(text(element(app, "import-summary")), "Nothing in this file can be imported now.")
         XCTAssertFalse(element(app, "import-new-riftbound").exists)
         XCTAssertFalse(element(app, "import-apply").exists)

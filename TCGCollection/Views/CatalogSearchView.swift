@@ -106,7 +106,7 @@ struct CatalogSearchView: View {
     /// A catalog cell: the card's cover printing, how many printings passed the filter, and the cheapest of their prices.
     private func cellContent(_ card: CardSummary) -> CellContent {
         CellContent(product: card.cover, name: card.name, left: card.printings > 1 ? "\(card.printings) printings" : "",
-                    price: model.prices.cheapest(game: card.cover.gameID, productIDs: card.productIDs), selected: false)
+                    price: model.prices.cheapest(game: card.cover.gameID, productIDs: card.productIDs))
     }
 
     /// The game has no card at all. "Downloading" only while a sync runs; otherwise the reason, and a way to try again.

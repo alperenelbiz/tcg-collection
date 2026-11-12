@@ -98,14 +98,17 @@ final class RealCollectionTests: UITestCase {
         apply.click()
         XCTAssertTrue(waitUntil(timeout: 30) { !sheet.exists }, "the sheet stayed open")
         let window = app.windows.firstMatch
-        XCTAssertTrue(waitUntil(timeout: 60) { window.title.hasSuffix(" · \(printings) printings") }, window.title)
+        let printingsText = "\(printings) \(printings == 1 ? "printing" : "printings")"
+        XCTAssertTrue(waitUntil(timeout: 60) { window.title.hasSuffix(" · " + printingsText) }, window.title)
         let totalsShown = Date()
         XCTAssertTrue(waitUntil(timeout: 30) { (try? self.storedCollection(game: game).count) == printings },
                       "the file does not hold \(printings) rows")
         let rows = try storedCollection(game: game)
         XCTAssertTrue(window.title.hasSuffix(" " + totals(rows)), "\(window.title) does not match the file: \(totals(rows))")
         XCTAssertEqual(Set(rows.map { "\($0.productID)-\($0.finish)" }).count, rows.count, "two rows of one printing")
-        XCTAssertEqual(text(app.staticTexts["status-line"]), "Imported: \(summary)")
+        // Said once the write has run (final fix A2).
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil { self.text(status) == "Imported: \(summary)" }, text(status))
         XCTAssertTrue(collectionCells(app).firstMatch.waitForExistence(timeout: 10), "no cell in the gallery")
         shot("real-collection-\(game)-3-gallery")
 

@@ -182,8 +182,8 @@ struct ImportSheet: View {
             #if os(macOS)
                 .toggleStyle(.checkbox)
             #endif
-                // Not the accent (it is for the sidebar, a cell's ring and the default button only) and not red (the
-                // count is the row's one red mark): the check itself says "Remove".
+                // Not the accent (it is for the sidebar and the default button only) and not red (the count is the row's
+                // one red mark): the check itself says "Remove".
                 .tint(Theme.raised)
                 .font(Theme.bodyFont)
                 .disabled(locked)
@@ -211,17 +211,20 @@ struct ImportSheet: View {
     }
 
     /// One table row per change: name (and the set's name where two rows would read the same), finish, the number
-    /// right-aligned in tabular digits, and the choice column.
+    /// right-aligned in tabular digits, and the choice column while a group of the sheet offers Remove
+    /// (`ImportModel.offersRemove`; every row has it then, so the numbers stay in one column). The name takes the rest of
+    /// the width and wraps to two lines at most; the other columns keep their widths and sit on the name's first line.
     private func rows(_ changes: [ImportComparison.Change], cell: @escaping (ImportComparison.Change) -> Cell) -> some View {
         let ambiguous = ImportModel.ambiguous(changes)
+        let choiceColumn = importModel.offersRemove
         return ForEach(changes) { change in
             let cell = cell(change)
             let id = "\(change.key.productID)-\(change.key.finish)"
-            HStack(spacing: Theme.columnGap) {
-                HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(change.name)
                         .foregroundStyle(Theme.text)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .layoutPriority(1)
                     if ambiguous.contains(change.key) {
                         Text(importModel.setName(of: change.key) ?? "Product \(change.key.productID)")
@@ -239,8 +242,10 @@ struct ImportSheet: View {
                     .foregroundStyle(cell.risk ? Theme.risk : Theme.text)
                     .frame(width: Theme.tableNumberWidth, alignment: .trailing)
                     .accessibilityIdentifier("import-count-\(id)")
-                (cell.choice ?? AnyView(Color.clear.frame(height: 1)))
-                    .frame(width: Theme.tableChoiceWidth, alignment: .leading)
+                if choiceColumn {
+                    (cell.choice ?? AnyView(Color.clear.frame(height: 1)))
+                        .frame(width: Theme.tableChoiceWidth, alignment: .leading)
+                }
             }
             .font(Theme.bodyFont)
             .accessibilityElement(children: .contain)
@@ -316,7 +321,8 @@ struct ImportSheet: View {
                     .accessibilityIdentifier("import-cancel")
                 Spacer()
                 Button("Import") {
-                    if let applied = importModel.apply() { model.importApplied(applied) }
+                    // The sheet closes at once; the status line speaks when the writes have run.
+                    if let applied = importModel.apply() { Task { await model.importApplied(applied) } }
                 }
                 .sheetDefaultButton()
                 .disabled(!importModel.canApply)

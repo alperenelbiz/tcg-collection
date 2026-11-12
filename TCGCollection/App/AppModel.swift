@@ -154,6 +154,8 @@ final class AppModel {
     /// line replaces it) or `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
     private(set) var statusNotice: String?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    /// Each `importApplied` takes the next number; only the latest one sets the notice after its wait.
+    @ObservationIgnored private var appliedImports = 0
     /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
     private(set) var readsImport = false
     /// Tests only: runs on the main actor before a picked file is read, so a test can act while the read is in progress.
@@ -428,7 +430,7 @@ final class AppModel {
         let name = url.lastPathComponent
         do {
             let data = try await Self.readFile(url)
-            importing = ImportModel(data: data, fileName: name, library: library, reader: reader,
+            importing = ImportModel(data: data, fileName: name, library: library, reader: reader, prices: prices,
                                     catalogSettled: { [weak self] game in self?.catalogSettled(game: game) ?? false })
         } catch {
             importing = ImportModel(unreadable: error.localizedDescription, fileName: name, library: library, reader: reader)
@@ -447,15 +449,23 @@ final class AppModel {
         return try Data(contentsOf: url)
     }
 
-    /// After Import: the sheet closes, the Collection shows the first imported game, and the status line says the summary
-    /// once (`statusNotice`).
-    func importApplied(_ applied: ImportModel.Applied) {
+    /// After Import: the sheet closes and the Collection shows the first imported game at once. Once the import's writes
+    /// have run, the status line says the summary once (`statusNotice`); when an imported game then has a problem (its
+    /// write failed, its file was refused), it says that game's problem instead, never "Imported: …".
+    func importApplied(_ applied: ImportModel.Applied) async {
         importing = nil
         gameID = applied.gameID
         screen = .collection
-        let text = "Imported: \(applied.summary)"
-        statusNotice = text
+        // An earlier import's notice is not this one's result.
         noticeTask?.cancel()
+        statusNotice = nil
+        appliedImports += 1
+        let number = appliedImports
+        await library.flush()
+        // A later import (its own wait) says its own result.
+        guard number == appliedImports else { return }
+        let text = applied.games.lazy.compactMap { self.library.problem(game: $0) }.first ?? "Imported: \(applied.summary)"
+        statusNotice = text
         noticeTask = Task { [weak self] in
             try? await Task.sleep(for: Self.noticeDuration)
             guard !Task.isCancelled, let self, self.statusNotice == text else { return }

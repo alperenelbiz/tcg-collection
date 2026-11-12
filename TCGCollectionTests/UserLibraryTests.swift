@@ -478,6 +478,40 @@ struct UserLibraryTests {
         #expect(lib.problem == "The collection folder is not at \(dir.path).")
     }
 
+    /// Final fix A5: the folder itself is gone when a reload runs (moved away while the app runs). The read is not applied:
+    /// memory keeps its rows (a later write must not leave a file of only the new rows), the folder is said to be
+    /// missing, and changes are refused. Once the folder is back with its file, the next reload reads that file.
+    @MainActor @Test func aReloadOfAFolderThatIsGoneKeepsTheRows() async throws {
+        let parent = tempDir(), dir = parent.appending(path: "TCG Collection"), away = parent.appending(path: "Moved")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appending(path: "riftbound.json")
+        var there = GameUserFile(); there.collection = [.init(productID: 4, finish: "Normal", count: 2, condition: "", name: "D")]
+        try UserFiles.write(try there.data(), to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [4])
+
+        try FileManager.default.moveItem(at: dir, to: away)
+        let before = lib.version
+        await lib.fileChanged(file)?.value
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [4])               // memory keeps its rows
+        #expect(lib.version == before)
+        #expect(lib.folderIsMissing && lib.problem == "The collection folder is not at \(dir.path).")
+        #expect(!lib.canChange(game: "riftbound"))
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [4])               // refused, nothing written
+        #expect(!FileManager.default.fileExists(atPath: dir.path))
+
+        // Back, with a file another device changed meanwhile: the next reload reads it, and changes are allowed again.
+        try FileManager.default.moveItem(at: away, to: dir)
+        there.collection = [.init(productID: 6, finish: "Foil", count: 1, condition: "", name: "F")]
+        try UserFiles.write(try there.data(), to: file)
+        await lib.fileChanged(file)?.value
+        #expect(!lib.folderIsMissing && lib.problem == nil && lib.canChange(game: "riftbound"))
+        #expect(lib.rows(game: "riftbound").map(\.productID) == [6])
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(try stored(dir, "riftbound").map(\.productID) == [6, 721334])
+    }
+
     /// `use(folder:)` writes what is queued to the old folder, stops watching it, and loads the new one. Nothing is copied.
     @MainActor @Test func switchingTheFolder() async throws {
         let old = tempDir(), new = tempDir(), watcher = FakeWatcher()

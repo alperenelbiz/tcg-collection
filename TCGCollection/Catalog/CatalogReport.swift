@@ -39,7 +39,7 @@ nonisolated enum CatalogReport {
             lines += try await section(game, store: scan, prices: prices[game.id], ygo: ygo)
             lines.append("")
         }
-        lines += files(store: store)
+        lines += await files(store: store)
         lines.append("")
         lines += timings
         return lines.joined(separator: "\n") + "\n"
@@ -211,7 +211,7 @@ nonisolated enum CatalogReport {
 
     // MARK: Files and timings
 
-    private static func files(store: CatalogStore) -> [String] {
+    private static func files(store: CatalogStore) async -> [String] {
         guard let url = store.modelContainer.configurations.first?.url else { return ["== Files: no store file"] }
         let support = url.deletingLastPathComponent()
         let storeSizes = ["", "-wal", "-shm"].map { size(URL(fileURLWithPath: url.path + $0)) }
@@ -220,7 +220,7 @@ nonisolated enum CatalogReport {
         for game in Games.all {
             // The file name of `AppPaths.prices`. The decode is the work `PriceTable.load` does on the main actor.
             let file = support.appending(path: "prices-\(game.id).json")
-            let decode = median(3) { _ = try? JSONDecoder().decode(GamePrices.self, from: Data(contentsOf: file)) }
+            let decode = await durations(3) { _ = try? JSONDecoder().decode(GamePrices.self, from: Data(contentsOf: file)) }.median
             lines.append("prices-\(game.id).json: \(megabytes(size(file))), read and decode \(milliseconds(decode)) (median of 3)")
         }
         lines.append("ygo-index.json: \(megabytes(size(support.appending(path: "ygo-index.json"))))")
@@ -231,7 +231,7 @@ nonisolated enum CatalogReport {
                 lines.append("facets-\(game.id).json: no file")
                 continue
             }
-            let read = median(3) { _ = FacetLists.read(file) }
+            let read = await durations(3) { _ = FacetLists.read(file) }.median
             lines.append("facets-\(game.id).json: \(kilobytes(size(file))), read and decode \(preciseMilliseconds(read)) (median of 3)")
         }
         return lines
@@ -310,11 +310,6 @@ nonisolated enum CatalogReport {
             times.append(clock.now - start)
         }
         return Durations(sorted: times.sorted())
-    }
-
-    private static func median(_ runs: Int, _ work: () -> Void) -> Duration {
-        let clock = ContinuousClock()
-        return (0..<runs).map { _ in clock.measure(work) }.sorted()[runs / 2]
     }
 
     private static func size(_ url: URL) -> Int {

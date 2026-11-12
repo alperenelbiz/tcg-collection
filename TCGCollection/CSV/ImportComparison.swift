@@ -26,8 +26,10 @@ nonisolated struct ImportComparison: Sendable, Equatable {
 
 nonisolated enum CollectionImport {
     /// Splits the lines by game (through `Product Line`) and compares each game's printings with its rows.
-    /// One comparison per game that has lines, in the order of `games`.
+    /// One comparison per game that has lines, in the order of `games`. `pricedFinishes` gives the finishes the price
+    /// table has for a product, in their own spelling (`finish(_:)` of `compare(game:…)`).
     static func compare(lines: [CSVLine], current: [String: [CollectionRow]], known: (Int) -> ProductRecord?,
+                        pricedFinishes: (Int) -> [String] = { _ in [] },
                         games: [GameDefinition]) -> (comparisons: [ImportComparison], otherGames: [SkippedLine]) {
         var byGame: [String: [CSVLine]] = [:]
         var otherGames: [SkippedLine] = []
@@ -39,7 +41,9 @@ nonisolated enum CollectionImport {
             }
         }
         let comparisons = games.compactMap { game in
-            byGame[game.id].map { compare(game: game, lines: $0, rows: current[game.id] ?? [], known: known) }
+            byGame[game.id].map {
+                compare(game: game, lines: $0, rows: current[game.id] ?? [], known: known, pricedFinishes: pricedFinishes)
+            }
         }
         return (comparisons, otherGames)
     }
@@ -51,16 +55,21 @@ nonisolated enum CollectionImport {
     }
 
     private static func compare(game: GameDefinition, lines: [CSVLine], rows: [CollectionRow],
-                                known: (Int) -> ProductRecord?) -> ImportComparison {
+                                known: (Int) -> ProductRecord?, pricedFinishes: (Int) -> [String]) -> ImportComparison {
         var owned: [PrintingKey: CollectionRow] = [:]
         for row in rows where owned[row.key] == nil { owned[row.key] = row }
-        // Finish spellings per product: the collection's first, then the first one seen in the file (case-insensitive).
+        // The finish of a line, matched ignoring case (the card page, the file's clean-up and the price lookup compare
+        // it as written): a collection row's spelling of that product, else a priced finish's, else the file's, trimmed.
+        // An earlier line's choice is kept with the rows' spellings, so lines that differ only by case sum into one row.
         var spellings: [Int: [String]] = [:]
         for row in rows { spellings[row.productID, default: []].append(row.finish) }
         func finish(_ line: CSVLine) -> String {
-            if let same = spellings[line.productID]?.first(where: { $0.caseInsensitiveCompare(line.finish) == .orderedSame }) { return same }
-            spellings[line.productID, default: []].append(line.finish)
-            return line.finish
+            let written = line.finish.trimmingCharacters(in: .whitespacesAndNewlines)
+            let same = { (spelling: String) in spelling.caseInsensitiveCompare(written) == .orderedSame }
+            if let chosen = spellings[line.productID]?.first(where: same) { return chosen }
+            let chosen = pricedFinishes(line.productID).first(where: same) ?? written
+            spellings[line.productID, default: []].append(chosen)
+            return chosen
         }
 
         var listed: Set<PrintingKey> = []           // every printing the file names, imported or not

@@ -583,12 +583,56 @@ struct AppModelTests {
     @MainActor @Test func anImportSaysItsSummaryOnceInTheStatusLine() async throws {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "all-cards"])
         model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
-        model.importApplied(.init(gameID: "yu-gi-oh", summary: "2 new"))
+        await model.importApplied(.init(gameID: "yu-gi-oh", games: ["yu-gi-oh"], summary: "2 new"))
         #expect(model.statusNotice == "Imported: 2 new")
         #expect(model.gameID == "yu-gi-oh" && model.screen == .collection && model.importing == nil)
         await model.start()
         #expect(model.statusNotice == nil)
         #expect(model.status == .idle("Offline · no prices yet"))
+    }
+
+    /// An import of the Riftbound fixture file into the model's empty collection, compared on the fixture catalog.
+    @MainActor private func preparedImport(_ model: AppModel) async throws -> ImportModel {
+        let importing = ImportModel(data: try fixture("collection-riftbound.csv"), fileName: "collection-riftbound.csv",
+                                    library: model.library, reader: try await filledStore(), catalogSettled: { _ in true })
+        model.importing = importing
+        await importing.prepare()
+        return importing
+    }
+
+    /// Final fix A2: "Imported: …" is said once the import's write ran, not when it was queued.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anImportIsSaidOnlyAfterItsWrite() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let importing = try await preparedImport(model)
+        model.library.writeDelay = .milliseconds(400)
+        let applied = try #require(importing.apply())
+        let said = Task { await model.importApplied(applied) }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.library.hasPendingWork)
+        #expect(model.importing == nil && model.screen == .collection)          // the sheet closes at once
+        #expect(model.statusNotice == nil)                                        // the write has not run yet
+        await said.value
+        #expect(!model.library.hasPendingWork)
+        #expect(model.statusNotice == "Imported: 3 new")
+    }
+
+    /// Final fix A2: the write of an imported game failed (the folder is read-only between the comparison and the write):
+    /// the status line says that game's problem, the one the problem line shows, and never "Imported: …".
+    @MainActor @Test func anImportWhoseWriteFailedSaysTheProblemInstead() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let folder = try #require(model.library.folder)
+        let importing = try await preparedImport(model)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        let applied = try #require(importing.apply())
+        #expect(applied.games == ["riftbound"])
+        await model.importApplied(applied)
+        let problem = try #require(model.library.problem(game: "riftbound"))
+        #expect(problem.hasPrefix("riftbound.json could not be saved"))
+        #expect(model.statusNotice == problem)
+        #expect(model.gameID == "riftbound" && model.screen == .collection && model.importing == nil)
     }
 
     /// Fix round 1, item 5: while a file is still being read, and while an import is open, a second import (the panel, or

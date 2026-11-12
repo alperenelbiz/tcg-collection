@@ -9,13 +9,12 @@ nonisolated struct CellContent: Sendable {
     /// The text left of the price, in `muted`; "" for none.
     let left: String
     let price: ShownPrice?
-    let selected: Bool
 }
 
 /// One cell of a gallery (the cell rule of "The look, as rules"): the picture (59:86, radius 6), 7 pt below it the name
 /// on one line, then one line with `left` in `muted` and the price right-aligned. No badge, no box, no border. Hover puts
-/// `surface` behind the cell with 6 pt padding; selection is a 2 pt `accent` ring around the picture. The caller makes
-/// it a button or a link and gives it its identifier.
+/// `surface` behind the cell with 6 pt padding. No cell is ever selected (a click opens its page), so it has no
+/// selection mark. The caller makes it a button or a link and gives it its identifier.
 struct CardCell: View {
     let content: CellContent
 
@@ -27,14 +26,6 @@ struct CardCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CardImage(product: content.product, size: .small)
-                .overlay {
-                    if content.selected {
-                        // Outside the picture, concentric with its corners: the ring never covers the card.
-                        RoundedRectangle(cornerRadius: Theme.pictureRadius + 2)
-                            .strokeBorder(Theme.accent, lineWidth: 2)
-                            .padding(-2)
-                    }
-                }
             Text(content.name)
                 .font(Theme.bodyFont)
                 .foregroundStyle(Theme.text)
