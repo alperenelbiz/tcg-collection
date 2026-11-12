@@ -145,8 +145,9 @@ struct AppModelTests {
         #expect(try await model.reader.product(1) != nil)
     }
 
-    /// P8: only a file that is corrupt or not a database, or a failed migration, is moved aside. Here the store is
-    /// healthy but its folder cannot be written: the file stays, the model runs in memory with the sync off.
+    /// P8 (as changed by fix round 1 of task 4): only a file that is corrupt or not a database is moved aside; a failed
+    /// migration keeps the file. Here the store is healthy but its folder cannot be written: the file stays, the model
+    /// runs in memory with the sync off.
     @MainActor @Test func aStoreThatCannotBeOpenedForAnotherReasonIsNotMoved() async throws {
         // the support folder is made read-only after a healthy store was written; the model starts in memory,
         // the store file is still at its path, no unreadable-… folder exists, and start() makes no network call

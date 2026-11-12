@@ -2,8 +2,6 @@ import Foundation
 
 nonisolated enum PictureSourceKind: Sendable { case tcgplayer, ygoprodeck }
 
-/// One supported game: where its products live on tcgcsv and which extended-data fields hold
-/// the card type and the rules text.
 /// One line of the card page stats: a label and the extended-data fields that fill it.
 nonisolated struct StatField: Sendable {
     let label: String
