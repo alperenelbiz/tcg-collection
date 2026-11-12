@@ -17,6 +17,13 @@ struct RootView: View {
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
         }
+        // Open while no folder is chosen (it cannot be closed then), or after "Collection Folder…".
+        .sheet(isPresented: Binding(get: { model.needsUserFolder || model.showsFolderSheet },
+                                    set: { if !$0 { model.showsFolderSheet = false } })) {
+            UserFolderSheet()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
     }
 }
 
@@ -74,10 +81,49 @@ private struct Sidebar: View {
                     .accessibilityIdentifier("sidebar-all-cards")
             }
         }
-        .safeAreaInset(edge: .bottom) { StatusLine(status: model.status) }
+        .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                LibraryLines()
+                StatusLine(status: model.status)
+            }
+        }
         #if DEBUG && os(macOS)
         .capturableSidebar()
         #endif
+    }
+}
+
+/// What the user folder needs said: a problem (the folder is missing, a file is refused, a write failed) and a settled
+/// conflict. Task 5 moves the problem into the Collection screen; the identifier `collection-problem` stays.
+private struct LibraryLines: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let library = model.library
+        if library.problem != nil || library.notice != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let problem = library.problem {
+                    Text(problem)
+                        .lineLimit(3)
+                        .accessibilityIdentifier("collection-problem")
+                    if library.folderIsMissing, model.userFolderSetup.canChoose {
+                        Button("Choose the folder…") { model.showsFolderSheet = true }
+                            .accessibilityIdentifier("collection-choose-folder")
+                    }
+                }
+                if let notice = library.notice {
+                    Text(notice)
+                        .lineLimit(3)
+                        .accessibilityIdentifier("collection-notice")
+                    Button("OK") { library.clearNotice() }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+        }
     }
 }
 

@@ -22,13 +22,19 @@ nonisolated struct AppPaths: Sendable {
     /// the installed app's store.
     static func systemFolders() -> (support: URL, caches: URL) {
         #if DEBUG
-        let name = "TCGCollection2-Debug"
+        let name = debugFolderName
         #else
         let name = "TCGCollection2"
         #endif
         return (URL.applicationSupportDirectory.appending(path: name, directoryHint: .isDirectory),
                 URL.cachesDirectory.appending(path: name, directoryHint: .isDirectory))
     }
+
+    /// The Debug build's folder name under Application Support and Caches.
+    static let debugFolderName = "TCGCollection2-Debug"
+
+    /// The user folder of a `-store <root>` run: `<root>/user`. Such a run never keeps user files anywhere else.
+    static func userTestRoot(_ root: URL) -> URL { root.appending(path: "user") }
 
     var catalogStore: URL { support.appending(path: "catalog.store") }
 

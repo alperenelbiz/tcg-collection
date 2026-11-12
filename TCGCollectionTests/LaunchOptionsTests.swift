@@ -18,6 +18,14 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-fixtures", "/tmp/f"]).fixtures?.path == "/tmp/f")
         #expect(LaunchOptions(arguments: ["app"]).fixtures == nil)
     }
+    @Test func parsesTheAskUserFolderFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-askUserFolder", "YES"]).askUserFolder)
+        #expect(!LaunchOptions(arguments: ["app", "-askUserFolder", "NO"]).askUserFolder)
+        #expect(!LaunchOptions(arguments: ["app"]).askUserFolder)
+    }
+    @Test func theUserTestRootIsInTheStoreRoot() {
+        #expect(AppPaths.userTestRoot(URL(fileURLWithPath: "/tmp/s")).path == "/tmp/s/user")
+    }
     @Test func parsesTheFixtureDelayFlag() {
         #expect(LaunchOptions(arguments: ["app", "-fixtureDelay", "1200"]).fixtureDelay == 1200)
         #expect(LaunchOptions(arguments: ["app"]).fixtureDelay == nil)

@@ -453,4 +453,56 @@ struct AppModelTests {
         #expect(await fakeCatalog.productCalls == 14)
         #expect(model.status == .idle("Catalog up to date · 14 sets are updated tomorrow · prices of 2026-01-02"))
     }
+
+    // MARK: - The user folder
+
+    /// `-store`: the collection is in `<root>/user`, made at launch with its settings file; no sheet; `start()` loads it.
+    @MainActor @Test func aStoreRootKeepsTheCollectionInItsUserFolder() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        try UserFiles.write(Data(#"{"version":1,"collection":[{"productID":5,"finish":"Normal","count":2}]}"#.utf8),
+                            to: user.appending(path: "riftbound.json"))
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(!model.needsUserFolder); #expect(model.library.folder == user)
+        #expect(FileManager.default.fileExists(atPath: user.appending(path: "settings.json").path))
+        await model.start()
+        #expect(model.library.rows(game: "riftbound").map(\.count) == [2])
+    }
+
+    /// A `-store` run keeps `<root>/user`: the sheet cannot move it anywhere, not even into the root.
+    @MainActor @Test func aFixedFolderIsNotChanged() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        await model.start()
+        await #expect(throws: UserFolderError.fixed) { try await model.useICloudDrive() }
+        await #expect(throws: UserFolderError.fixed) { try await model.useFolder(root.appending(path: "support")) }
+        #expect(model.library.folder == AppPaths.userTestRoot(root))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "icloud").path))
+    }
+
+    /// `-askUserFolder YES`: the sheet is needed; a folder outside the root is refused; "Use iCloud Drive" makes
+    /// `<root>/icloud/TCG Collection` with its settings file and keeps a bookmark that the next launch resolves.
+    @MainActor @Test func askingForTheFolderStaysInTheRoot() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES"])
+        #expect(model.needsUserFolder); #expect(model.library.folder == nil)
+        await model.start()
+        let outside = tempDir()
+        await #expect(throws: UserFolderError.outside(path: root.path)) { try await model.useFolder(outside) }
+        #expect(model.needsUserFolder)
+        #expect(!FileManager.default.fileExists(atPath: outside.appending(path: "settings.json").path))
+        let preferences = try #require(UserDefaults(suiteName: model.paths.support.appending(path: "preferences").path))
+        #expect(preferences.data(forKey: AppModel.userFolderBookmarkKey) == nil)
+
+        try await model.useICloudDrive()
+        let folder = root.appending(path: "icloud").appending(path: "TCG Collection")
+        #expect(!model.needsUserFolder); #expect(model.library.folder == folder)
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "settings.json").path))
+        model.library.setCount(1, game: "riftbound", key: .init(productID: 1, finish: "Normal"), name: "A")
+        await model.library.flush()
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "riftbound.json").path))
+        let bookmark = try #require(preferences.data(forKey: AppModel.userFolderBookmarkKey))
+        let next = UserFolder.setup(storeRoot: root, isDebugBuild: true, askUserFolder: true, bookmark: bookmark) { nil }
+        guard case .iCloud(let again) = next.choice else { Issue.record("next launch: \(next.choice)"); return }
+        #expect(again.resolvingSymlinksInPath().path == folder.resolvingSymlinksInPath().path)
+    }
 }

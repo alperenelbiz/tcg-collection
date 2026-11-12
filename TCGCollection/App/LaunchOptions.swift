@@ -15,6 +15,10 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-fixtureDelay <milliseconds>` (DEBUG): every fixture products answer waits this long, so a UI test can act
     /// during a sync.
     var fixtureDelay: Int?
+    /// `-askUserFolder YES` (DEBUG, with `-store`): the first-run folder sheet is shown although the run has a test root,
+    /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
+    /// it in a Release build and without `-store`.
+    var askUserFolder = false
 
     init(arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -30,6 +34,7 @@ nonisolated struct LaunchOptions: Sendable {
         catalogReport = value("-catalogReport") == "YES"
         fixtures = value("-fixtures").map { URL(fileURLWithPath: $0, isDirectory: true) }
         fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
+        askUserFolder = value("-askUserFolder") == "YES"
     }
 }
 

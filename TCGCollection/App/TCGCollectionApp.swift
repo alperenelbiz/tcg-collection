@@ -3,6 +3,10 @@ import SwiftUI
 @main
 struct TCGCollectionApp: App {
     @State private var model: AppModel?
+    @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+    #endif
 
     init() {
         // The unit tests run inside the app. There the app makes no model: no store is opened and
@@ -11,16 +15,10 @@ struct TCGCollectionApp: App {
         _model = State(initialValue: Self.makeModel(LaunchOptions(arguments: CommandLine.arguments)))
     }
 
-    #if DEBUG
-    private static let isDebugBuild = true
-    #else
-    private static let isDebugBuild = false
-    #endif
-
     /// The model on the network `LaunchNetwork.choose` picks. The real clients are made only when no `-fixtures` was
     /// given: a `-fixtures` run is on files, or it has no network at all (I3).
     private static func makeModel(_ options: LaunchOptions) -> AppModel {
-        let network = LaunchNetwork.choose(options, isDebugBuild: isDebugBuild)
+        let network = LaunchNetwork.choose(options, isDebugBuild: AppModel.isDebugBuild)
         if network == .internet {
             return AppModel(options: options, catalogClient: TCGCSVClient(), archiveClient: ArchiveClient(),
                             fetcher: URLSessionFetcher())
@@ -47,6 +45,9 @@ struct TCGCollectionApp: App {
                     .environment(model)
                     .preferredColorScheme(.dark)
                     .task {
+                        #if os(macOS)
+                        appDelegate.library = model.library
+                        #endif
                         // Every window calls it; the model runs the sync once, and a closing window does not stop it.
                         await model.start()
                         #if DEBUG
@@ -58,6 +59,16 @@ struct TCGCollectionApp: App {
                         await DebugSnapshot.runIfAsked(model.options)
                         #endif
                     }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // The iPhone: a change made just before the app goes away is written now. (The Mac waits in AppDelegate.)
+            if phase == .background, let library = model?.library { Task { await library.flush() } }
+        }
+        .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Collection Folder…") { model?.showsFolderSheet = true }
+                    .disabled(model == nil)
             }
         }
     }
@@ -76,3 +87,33 @@ struct TCGCollectionApp: App {
     }
     #endif
 }
+
+#if os(macOS)
+/// Quitting waits until every queued write of the user files is done (at most 10 s), so the last change reaches the file.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var library: UserLibrary?
+    /// True from the first answer to a `.terminateLater` until the app quits: it is answered once.
+    private var answered = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let library, library.hasPendingWork else { return .terminateNow }
+        answered = false
+        Task {
+            await library.flush()
+            answer(sender)
+        }
+        // A write that hangs (a coordinated write waiting for iCloud) must not keep the app from quitting.
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            answer(sender)
+        }
+        return .terminateLater
+    }
+
+    private func answer(_ sender: NSApplication) {
+        guard !answered else { return }
+        answered = true
+        sender.reply(toApplicationShouldTerminate: true)
+    }
+}
+#endif

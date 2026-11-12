@@ -124,6 +124,24 @@ final class AppModel {
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
 
+    /// What the user owns. Every screen that shows or changes the collection talks to it.
+    let library: UserLibrary
+    /// Where the user folder is and what the folder sheet may do in this run (`UserFolder.setup`).
+    let userFolderSetup: UserFolderSetup
+    /// True until a folder is chosen (a Release build's first run, or `-askUserFolder YES`): the folder sheet is open and
+    /// cannot be closed without a choice.
+    private(set) var needsUserFolder: Bool
+    /// "Collection Folder…" asked for the folder sheet.
+    var showsFolderSheet = false
+
+    #if DEBUG
+    nonisolated static let isDebugBuild = true
+    #else
+    nonisolated static let isDebugBuild = false
+    #endif
+    /// The chosen user folder, as a bookmark, in this run's preferences (with `-store`: the root's own).
+    nonisolated static let userFolderBookmarkKey = "userFolderBookmark"
+
     private static let gameKey = "game"
     /// Set by "Reset the catalog…" (`requestCatalogReset`); the next launch sets the store aside and clears it.
     private nonisolated static let resetKey = "resetCatalogOnNextLaunch"
@@ -168,6 +186,13 @@ final class AppModel {
             ? UserDefaults.standard
             : UserDefaults(suiteName: paths.support.appending(path: "preferences").path) ?? .standard
         self.defaults = defaults
+        let setup = UserFolder.setup(storeRoot: options.storeRoot, isDebugBuild: Self.isDebugBuild,
+                                     askUserFolder: options.askUserFolder,
+                                     bookmark: defaults.data(forKey: Self.userFolderBookmarkKey), iCloudDrive: Self.iCloudDrive)
+        userFolderSetup = setup
+        Self.prepareUserFolder(setup, defaults: defaults)
+        needsUserFolder = setup.choice == .none
+        library = UserLibrary(folder: setup.choice.url, watcher: FolderPresenter())
         let opened = Self.openStore(paths: paths, now: now(), defaults: defaults, availableCapacity: availableCapacity)
         store = opened.store
         storeFailure = opened.failure
@@ -267,14 +292,91 @@ final class AppModel {
         }
     }
 
-    /// Loads prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`). Once per app run:
-    /// every window calls it, and a later call waits for the same work.
+    // MARK: The user folder
+
+    /// iCloud Drive, for "Use iCloud Drive". A Debug build never looks for it: the call is not compiled there.
+    private nonisolated static func iCloudDrive() -> URL? {
+        #if DEBUG
+        return nil
+        #else
+        return UserFolder.iCloudDriveRoot()
+        #endif
+    }
+
+    /// At launch. A folder this app owns (`<root>/user`, the Debug folder) is made with its settings file; so is the
+    /// stand-in iCloud Drive `<root>/icloud` of `-askUserFolder`. A chosen folder gets access for this run and a fresh
+    /// bookmark when its bookmark is stale; it is never made here (Review Focus 3).
+    private static func prepareUserFolder(_ setup: UserFolderSetup, defaults: UserDefaults) {
+        let fm = FileManager.default
+        if setup.boundary != nil, let standIn = setup.iCloudDrive {
+            try? fm.createDirectory(at: standIn, withIntermediateDirectories: true)
+        }
+        switch setup.choice {
+        case .testRoot(let folder), .debugLocal(let folder):
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            try? UserFiles.writeSettingsIfMissing(in: folder)
+        case .iCloud(let folder), .picked(let folder):
+            _ = folder.startAccessingSecurityScopedResource()
+            if let data = defaults.data(forKey: userFolderBookmarkKey), UserFolder.url(fromBookmark: data)?.stale == true,
+               let fresh = try? UserFolder.bookmark(for: folder) {
+                defaults.set(fresh, forKey: userFolderBookmarkKey)
+            }
+        case .none:
+            break
+        }
+    }
+
+    /// "Use iCloud Drive": makes `TCG Collection` in iCloud Drive when it is not there (with `-askUserFolder`, in the stand-in
+    /// `<root>/icloud`) and keeps the collection in it. The only code that makes a folder in iCloud Drive; a Debug build
+    /// has no iCloud Drive (`userFolderSetup.iCloudDrive` is nil or the stand-in).
+    func useICloudDrive() async throws {
+        guard userFolderSetup.canChoose, let drive = userFolderSetup.iCloudDrive else { throw UserFolderError.fixed }
+        try await use(UserFolder.defaultICloudFolder(in: drive), making: true)
+    }
+
+    /// "Choose a folder…": keeps the collection in `folder` (it exists; nothing is copied or moved into it).
+    func useFolder(_ folder: URL) async throws {
+        try await use(folder, making: false)
+    }
+
+    /// Writes `settings.json` when the folder has none, keeps the bookmark, then the library loads the folder. A run whose
+    /// folder is fixed refuses; a Debug build refuses a folder outside its store root.
+    private func use(_ folder: URL, making: Bool) async throws {
+        guard userFolderSetup.canChoose else { throw UserFolderError.fixed }
+        if let boundary = userFolderSetup.boundary, !UserFolder.isInside(folder, boundary) {
+            throw UserFolderError.outside(path: boundary.path)
+        }
+        let accessing = folder.startAccessingSecurityScopedResource()
+        do {
+            let bookmark = try await Self.prepareChosenFolder(folder, making: making)
+            defaults.set(bookmark, forKey: Self.userFolderBookmarkKey)
+        } catch {
+            if accessing { folder.stopAccessingSecurityScopedResource() }
+            throw error
+        }
+        needsUserFolder = false
+        showsFolderSheet = false
+        await library.use(folder: folder)
+    }
+
+    /// Off the main actor: coordinated work in iCloud Drive can wait for the sync.
+    @concurrent private nonisolated static func prepareChosenFolder(_ folder: URL, making: Bool) async throws -> Data {
+        if making { try UserFiles.makeFolder(folder) }
+        try UserFiles.writeSettingsIfMissing(in: folder)
+        return try UserFolder.bookmark(for: folder)
+    }
+
+    // MARK: Launch
+
+    /// Loads the user folder, prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`). Once per app
+    /// run: every window calls it, and a later call waits for the same work.
     func start() async {
         if launchTask == nil { launchTask = Task { await launch() } }
         await launchTask?.value
     }
 
     private func launch() async {
+        await library.load()
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()
