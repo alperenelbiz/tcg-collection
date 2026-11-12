@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure rules over collection rows.
-nonisolated enum Collection {
+nonisolated enum CollectionRules {
     /// Sets the count of one printing. Count <= 0 removes the row; a new row is appended with no condition.
     static func setting(_ rows: [CollectionRow], count: Int, for key: PrintingKey, name: String) -> [CollectionRow] {
         var rows = rows
