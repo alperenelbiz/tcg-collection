@@ -73,6 +73,11 @@ struct TCGCollectionApp: App {
                 Button("Collection Folder…") { model?.showsFolderSheet = true }
                     .disabled(model == nil)
             }
+            CommandGroup(after: .newItem) {
+                Button("Import CSV…") { model?.chooseCSVFile() }
+                    .keyboardShortcut("i", modifiers: .command)
+                    .disabled(model == nil)
+            }
         }
     }
 

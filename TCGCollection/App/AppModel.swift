@@ -118,6 +118,8 @@ final class AppModel {
             // One line per change, so a background run can be followed in a log file.
             if status != oldValue { FileHandle.standardOutput.write(Data("status \(status)\n".utf8)) }
             #endif
+            // The next status replaces an import's summary.
+            if status != oldValue { statusNotice = nil }
         }
     }
     /// Goes up when a sync changed the store (also at every 20th finished set of the game on screen), so views search again.
@@ -144,6 +146,15 @@ final class AppModel {
     private(set) var needsUserFolder: Bool
     /// "Collection Folder…" asked for the folder sheet.
     var showsFolderSheet = false
+    /// "Import CSV…" asked for the system's file panel (`chooseCSVFile`).
+    var choosesCSVFile = false
+    /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
+    var importing: ImportModel?
+    /// Said once after an import: the status line shows it in place of `status` until the status changes (the next sync
+    /// line replaces it) or `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
+    private(set) var statusNotice: String?
+    @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    private static let noticeDuration = Duration.seconds(20)
 
     #if DEBUG
     nonisolated static let isDebugBuild = true
@@ -392,6 +403,53 @@ final class AppModel {
         return try UserFolder.bookmark(for: folder)
     }
 
+    // MARK: CSV import
+
+    /// "Import CSV…": opens the system's file panel. Not while a sheet of the window is open.
+    func chooseCSVFile() {
+        guard importing == nil, !needsUserFolder, !showsFolderSheet else { return }
+        choosesCSVFile = true
+    }
+
+    /// Reads the picked file (security-scoped, off the main thread; it is never written) and opens the import sheet on it.
+    func importCSV(from url: URL) async {
+        let name = url.lastPathComponent
+        do {
+            let data = try await Self.readFile(url)
+            importing = ImportModel(data: data, fileName: name, library: library, reader: reader,
+                                    catalogSettled: { [weak self] game in self?.catalogSettled(game: game) ?? false })
+        } catch {
+            importing = ImportModel(unreadable: error.localizedDescription, fileName: name, library: library, reader: reader)
+        }
+    }
+
+    /// The file panel gave no file: the import sheet says why.
+    func importFailed(_ error: any Error) {
+        importing = ImportModel(unreadable: error.localizedDescription, fileName: "CSV", library: library, reader: reader)
+    }
+
+    @concurrent private nonisolated static func readFile(_ url: URL) async throws -> Data {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        return try Data(contentsOf: url)
+    }
+
+    /// After Import: the sheet closes, the Collection shows the first imported game, and the status line says the summary
+    /// once (`statusNotice`).
+    func importApplied(_ applied: ImportModel.Applied) {
+        importing = nil
+        gameID = applied.gameID
+        screen = .collection
+        let text = "Imported: \(applied.summary)"
+        statusNotice = text
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.noticeDuration)
+            guard !Task.isCancelled, let self, self.statusNotice == text else { return }
+            self.statusNotice = nil
+        }
+    }
+
     // MARK: Launch
 
     /// Loads the user folder, prices and the Yu-Gi-Oh! index from disk, then syncs (not with `-offline YES`). Once per app
@@ -402,6 +460,10 @@ final class AppModel {
     }
 
     private func launch() async {
+        #if DEBUG
+        // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read.
+        if let file = options.launchImport(isDebugBuild: Self.isDebugBuild) { await importCSV(from: file) }
+        #endif
         await library.load()
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()

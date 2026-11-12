@@ -25,6 +25,16 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-screen collection|all-cards`: the sidebar selection of this launch, for tests and snapshots. Any other value is
     /// ignored (the stored selection is used).
     var screen: Screen?
+    /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
+    /// it through `launchImport`, which ignores it where it is not allowed.
+    var importCSV: URL?
+
+    /// The file of `-importCSV` when this run may open it: a Debug build with `-store`. Otherwise nil: the flag is ignored
+    /// (fails closed, as `-fixtures` does), so it never imports into the real collection.
+    func launchImport(isDebugBuild: Bool) -> URL? {
+        guard isDebugBuild, storeRoot != nil else { return nil }
+        return importCSV
+    }
 
     init(arguments: [String]) {
         func value(_ flag: String) -> String? {
@@ -43,6 +53,7 @@ nonisolated struct LaunchOptions: Sendable {
         writeDelay = value("-writeDelay").flatMap { Int($0) }
         askUserFolder = value("-askUserFolder") == "YES"
         screen = value("-screen").flatMap(Screen.init(rawValue:))
+        importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
     }
 }
 

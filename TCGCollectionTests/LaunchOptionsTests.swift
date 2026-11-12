@@ -59,6 +59,17 @@ struct LaunchOptionsTests {
         }
     }
 
+    /// `-importCSV <path>` is honoured only in a Debug build with `-store`; otherwise it is ignored (fails closed).
+    @Test func theImportFlagNeedsADebugBuildAndAStore() {
+        let withStore = LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-importCSV", "/tmp/c.csv"])
+        #expect(withStore.importCSV?.path == "/tmp/c.csv")
+        #expect(withStore.launchImport(isDebugBuild: true)?.path == "/tmp/c.csv")
+        #expect(withStore.launchImport(isDebugBuild: false) == nil)
+        let withoutStore = LaunchOptions(arguments: ["app", "-importCSV", "/tmp/c.csv"])
+        #expect(withoutStore.launchImport(isDebugBuild: true) == nil)
+        #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]).launchImport(isDebugBuild: true) == nil)
+    }
+
     #if DEBUG
     /// A Debug run without `-store` uses its own folders, never the installed app's store. (A Release build uses the
     /// installed app's folders: this test runs only in Debug.)

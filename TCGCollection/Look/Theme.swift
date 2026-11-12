@@ -41,6 +41,19 @@ nonisolated enum Theme {
     static let ruleSpacing: CGFloat = 14
     /// The square a sidebar row's outline icon is fitted into.
     static let sidebarIconSize: CGFloat = 16
+    /// The padding of a sheet's content.
+    static let sheetPadding: CGFloat = 24
+    /// The import sheet at its smallest, and the size it opens at.
+    static let importSheetMinWidth: CGFloat = 640
+    static let importSheetMinHeight: CGFloat = 520
+    static let importSheetIdealWidth: CGFloat = 720
+    static let importSheetIdealHeight: CGFloat = 600
+    /// A table in a sheet: the finish column, the number column (right-aligned) and the choice column.
+    static let tableFinishWidth: CGFloat = 120
+    static let tableNumberWidth: CGFloat = 72
+    static let tableChoiceWidth: CGFloat = 88
+    /// Between two rows of a table.
+    static let tableRowSpacing: CGFloat = 6
 
     // MARK: Type (the system face only; the window title is the system's)
 
@@ -48,6 +61,8 @@ nonisolated enum Theme {
     static let pageTitleFont = Font.system(size: 22, weight: .semibold)
     /// A sheet's title.
     static let sheetTitleFont = Font.system(size: 17, weight: .semibold)
+    /// A section of a sheet (a game in the import sheet).
+    static let sectionFont = Font.system(size: 13, weight: .semibold)
     /// A card name in the gallery, values, sentences.
     static let bodyFont = Font.system(size: 13)
     /// The line under a card name; a screen's totals line.

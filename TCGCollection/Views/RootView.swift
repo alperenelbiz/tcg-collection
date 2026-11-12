@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -9,6 +10,7 @@ struct RootView: View {
     @State private var collection = CollectionMemory()
 
     var body: some View {
+        @Bindable var model = model
         NavigationSplitView {
             Sidebar(screen: model.screen)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
@@ -35,6 +37,19 @@ struct RootView: View {
         .sheet(isPresented: Binding(get: { model.needsUserFolder || model.showsFolderSheet },
                                     set: { if !$0 { model.showsFolderSheet = false } })) {
             UserFolderSheet()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        // "Import CSV…" (the Collection's toolbar and empty state, File › Import CSV…). The picked file is read, never
+        // written; the system panel is not driven by the UI tests (they use `-importCSV`).
+        .fileImporter(isPresented: $model.choosesCSVFile, allowedContentTypes: [.commaSeparatedText]) { result in
+            switch result {
+            case .success(let url): Task { await model.importCSV(from: url) }
+            case .failure(let error): model.importFailed(error)
+            }
+        }
+        .sheet(item: $model.importing) { importModel in
+            ImportSheet(importModel: importModel)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }
@@ -122,7 +137,7 @@ private struct Sidebar: View {
             VStack(alignment: .leading, spacing: 0) {
                 // On the Collection screen these lines are in the screen itself.
                 if model.screen != .collection { LibraryLines(inSidebar: true) }
-                StatusLine(status: model.status)
+                StatusLine(status: model.status, notice: model.statusNotice)
             }
         }
         #if DEBUG && os(macOS)
@@ -218,14 +233,16 @@ struct LibraryLines: View {
     }
 }
 
-/// One or two lines, 11 pt `faint`; a long text is cut, it never makes the sidebar wider.
+/// One or two lines, 11 pt `faint`; a long text is cut, it never makes the sidebar wider. An import's summary (`notice`)
+/// stands in for the status until the status changes.
 private struct StatusLine: View {
     let status: Status
+    let notice: String?
 
     var body: some View {
         HStack(spacing: 6) {
-            if status.isSyncing { ProgressView().controlSize(.small) }
-            Text(status.text)
+            if notice == nil, status.isSyncing { ProgressView().controlSize(.small) }
+            Text(notice ?? status.text)
                 .lineLimit(2)
                 .truncationMode(.tail)
                 .accessibilityIdentifier("status-line")

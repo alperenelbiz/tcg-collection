@@ -575,6 +575,34 @@ struct AppModelTests {
         guard case .iCloud(let again) = next.choice else { Issue.record("next launch: \(next.choice)"); return }
         #expect(again.resolvingSymlinksInPath().path == folder.resolvingSymlinksInPath().path)
     }
+
+    // MARK: CSV import (phase 2B task 7)
+
+    /// After an import the Collection shows the first imported game, and the status line says the summary until the next
+    /// status (here: the launch's offline line) replaces it; the status itself is not lost.
+    @MainActor @Test func anImportSaysItsSummaryOnceInTheStatusLine() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "all-cards"])
+        model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
+        model.importApplied(.init(gameID: "yu-gi-oh", summary: "2 new"))
+        #expect(model.statusNotice == "Imported: 2 new")
+        #expect(model.gameID == "yu-gi-oh" && model.screen == .collection && model.importing == nil)
+        await model.start()
+        #expect(model.statusNotice == nil)
+        #expect(model.status == .idle("Offline · no prices yet"))
+    }
+
+    /// `-importCSV <path>` with `-store`: the launch opens the import of that file (DEBUG; the unit tests are Debug).
+    @MainActor @Test func theImportFlagOpensTheImportAtLaunch() async throws {
+        let file = fixtureURL("collection-riftbound.csv")
+        let launched = model(["app", "-store", tempRoot().path, "-offline", "YES", "-importCSV", file.path])
+        await launched.start()
+        #expect(launched.importing?.fileName == "collection-riftbound.csv")
+        let missing = model(["app", "-store", tempRoot().path, "-offline", "YES", "-importCSV", "/nonexistent/c.csv"])
+        await missing.start()
+        await missing.importing?.prepare()
+        guard case .failed(let text)? = missing.importing?.state else { Issue.record("no failed import"); return }
+        #expect(text.hasPrefix("This file could not be read ("))
+    }
 }
 
 /// An archive client whose first download waits until `release()`: a test can look at the model during the price step.

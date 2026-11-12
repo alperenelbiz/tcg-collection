@@ -88,7 +88,12 @@ class UITestCase: XCTestCase {
     /// A picture of the app's window, kept in the result bundle as the attachment `name`.
     func shot(_ name: String) {
         guard let app else { return XCTFail("shot(\"\(name)\") before launch()") }
-        let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        shot(name, of: app.windows.firstMatch)
+    }
+
+    /// A picture of one element (a sheet, which can reach past the window's edge), kept as the attachment `name`.
+    func shot(_ name: String, of element: XCUIElement) {
+        let attachment = XCTAttachment(screenshot: element.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)

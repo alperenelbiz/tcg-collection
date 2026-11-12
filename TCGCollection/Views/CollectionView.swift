@@ -123,6 +123,7 @@ struct CollectionView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
+                    importButton
                     filterMenu
                     sortMenu
                 }
@@ -169,7 +170,8 @@ struct CollectionView: View {
             Color.clear
         case .empty:
             EmptyMessage(sentence: "No cards in this collection yet.") {
-                // Task 7 puts "Import CSV…" (`collection-import`) here, as the first of the two buttons.
+                Button("Import CSV…") { model.chooseCSVFile() }
+                    .accessibilityIdentifier("collection-empty-import")
                 Button("Search a card") { model.screen = .allCards }
                     .accessibilityIdentifier("collection-search-catalog")
             }
@@ -232,6 +234,16 @@ struct CollectionView: View {
     }
 
     // MARK: Toolbar
+
+    /// "Import CSV…" as an icon (its name is the help text and the accessibility label), so the toolbar keeps room for
+    /// the two menus and the search field.
+    private var importButton: some View {
+        Button { model.chooseCSVFile() } label: {
+            Label("Import CSV…", systemImage: "square.and.arrow.down")
+        }
+        .help("Import CSV…")
+        .accessibilityIdentifier("collection-import")
+    }
 
     /// One menu for the four filters, each a submenu: five menus and a search field do not fit the toolbar.
     private var filterMenu: some View {

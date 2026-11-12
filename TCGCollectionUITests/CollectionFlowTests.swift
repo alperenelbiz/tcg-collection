@@ -155,7 +155,11 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(screen.descendants(matching: .staticText).matching(empty).firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(collectionCells(app).count, 0)
         XCTAssertTrue(element(app, "collection-search-catalog").exists)
-        XCTAssertFalse(element(app, "collection-import").exists, "Import CSV… shows before Task 7 wires it")
+        // "Import CSV…" is the empty state's first button, and in the toolbar (an icon).
+        let importButton = element(app, "collection-empty-import")
+        XCTAssertTrue(importButton.exists && importButton.isHittable)
+        XCTAssertLessThan(importButton.frame.minY, element(app, "collection-search-catalog").frame.minY, "Import CSV… is not first")
+        XCTAssertTrue(element(app, "collection-import").isHittable)
         XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("0 copies · 0 printings") }, app.windows.firstMatch.title)
         shot("collection-11-empty-again")
         element(app, "collection-search-catalog").click()      // "Search a card" switches the sidebar to All cards
@@ -235,6 +239,10 @@ final class CollectionFlowTests: UITestCase {
         search.typeText("rune")
         XCTAssertTrue(waitUntil { shown() == ids(["722282-Foil", "722282-Normal"]) }, "\(shown())")
         XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("4 of 8 copies · 2 of 5 printings") }, app.windows.firstMatch.title)
+        // Task 7: with the search field active, Import CSV…, Filter and Sort still fit the toolbar (no overflow).
+        for item in ["collection-import", "collection-filter", "collection-sort"] {
+            XCTAssertTrue(element(app, item).isHittable, "\(item) is not in the toolbar while searching")
+        }
         shot("collection-17-search-rune")
         // The search text survives a visit to All cards, which has a search field of its own.
         element(app, "sidebar-all-cards").click()
@@ -455,7 +463,198 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertEqual(app.staticTexts.matching(gone).count, 0)
     }
 
+    // MARK: CSV import (phase 2B task 7)
+
+    /// The fixture `collection-riftbound.csv` against the two rows of the Task 6 test: New 2 (722282 +4, 721337 +3),
+    /// Count changes 1 (721334 Foil 1 → 3), In your collection, not in this file 1 ("Only Here", product 555, ×2). The
+    /// fixture catalog has no plain basic rune, so lines 5 (900001) and 6 (999999) are both "not in the catalog". Import
+    /// writes the new and changed rows and keeps "Only Here"; the Collection then shows Riftbound with the four printings,
+    /// and the status line says the summary.
+    func testImportShowsTheComparisonAndAppliesIt() throws {
+        let app = try launchImport("collection-riftbound.csv") { try self.writeTask6Rows($0) }
+        let sheet = try waitForTheComparison(app)
+        XCTAssertEqual(text(element(app, "import-title")), "Import collection-riftbound.csv")
+        XCTAssertEqual(text(element(app, "import-new-riftbound")), "New · 2")
+        XCTAssertEqual(text(element(app, "import-changed-riftbound")), "Count changes · 1")
+        XCTAssertEqual(text(element(app, "import-missing-riftbound")), "In your collection, not in this file · 1")
+        XCTAssertEqual(text(element(app, "import-summary")), "2 new, 1 changed, 1 not in the file (kept)")
+        XCTAssertEqual(text(element(app, "import-count-722282-Normal")), "+4")
+        XCTAssertEqual(text(element(app, "import-count-721337-Normal")), "+3")
+        XCTAssertEqual(text(element(app, "import-count-721334-Foil")), "1 → 3")
+        XCTAssertEqual(text(element(app, "import-count-555-Normal")), "×2")
+        XCTAssertFalse(isOn(element(app, "import-remove-555-Normal")), "Remove is on by default")
+        XCTAssertEqual(element(app, "import-missing-all-riftbound").label, "Remove all")
+        // The numbers are right-aligned in one column.
+        let counts = ["722282-Normal", "721337-Normal", "721334-Foil", "555-Normal"].map { element(app, "import-count-\($0)").frame.maxX }
+        XCTAssertLessThanOrEqual((counts.max() ?? 0) - (counts.min() ?? 0), 1, "the counts are not right-aligned: \(counts)")
+        XCTAssertFalse(element(app, "import-skipped-line-5").exists, "Not imported is open at first")
+        XCTAssertTrue(element(app, "import-apply").isEnabled)
+        XCTAssertTrue(waitUntilSynced(app))                     // the status line is the sync's before the import
+        shot("import-01-comparison", of: sheet)
+
+        element(app, "import-skipped").click()
+        let line5 = element(app, "import-skipped-line-5"), line6 = element(app, "import-skipped-line-6")
+        XCTAssertTrue(line5.waitForExistence(timeout: 5))
+        // One static text per line (its parts combined): "Line 5, Calm Rune, not in the catalog".
+        XCTAssertTrue(text(line5).contains("Calm Rune") && text(line5).contains("not in the catalog"), text(line5))
+        XCTAssertTrue(text(line6).contains("Not In The Catalog") && text(line6).contains("not in the catalog"), text(line6))
+        shot("import-02-not-imported-open", of: sheet)
+
+        element(app, "import-apply").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        let cells = collectionCells(app)
+        let four = ["collection-cell-555-Normal", "collection-cell-721334-Foil", "collection-cell-721337-Normal", "collection-cell-722282-Normal"]
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == four }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("12 copies · 4 printings") }, app.windows.firstMatch.title)
+        XCTAssertTrue(waitUntil { self.element(app, "collection-cell-555-Normal").label == "Only Here, ×2, Normal, no price" },
+                      element(app, "collection-cell-555-Normal").label)
+        XCTAssertTrue(element(app, "collection-cell-721334-Foil").label.hasPrefix("Dockside Lock-Up, ×3, Foil, "))
+        XCTAssertEqual(text(app.staticTexts["status-line"]), "Imported: 2 new, 1 changed, 1 not in the file (kept)")
+        XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound")) == Self.importedRows(keepingOnlyHere: true) },
+                      "\(String(describing: try? storedCollection(game: "riftbound")))")
+        shot("import-03-collection-after-import")
+    }
+
+    /// The same start; "Remove" on "Only Here" (the header control then says "Keep all", and turns it off and on again).
+    /// Import removes that row and nothing else.
+    func testImportRemovesOnlyWhatIsChosen() throws {
+        let app = try launchImport("collection-riftbound.csv") { try self.writeTask6Rows($0) }
+        let sheet = try waitForTheComparison(app)
+        let remove = element(app, "import-remove-555-Normal"), all = element(app, "import-missing-all-riftbound")
+        remove.click()
+        XCTAssertTrue(waitUntil { self.isOn(remove) }, "Remove did not switch on")
+        XCTAssertEqual(text(element(app, "import-summary")), "2 new, 1 changed, 1 not in the file (removed)")
+        XCTAssertTrue(waitUntil { all.label == "Keep all" }, all.label)
+        all.click()                                              // Keep all
+        XCTAssertTrue(waitUntil { !self.isOn(remove) && all.label == "Remove all" })
+        XCTAssertEqual(text(element(app, "import-summary")), "2 new, 1 changed, 1 not in the file (kept)")
+        all.click()                                              // Remove all
+        XCTAssertTrue(waitUntil { self.isOn(remove) && all.label == "Keep all" })
+        XCTAssertTrue(waitUntilSynced(app))
+        shot("import-04-remove-chosen", of: sheet)
+
+        element(app, "import-apply").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        let three = ["collection-cell-721334-Foil", "collection-cell-721337-Normal", "collection-cell-722282-Normal"]
+        XCTAssertTrue(waitUntil { self.identifiers(self.collectionCells(app)) == three }, "\(identifiers(collectionCells(app)))")
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("10 copies · 3 printings") }, app.windows.firstMatch.title)
+        XCTAssertTrue(element(app, "collection-cell-721334-Foil").label.hasPrefix("Dockside Lock-Up, ×3, Foil, "))
+        XCTAssertEqual(text(app.staticTexts["status-line"]), "Imported: 2 new, 1 changed, 1 not in the file (removed)")
+        XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound")) == Self.importedRows(keepingOnlyHere: false) },
+                      "\(String(describing: try? storedCollection(game: "riftbound")))")
+        shot("import-05-collection-after-removal")
+    }
+
+    /// Cancel writes nothing: the file is byte for byte what it was, after Cmd+Q (which waits for queued writes) and
+    /// after a second launch without the import.
+    func testImportCancelChangesNothing() throws {
+        var before = Data()
+        let app = try launchImport("collection-riftbound.csv") { root in
+            try self.writeTask6Rows(root)
+            before = try Data(contentsOf: root.appending(path: "user/riftbound.json"))
+        }
+        let sheet = try waitForTheComparison(app)
+        element(app, "import-cancel").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        let two = ["collection-cell-555-Normal", "collection-cell-721334-Foil"]
+        XCTAssertTrue(waitUntil { self.identifiers(self.collectionCells(app)) == two }, "\(identifiers(collectionCells(app)))")
+        quit(app)
+        let file = try XCTUnwrap(root).appending(path: "user/riftbound.json")
+        XCTAssertEqual(try Data(contentsOf: file), before, "Cancel changed the file")
+
+        app.launchArguments = withoutImport(app.launchArguments)
+        app.launch()
+        XCTAssertTrue(waitUntil(timeout: 20) { self.identifiers(self.collectionCells(app)) == two }, "\(identifiers(collectionCells(app)))")
+        XCTAssertFalse(sheet.exists)
+        XCTAssertEqual(element(app, "collection-cell-721334-Foil").label.hasPrefix("Dockside Lock-Up, ×1, Foil"), true)
+        XCTAssertEqual(try Data(contentsOf: file), before)
+    }
+
+    /// A text file that is not an export: one sentence and Close, and the collection is as it was.
+    func testImportOfAFileThatIsNotAnExport() throws {
+        let app = try launchImport("not-an-export.txt") { try self.writeTask6Rows($0) }
+        let sheet = element(app, "import-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20))
+        let sentence = element(app, "import-sentence")
+        XCTAssertTrue(waitUntil { sentence.exists && self.text(sentence) == "This is not a TCGplayer collection export." },
+                      sheet.debugDescription)
+        XCTAssertEqual(text(element(app, "import-title")), "Import not-an-export.txt")
+        XCTAssertTrue(element(app, "import-close").exists)
+        XCTAssertFalse(element(app, "import-apply").exists)
+        XCTAssertFalse(element(app, "import-cancel").exists)
+        shot("import-06-not-an-export", of: sheet)
+        element(app, "import-close").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "Close did not close the sheet")
+        let two = ["collection-cell-555-Normal", "collection-cell-721334-Foil"]
+        XCTAssertTrue(waitUntil { self.identifiers(self.collectionCells(app)) == two }, "\(identifiers(collectionCells(app)))")
+    }
+
+    /// The dispatch's ruling: while Riftbound's catalog step runs (`-fixtureDelay 2000`: 14 sets, 4 at a time), the sheet
+    /// says the catalog is still downloading and offers only Close, not a comparison of lines it cannot know yet. When the
+    /// step has ended, the comparison comes without a new import, with Import.
+    func testImportWaitsForTheCatalog() throws {
+        let app = try launchImport("collection-riftbound.csv", extra: ["-fixtureDelay", "2000"]) { try self.writeTask6Rows($0) }
+        let sheet = element(app, "import-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20))
+        let blocked = element(app, "import-blocked-riftbound")
+        XCTAssertTrue(blocked.waitForExistence(timeout: 10), sheet.debugDescription)
+        XCTAssertEqual(text(blocked), "The catalog is still downloading. This game can be imported when it is ready.")
+        XCTAssertEqual(text(element(app, "import-summary")), "Nothing in this file can be imported now.")
+        XCTAssertFalse(element(app, "import-new-riftbound").exists)
+        XCTAssertFalse(element(app, "import-apply").exists)
+        XCTAssertFalse(element(app, "import-skipped").exists, "lines of a catalog that is not ready are listed as unknown")
+        XCTAssertTrue(element(app, "import-close").exists)
+        shot("import-07-catalog-downloading", of: sheet)
+
+        XCTAssertTrue(element(app, "import-new-riftbound").waitForExistence(timeout: 60), "the comparison did not come")
+        XCTAssertFalse(blocked.exists)
+        XCTAssertEqual(text(element(app, "import-summary")), "2 new, 1 changed, 1 not in the file (kept)")
+        XCTAssertTrue(element(app, "import-apply").isEnabled)
+    }
+
     // MARK: Helpers
+
+    /// Launches on the Collection with `-importCSV <Fixtures>/<file>`, after `prepare` has written into the fresh root.
+    private func launchImport(_ file: String, extra: [String] = [], prepare: (URL) throws -> Void) throws -> XCUIApplication {
+        let path = Self.fixturesDirectory.appending(path: file).path
+        return try launch(game: "riftbound", extra: ["-screen", "collection", "-importCSV", path] + extra, prepare: prepare)
+    }
+
+    /// The two rows of the Task 6 test: Dockside Lock-Up Foil ×1, and "Only Here" (product 555, not in the catalog) ×2.
+    private func writeTask6Rows(_ root: URL) throws {
+        try writeCollection([StoredRow(productID: 721334, finish: "Foil", count: 1, name: "Dockside Lock-Up"),
+                             StoredRow(productID: 555, finish: "Normal", count: 2, condition: "Mint", name: "Only Here")],
+                            game: "riftbound", in: root)
+    }
+
+    /// The file after importing `collection-riftbound.csv` onto `writeTask6Rows`: the changed row keeps its place, new rows
+    /// follow in the comparison's order.
+    private static func importedRows(keepingOnlyHere: Bool) -> [StoredRow] {
+        var rows = [StoredRow(productID: 721334, finish: "Foil", count: 3, condition: "Near Mint, Lightly Played", name: "Dockside Lock-Up")]
+        if keepingOnlyHere { rows.append(StoredRow(productID: 555, finish: "Normal", count: 2, condition: "Mint", name: "Only Here")) }
+        rows.append(StoredRow(productID: 722282, finish: "Normal", count: 4, condition: "Near Mint", name: "Calm Rune (R02a)"))
+        rows.append(StoredRow(productID: 721337, finish: "Normal", count: 3, condition: "Near Mint", name: "Kai'Sa, Rebel"))
+        return rows
+    }
+
+    /// Waits for the sheet and for Riftbound's groups (they come once the fixture catalog's Riftbound step has ended).
+    private func waitForTheComparison(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws -> XCUIElement {
+        let sheet = element(app, "import-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20), "no import sheet", file: file, line: line)
+        XCTAssertTrue(element(app, "import-new-riftbound").waitForExistence(timeout: 40), sheet.debugDescription, file: file, line: line)
+        return sheet
+    }
+
+    /// A checkbox's state: its value is 1 when it is on.
+    private func isOn(_ checkbox: XCUIElement) -> Bool {
+        (checkbox.value as? NSNumber)?.intValue == 1 || (checkbox.value as? String) == "1"
+    }
+
+    /// The launch arguments without `-importCSV` and its value.
+    private func withoutImport(_ arguments: [String]) -> [String] {
+        guard let i = arguments.firstIndex(of: "-importCSV"), i + 1 < arguments.count else { return arguments }
+        return Array(arguments[..<i] + arguments[(i + 2)...])
+    }
 
     /// Picks `item` in the Sort menu.
     private func sort(_ app: XCUIApplication, _ item: String) {
