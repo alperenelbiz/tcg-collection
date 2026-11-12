@@ -5,7 +5,20 @@ nonisolated enum CardName {
     /// `[1st Edition]`. A group whose text is in `game.keptBrackets` (any case) survives wherever it
     /// stands in the run, once, at the end of the name. Removal stops when the rest is in `game.wholeNames`.
     /// A name that is only a bracket, or has a bracket in the middle, stays whole.
-    static func base(_ productName: String, game: GameDefinition) -> String {
+    ///
+    /// Then, when a word of `cardType` (split at spaces and `/`, any case) is a `typeSuffixes` word of the game and the
+    /// name does not end with that bracket (any case) yet, the bracket is added: a Skill printing is a card of its own (A5).
+    static func base(_ productName: String, game: GameDefinition, cardType: String) -> String {
+        var name = withoutBrackets(productName, game: game)
+        let words = cardType.split(whereSeparator: { $0 == " " || $0 == "/" }).map { $0.lowercased() }
+        for suffix in game.typeSuffixes where words.contains(suffix.typeWord.lowercased()) {
+            if !name.lowercased().hasSuffix("(\(suffix.bracket.lowercased()))") { name += " (\(suffix.bracket))" }
+        }
+        return name
+    }
+
+    /// The bracket rule alone, without the type suffix.
+    static func withoutBrackets(_ productName: String, game: GameDefinition) -> String {
         var name = productName.trimmingCharacters(in: .whitespacesAndNewlines)
         let kept = game.keptBrackets.map { $0.lowercased() }
         var keptGroup: String?

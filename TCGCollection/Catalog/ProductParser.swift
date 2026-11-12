@@ -56,7 +56,7 @@ nonisolated enum ProductParser {
                 dropped += 1
                 continue
             }
-            let cardName = CardName.base(product.name, game: game)
+            let cardName = CardName.base(product.name, game: game, cardType: cardType)
             cards.append(ProductRecord(
                 productID: product.productId, gameID: game.id, groupID: product.groupId,
                 name: product.name, cardName: cardName, searchKey: CardName.searchKey(cardName),

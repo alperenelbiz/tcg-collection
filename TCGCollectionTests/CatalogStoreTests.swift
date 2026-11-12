@@ -204,4 +204,17 @@ struct CatalogStoreTests {
         #expect(try await s.progress(game: "riftbound") == SetProgress(total: 0, fetched: 0, failed: 0))
         #expect(try await s.search(game: "riftbound", text: "", filter: .init(), limit: 5).isEmpty)
     }
+
+    @Test func historyIsDeleted() async throws {
+        let store = try await filledStore(); try await store.deleteHistory()
+        #expect(try await store.historyCount() == 0)
+    }
+    @Test func removeSetsDeletesTheRowsAndTheirProducts() async throws {
+        let store = try await filledStore()
+        try await store.removeSets([24819, 999_999])
+        #expect(try await store.sets(game: "riftbound").map(\.groupID).contains(24819) == false)
+        #expect(try await store.search(game: "riftbound", text: "", filter: .init(groupID: 24819), limit: 10).isEmpty)
+        #expect(try await store.sets(game: "riftbound").count == 13)
+        #expect(try await store.search(game: "magic-the-gathering", text: "", filter: .init(), limit: 10).isEmpty == false)
+    }
 }

@@ -77,10 +77,11 @@ actor CatalogSync {
                 failedSetLists += 1
                 continue
             }
-            // The progress line counts the whole game, so a resumed run continues where the last one stopped:
-            // `done` is the sets that have products (from earlier runs and this one), `total` every set of the game.
-            var done = plan.withProducts, gameFailed = 0
+            // The progress line counts the whole game: `total` is every set of the game that it keeps, `done` is the
+            // sets that are not due any more in this run (B11), so it moves during a re-fetch too.
+            var stillDue = plan.due.count, gameFailed = 0
             let total = plan.total
+            if plan.due.isEmpty { progress(SyncProgress(gameID: game.id, done: total, total: total, failed: 0)) }
             // At most `maxConcurrent` child tasks are alive: a new one starts when one ends.
             // Fetch and parse run in the children; the store is written here, one set at a time.
             // A cancelled group (the sync's task was cancelled) starts no new child.
@@ -107,13 +108,13 @@ actor CatalogSync {
                         fetched += 1
                         if plan.neverFetched.contains(groupID) {
                             newSets[game.id, default: 0] += 1
-                            done += 1                       // a set fetched again is in `withProducts` already
                         }
                     } else {
                         failed += 1
                         gameFailed += 1
                     }
-                    progress(SyncProgress(gameID: game.id, done: done, total: total, failed: gameFailed))
+                    stillDue -= 1
+                    progress(SyncProgress(gameID: game.id, done: total - stillDue, total: total, failed: gameFailed))
                     startNext()
                 }
             }
@@ -122,17 +123,20 @@ actor CatalogSync {
     }
 
     /// Fetches and stores the set list of one game. Nil when that fails.
-    /// `total` is every set of the game; `withProducts` the sets fetched in an earlier run.
+    /// `total` is every set of the game that it keeps. Sets the game excludes (A6) are not stored, and removed when an
+    /// earlier rules version stored them: removing is not a fetch, so it happens on any day.
     private func plan(for game: GameDefinition, now: Date, rebuild: Bool) async
-        -> (due: [Int], neverFetched: Set<Int>, total: Int, withProducts: Int)? {
+        -> (due: [Int], neverFetched: Set<Int>, total: Int)? {
         do {
             let body = try await client.groups(category: game.categoryID)
-            try await store.upsertSets(try ProductParser.sets(body, game: game))
+            let listed = try ProductParser.sets(body, game: game)
+            try await store.removeSets(listed.filter { game.excludesSet(named: $0.name) }.map(\.groupID))
+            try await store.upsertSets(listed.filter { !game.excludesSet(named: $0.name) })
             let sets = try await store.sets(game: game.id)
             let dates = try await store.fetchDates(game: game.id)
             let versions = try await store.rulesVersions(game: game.id)
             let due = SyncPlan.due(sets: sets, fetchDates: dates, rulesVersions: versions, now: now, rebuild: rebuild)
-            return (due, Set(due.filter { dates[$0] == nil }), sets.count, dates.count)
+            return (due, Set(due.filter { dates[$0] == nil }), sets.count)
         } catch {
             return nil
         }

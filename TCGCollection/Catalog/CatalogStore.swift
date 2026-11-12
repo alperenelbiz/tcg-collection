@@ -259,6 +259,20 @@ actor CatalogStore: ModelActor {
         try modelContext.save()
     }
 
+    /// Removes the set rows and the products of these sets. A group id the store does not hold is ignored.
+    func removeSets(_ groupIDs: [Int]) throws {
+        for groupID in groupIDs {
+            try modelContext.delete(model: CatalogProduct.self, where: #Predicate { $0.groupID == groupID })
+            try modelContext.delete(model: CatalogSet.self, where: #Predicate { $0.groupID == groupID })
+        }
+        try modelContext.save()
+    }
+
+    /// Deletes the change history of the store. Nothing reads it; a full re-fetch writes about 12 MB of it (B12).
+    func deleteHistory() throws {
+        try modelContext.deleteHistory(HistoryDescriptor<DefaultHistoryTransaction>())
+    }
+
     /// Sets `failed`; an existing `fetchedAt` stays.
     func markFailed(_ groupID: Int) throws {
         guard let row = try setRow(groupID) else { return }

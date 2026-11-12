@@ -5,7 +5,7 @@ import Testing
 
 func product(id: Int = 1, game: String = "riftbound", groupID: Int = 1, name: String = "Card", number: String = "",
              rarity: String = "", cardType: String = "", fields: [String: String] = [:]) -> ProductRecord {
-    let cardName = CardName.base(name, game: Games.game(game)!)
+    let cardName = CardName.base(name, game: Games.game(game)!, cardType: cardType)
     return ProductRecord(productID: id, gameID: game, groupID: groupID, name: name, cardName: cardName,
                          searchKey: CardName.searchKey(cardName), number: number, rarity: rarity,
                          cardType: cardType, typeFacets: [], rulesText: "", url: "", fields: fields)
@@ -67,6 +67,8 @@ actor FakeCatalog: TCGCSVFetching {
     private var started = 0
     private var running = 0
     private(set) var productCalls = 0
+    /// The groups whose products were requested, in the order of the calls.
+    private(set) var productGroups: [Int] = []
     private(set) var maxConcurrent = 0
     private(set) var groupCalls = 0
     private var groupsFail = false
@@ -79,7 +81,7 @@ actor FakeCatalog: TCGCSVFetching {
     }
 
     func failEveryCall(after count: Int?) { failAfter = count; started = 0 }
-    func resetCounts() { productCalls = 0; started = 0; maxConcurrent = 0 }
+    func resetCounts() { productCalls = 0; productGroups = []; started = 0; maxConcurrent = 0 }
     func setBody(_ data: Data, forGroup group: Int) { bodies[group] = data }
     func failGroups(_ fail: Bool) { groupsFail = fail }
 
@@ -92,6 +94,7 @@ actor FakeCatalog: TCGCSVFetching {
 
     func products(category: Int, group: Int) async throws -> Data {
         productCalls += 1
+        productGroups.append(group)
         started += 1
         let index = started
         running += 1
@@ -124,6 +127,11 @@ actor FakeArchive: ArchiveFetching {
 }
 
 extension CatalogStore {
+    /// Test only: how many transactions the store's change history holds.
+    func historyCount() throws -> Int {
+        try modelContext.fetchHistory(HistoryDescriptor<DefaultHistoryTransaction>()).count
+    }
+
     /// True when this store's work runs on the main thread. It must never do (the views call it from the main actor).
     func runsOnMainThread() -> Bool { Thread.isMainThread }
 }

@@ -122,8 +122,8 @@ struct CatalogSyncTests {
         await rig.fake.failEveryCall(after: 5)                                      // "the network drops"
         let first = await rig.run()
         #expect(first.fetched == 5 && first.failed == 9)
-        // I7: the progress line counts the whole game: sets with products / all sets of the game.
-        #expect(rig.progressLog.last == SyncProgress(gameID: "riftbound", done: 5, total: 14, failed: 9))
+        // B11: the progress line counts the sets of the game that are not due any more in this run, failed ones too.
+        #expect(rig.progressLog.last == SyncProgress(gameID: "riftbound", done: 14, total: 14, failed: 9))
         let firstRunEvents = rig.progressLog.all.count
         await rig.fake.failEveryCall(after: nil); await rig.fake.resetCounts()
         let second = await rig.run()
@@ -183,5 +183,41 @@ struct CatalogSyncTests {
         let most = await rig.fake.maxConcurrent
         #expect(most <= 4)
         #expect(most > 1)                                                           // the test would pass for a serial run too
+    }
+
+    @Test func anExcludedSetIsNeverFetchedAndIsRemoved() async throws {           // A6, B10
+        let magic = Games.game("magic-the-gathering")!
+        let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
+        let store = try CatalogStore(url: url)
+        let body = Data(#"{"success":true,"errors":[],"results":[{"groupId":24684,"name":"Reality Fracture","abbreviation":"RF","publishedOn":"2026-10-02T00:00:00","categoryId":1},{"groupId":24690,"name":"Art Series: The Hobbit","abbreviation":"AH","publishedOn":"2026-10-02T00:00:00","categoryId":1}]}"#.utf8)
+        let fake = FakeCatalog(groups: body, products: try fixture("products-1.json"), category: 1)
+        // An earlier rules version stored the Art Series set with a product.
+        try await store.upsertSets([SetRecord(groupID: 24690, gameID: magic.id, name: "Art Series: The Hobbit", abbreviation: "AH", publishedOn: nil)])
+        try await store.replaceProducts(of: 24690, with: [product(id: 7, game: magic.id, groupID: 24690, name: "Smaug", number: "1", rarity: "M", cardType: "Creature")], at: .now)
+        let sync = CatalogSync(store: store, client: fake)
+        let now = TCGDate.date("2026-11-11T10:00:00")!
+        let result = await sync.run(games: [magic], now: now, rebuild: false) { _ in }
+        #expect(await fake.productGroups == [24684]); #expect(result.fetched == 1)
+        #expect(try await store.sets(game: "magic-the-gathering").map(\.groupID) == [24684])
+        #expect(try await store.search(game: "magic-the-gathering", text: "", filter: .init(groupID: 24690), limit: 10).isEmpty)
+    }
+
+    @Test func progressMovesDuringAReFetch() async throws {                       // B11
+        let rig = try await Rig()
+        _ = await rig.run()
+        try await rig.store.setRulesVersion(1, game: "riftbound")
+        let before = rig.progressLog.all.count
+        _ = await rig.run(at: rig.now.addingTimeInterval(86_400))
+        let log = Array(rig.progressLog.all.dropFirst(before))
+        #expect(log.first?.done == 1); #expect(log.last == SyncProgress(gameID: "riftbound", done: 14, total: 14, failed: 0))
+        #expect(log.map(\.done) == log.map(\.done).sorted()); #expect(log.count == 14)
+    }
+
+    @Test func aRunWithNothingDueReportsAllDoneOnce() async throws {              // B11
+        let rig = try await Rig()
+        _ = await rig.run()
+        let before = rig.progressLog.all.count
+        _ = await rig.run(at: rig.now.addingTimeInterval(3600))
+        #expect(Array(rig.progressLog.all.dropFirst(before)) == [SyncProgress(gameID: "riftbound", done: 14, total: 14, failed: 0)])
     }
 }

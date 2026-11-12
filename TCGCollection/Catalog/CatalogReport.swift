@@ -164,7 +164,7 @@ nonisolated enum CatalogReport {
         var printings = 0
         for product in products {
             let key = CardName.searchKey(product.cardName)
-            if game.isBasicCard(cardKey: key, cardType: product.cardType) { keys.insert(key) }
+            if game.isBasicCard(name: product.name, cardType: product.cardType) { keys.insert(key) }
             if game.isBasicPrinting(product) { printings += 1 }
         }
         return ["basic cards: \(keys.count), basic printings: \(printings)"] + keys.sorted().prefix(40).map { "  \($0)" }

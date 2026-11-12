@@ -43,22 +43,51 @@ struct GameDefinitionTests {
     }
     @Test func basics() {
         let m = Games.game("magic-the-gathering")!, r = Games.game("riftbound")!, y = Games.game("yu-gi-oh")!
-        #expect(m.isBasicCard(cardKey: "forest 0276 full art", cardType: "Basic Land — Forest"))
-        #expect(m.isBasicCard(cardKey: "snow covered island", cardType: "Basic Snow Land — Island"))
-        #expect(!m.isBasicCard(cardKey: "dryad arbor", cardType: "Land Creature — Forest Dryad"))
+        #expect(m.isBasicCard(name: "Forest (0276) - Full Art", cardType: "Basic Land — Forest"))
+        #expect(m.isBasicCard(name: "Snow-Covered Island", cardType: "Basic Snow Land — Island"))
+        #expect(!m.isBasicCard(name: "Dryad Arbor", cardType: "Land Creature — Forest Dryad"))
         #expect(m.isBasicPrinting(product(game: "magic-the-gathering", name: "Forest (0276) - Full Art", cardType: "Basic Land — Forest")))
-        #expect(r.isBasicCard(cardKey: "calm rune", cardType: "Rune")); #expect(!r.isBasicCard(cardKey: "rune prison", cardType: "Spell"))
+        #expect(m.isBasicPrinting(product(game: "magic-the-gathering", name: "Forest - Golgari", cardType: "Land")))
+        #expect(r.isBasicCard(name: "Calm Rune", cardType: "Rune")); #expect(!r.isBasicCard(name: "Rune Prison", cardType: "Spell"))
         #expect(r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune", cardType: "Rune")))
         #expect(!r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune (R02a)", cardType: "Rune")))
         #expect(!r.isBasicPrinting(product(game: "riftbound", name: "Calm Rune (A)", cardType: "Rune")))
-        #expect(!y.isBasicCard(cardKey: "forest", cardType: "Basic Land — Forest"))
+        #expect(!y.isBasicCard(name: "Forest", cardType: "Basic Land — Forest"))
     }
     @Test func noFacetsForAnEmptyType() {
         for game in Games.all { #expect(game.typeFacets("").isEmpty); #expect(game.typeFacets("  ").isEmpty) }
     }
     @Test func basicSettingsPerGame() {
         #expect(Games.all.map(\.altArtBasicsAreNormal) == [false, false, true, false])
-        #expect(Games.all.map(\.basicNames.count) == [0, 0, 6, 0])
+        #expect(Games.all.map(\.basicNames.count) == [12, 0, 6, 0])
         #expect(Games.game("riftbound")!.basicNames.contains("body rune"))
+        #expect(Games.game("magic-the-gathering")!.basicNames.contains("snow covered wastes"))
+    }
+
+    @Test func aNumberRangeIsNotACard() {                                   // A7
+        let m = Games.game("magic-the-gathering")!
+        #expect(!m.isCard(fields: ["Number": "448-451", "Rarity": "R"])); #expect(!m.isCard(fields: ["Number": "448 - 451", "Rarity": "R", "SubType": "Land"]))
+        #expect(m.isCard(fields: ["Number": "448", "Rarity": "R"])); #expect(Games.game("yu-gi-oh")!.isCard(fields: ["Number": "LEDE-EN061", "Rarity": "Ultra Rare"]))
+        #expect(Games.game("riftbound")!.isCard(fields: ["Number": "136/167", "Rarity": "Epic"]))
+    }
+    @Test func artSeriesSetsAreExcluded() {                                 // A6
+        let m = Games.game("magic-the-gathering")!
+        #expect(m.excludesSet(named: "Art Series: The Hobbit")); #expect(!m.excludesSet(named: "Reality Fracture"))
+        #expect(!m.excludesSet(named: "The Art Series")); #expect(!Games.game("yu-gi-oh")!.excludesSet(named: "Art Series: X"))
+    }
+    @Test func magicBasicsByTypeOrByName() {                                // A8
+        let m = Games.game("magic-the-gathering")!
+        #expect(m.isBasicCard(name: "Forest (0276) - Full Art", cardType: "Basic Land — Forest"))
+        #expect(m.isBasicCard(name: "Forest - Golgari", cardType: "Land")); #expect(m.isBasicCard(name: "Forest (French) - \"Foret\"", cardType: "Land"))
+        #expect(m.isBasicCard(name: "Wastes", cardType: "Colorless")); #expect(m.isBasicCard(name: "Snow-Covered Island", cardType: ""))
+        #expect(!m.isBasicCard(name: "Mountain Valley", cardType: "Land")); #expect(!m.isBasicCard(name: "Forest Bear", cardType: "Creature — Bear"))
+        #expect(!m.isBasicCard(name: "Island Sanctuary", cardType: "Enchantment")); #expect(!m.isBasicCard(name: "Dryad Arbor", cardType: "Land Creature — Forest Dryad"))
+        #expect(Games.game("riftbound")!.isBasicCard(name: "Calm Rune (R02a)", cardType: "Rune"))
+    }
+    @Test func playsetsAndProductLines() {
+        #expect(Games.all.map(\.playset) == [4, 3, 3, 3])
+        #expect(Games.game(productLine: "YuGiOh")?.id == "yu-gi-oh"); #expect(Games.game(productLine: "Riftbound: League of Legends Trading Card Game")?.id == "riftbound")
+        #expect(Games.game(productLine: "magic")?.id == "magic-the-gathering"); #expect(Games.game(productLine: "Pokemon") == nil)
+        #expect(Games.game(productLine: "Cyberpunk TCG")?.id == "cyberpunk")
     }
 }

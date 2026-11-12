@@ -109,8 +109,10 @@ final class AppModel {
             #endif
         }
     }
-    /// Goes up when a sync changed the store (also every 20 sets of the game on screen), so views search again.
+    /// Goes up when a sync changed the store (also at every 20th finished set of the game on screen), so views search again.
     private(set) var catalogVersion = 0
+    /// Sets of the game on screen that finished in the running catalog step; every 20th one raises `catalogVersion`.
+    @ObservationIgnored private var finishedOnScreen = 0
     /// Goes up when a catalog step that changed the store has ended, so the filter menus read their values again.
     /// It does not follow the periodic steps of `catalogVersion`: those values come from every product of a game.
     private(set) var filtersVersion = 0
@@ -390,6 +392,7 @@ final class AppModel {
         checkingText = StatusText.checking
         // A stream keeps the progress lines in order and ends before the step's result is used.
         let (updates, sink) = AsyncStream.makeStream(of: SyncProgress.self)
+        finishedOnScreen = 0
         async let result = Self.run(catalogSync, games: games, now: now, rebuild: rebuild, reportingTo: sink)
         var touched = Set<String>()
         for await progress in updates {
@@ -397,6 +400,8 @@ final class AppModel {
             show(progress)
         }
         let done = await result
+        // Nothing reads the store's change history, and a full re-fetch writes about 12 MB of it (B12).
+        if done.fetched > 0 || done.failed > 0 { try? await store.deleteHistory() }
         if done.fetched > 0 {
             // A game that reported progress had a set stored or failed; its lists are read again before the menus are told.
             for game in games where touched.contains(game.id) { _ = await storeFacetLists(of: game) }
@@ -416,7 +421,10 @@ final class AppModel {
     private func show(_ progress: SyncProgress) {
         status = .syncing(StatusText.catalog(progress, gameName: Games.game(progress.gameID)?.name ?? progress.gameID))
         // The game on screen shows its first cards before a long download ends.
-        if progress.gameID == gameID, progress.done % 20 == 0 { catalogVersion += 1 }
+        if progress.gameID == gameID {
+            finishedOnScreen += 1
+            if finishedOnScreen % 20 == 0 { catalogVersion += 1 }
+        }
     }
 
     /// Nil when the prices are fine or there was nothing new; else the status text. A failure keeps the old prices.
