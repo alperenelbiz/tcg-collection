@@ -39,11 +39,15 @@ nonisolated enum Theme {
     static let largePictureRadius: CGFloat = 12
     /// Above and below a 1 px rule between groups.
     static let ruleSpacing: CGFloat = 14
+    /// The square a sidebar row's outline icon is fitted into.
+    static let sidebarIconSize: CGFloat = 16
 
     // MARK: Type (the system face only; the window title is the system's)
 
     /// The card page's title.
     static let pageTitleFont = Font.system(size: 22, weight: .semibold)
+    /// A sheet's title.
+    static let sheetTitleFont = Font.system(size: 17, weight: .semibold)
     /// A card name in the gallery, values, sentences.
     static let bodyFont = Font.system(size: 13)
     /// The line under a card name; a screen's totals line.
@@ -90,20 +94,46 @@ extension View {
 }
 
 /// The system push button's size (24 pt high, 13 pt label, 12 pt sides, 6 pt corners), flat: `accent` fill, `ground`
-/// label; pressed, the fill dims. Only for the default button of a sheet (`sheetDefaultButton`).
+/// label. Only for the default button of a sheet (`sheetDefaultButton`).
 private struct AccentButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        AccentButton(label: configuration.label, isPressed: configuration.isPressed)
+    }
+}
+
+/// The states of `AccentButtonStyle`: hovered 0.9 and pressed 0.8 opacity of the fill; in an inactive window `raised` with
+/// a `muted` label, as a system default button loses its colour there; disabled at 0.4.
+private struct AccentButton: View {
+    let label: ButtonStyleConfiguration.Label
+    let isPressed: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    #if os(macOS)
+    @Environment(\.controlActiveState) private var activeState
+    #endif
+    @State private var hovering = false
+
+    private static let shape = RoundedRectangle(cornerRadius: 6)
+
+    private var windowIsActive: Bool {
+        #if os(macOS)
+        activeState != .inactive
+        #else
+        true
+        #endif
+    }
+
+    var body: some View {
+        label
             .font(Theme.bodyFont)
-            .foregroundStyle(Theme.ground)
+            .foregroundStyle(windowIsActive ? Theme.ground : Theme.muted)
             .padding(.horizontal, 12)
             .frame(minHeight: 24)
-            .background(Theme.accent.opacity(configuration.isPressed ? 0.8 : 1),
-                        in: RoundedRectangle(cornerRadius: 6))
+            .background((windowIsActive ? Theme.accent : Theme.raised).opacity(isPressed ? 0.8 : hovering ? 0.9 : 1),
+                        in: Self.shape)
             .opacity(isEnabled ? 1 : 0.4)
-            .contentShape(Rectangle())
+            // Clicks, hover and the keyboard focus ring follow the rounded fill, not a rectangle around it.
+            .contentShape(Self.shape)
+            .onHover { hovering = $0 }
     }
 }
 

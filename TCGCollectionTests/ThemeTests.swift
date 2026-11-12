@@ -27,7 +27,11 @@ struct ThemeTests {
         #expect(Theme.ground != Theme.surface)                                  // Color equality compares values
         #expect(Theme.cellMinWidth == 150); #expect(Theme.columnGap == 16); #expect(Theme.rowGap == 18)
         #expect(Theme.margin == 18); #expect(Theme.pictureRadius == 6); #expect(Theme.largePictureRadius == 12)
-        #expect(Theme.ruleSpacing == 14)
+        #expect(Theme.ruleSpacing == 14); #expect(Theme.sidebarIconSize == 16)
+        #expect(Theme.pageTitleFont == .system(size: 22, weight: .semibold)); #expect(Theme.bodyFont == .system(size: 13))
+        #expect(Theme.lineFont == .system(size: 12)); #expect(Theme.labelFont == .system(size: 11))
+        #expect(Theme.sheetTitleFont == .system(size: 17, weight: .semibold))
+        #expect(Theme.sheetTitleFont != Theme.pageTitleFont)                    // Font equality compares values
     }
 
     #if os(macOS)

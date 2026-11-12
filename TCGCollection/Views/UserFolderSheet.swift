@@ -16,7 +16,7 @@ struct UserFolderSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Where to keep your collection")
-                    .font(.title2.weight(.semibold))
+                    .font(Theme.sheetTitleFont)
                     .foregroundStyle(Theme.text)
                 sentence("Your collection is a few small files: in iCloud Drive they reach your other devices.")
                 if firstRun, let lost = setup.lost {

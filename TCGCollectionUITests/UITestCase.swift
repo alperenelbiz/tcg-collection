@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 /// Starts the Debug app on a fresh temporary store and the fixture network, and keeps pictures of its window.
@@ -116,6 +117,33 @@ class UITestCase: XCTestCase {
         let shown = inner.exists ? inner : element
         let value = shown.value as? String ?? ""
         return value.isEmpty ? shown.label : value
+    }
+
+    /// Fails unless the sidebar row `identifier` is drawn on the accent fill (#F2B33D): the window's pixel 180 pt from its
+    /// left edge, in the row's middle, right of the row's title. The system's own selection there is grey without focus
+    /// and blue with a system accent of its own. Polls for 3 s, so a selection animation can end.
+    func assertAccentFill(_ app: XCUIApplication, row identifier: String, file: StaticString = #filePath, line: UInt = #line) {
+        let window = app.windows.firstMatch
+        let row = element(app, identifier)
+        var seen: (red: Double, green: Double, blue: Double)?
+        let amber = waitUntil(timeout: 3) {
+            seen = pixel(of: window, at: CGPoint(x: window.frame.minX + 180, y: row.frame.midY))
+            guard let c = seen else { return false }
+            return c.red > 0.75 && c.green > 0.5 && c.green < 0.8 && c.blue < 0.35
+        }
+        XCTAssertTrue(amber, "\(identifier) is not on the accent fill: \(seen.map { "\($0)" } ?? "no pixel")", file: file, line: line)
+    }
+
+    /// The colour of one point (screen coordinates, as `XCUIElement.frame`) of a window picture, in sRGB.
+    func pixel(of window: XCUIElement, at point: CGPoint) -> (red: Double, green: Double, blue: Double)? {
+        let frame = window.frame
+        guard frame.contains(point),
+              let image = window.screenshot().image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let scale = Double(image.width) / frame.width
+        let rep = NSBitmapImageRep(cgImage: image)       // pixel origin at the top left, as the screen coordinates
+        guard let color = rep.colorAt(x: Int((point.x - frame.minX) * scale), y: Int((point.y - frame.minY) * scale))?
+            .usingColorSpace(.sRGB) else { return nil }
+        return (color.redComponent, color.greenComponent, color.blueComponent)
     }
 
     /// Polls `condition` until it holds or `timeout` seconds have passed; returns its last result.

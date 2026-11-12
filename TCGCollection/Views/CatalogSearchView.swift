@@ -1,5 +1,39 @@
 import SwiftUI
 
+/// What All cards shows for one game: the search, the filters, the last results, the gallery's scroll position and the
+/// open card pages. The window keeps it (`CatalogMemory`), so a visit to the Collection loses none of it.
+@Observable
+final class CatalogScreenState {
+    let gameID: String
+    var text: String
+    var filter = CardFilter()
+    var path = NavigationPath()
+    /// Nil until the first search has ended.
+    var cards: [CardSummary]?
+    var hasMore = false
+    var catalogEmpty = false
+    /// The card at the top of the gallery.
+    var scrolledTo: String?
+
+    init(gameID: String, search: String) {
+        self.gameID = gameID
+        text = search
+    }
+}
+
+/// The window's All cards state: the current game's only; another game starts afresh with the `-search` text, as before.
+/// Not observed: it hands out the same `CatalogScreenState` for as long as the game stays.
+final class CatalogMemory {
+    private var current: CatalogScreenState?
+
+    func state(game: String, search: String?) -> CatalogScreenState {
+        if let current, current.gameID == game { return current }
+        let fresh = CatalogScreenState(gameID: game, search: search ?? "")
+        current = fresh
+        return fresh
+    }
+}
+
 /// The catalog of the selected game: search field, three filter menus, and a gallery of cards.
 struct CatalogSearchView: View {
     private static let limit = 300
@@ -7,18 +41,9 @@ struct CatalogSearchView: View {
     private static let placeholders = 12
 
     @Environment(AppModel.self) private var model
-    @State private var text: String
-    @State private var filter = CardFilter()
-    /// Nil until the first search has ended.
-    @State private var cards: [CardSummary]?
-    @State private var hasMore = false
-    @State private var catalogEmpty = false
+    @Bindable var state: CatalogScreenState
     @State private var sets: [SetRecord] = []
     @State private var confirmReset = false
-
-    init(search: String) {
-        _text = State(initialValue: search)
-    }
 
     var body: some View {
         content
@@ -26,30 +51,30 @@ struct CatalogSearchView: View {
             .background { Theme.ground.ignoresSafeArea() }
             .navigationTitle(model.game.name)
             .navigationSubtitle(subtitle)
-            .searchable(text: $text)
+            .searchable(text: $state.text)
             .navigationDestination(for: CardSummary.self) { CardPageView(cardKey: $0.id, startProductID: nil) }
             .navigationDestination(for: CardTarget.self) { CardPageView(cardKey: $0.cardKey, startProductID: $0.startProductID) }
             .toolbar {
                 ToolbarItemGroup {
-                    FilterMenu(title: "Set", selection: $filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
-                    FilterMenu(title: "Rarity", selection: $filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
-                    FilterMenu(title: "Type", selection: $filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
+                    FilterMenu(title: "Set", selection: $state.filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
+                    FilterMenu(title: "Rarity", selection: $state.filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
+                    FilterMenu(title: "Type", selection: $state.filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
                 }
             }
-            .task(id: SearchKey(text: text, filter: filter, catalogVersion: model.catalogVersion)) { await search() }
+            .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion)) { await search() }
             // The set list is cheap; the rarity and type lists come from `model.facets` (a file, P4).
             .task(id: model.filtersVersion) { await loadSets() }
     }
 
     @ViewBuilder private var content: some View {
-        if let cards, cards.isEmpty {
+        if let cards = state.cards, cards.isEmpty {
             Group {
-                if catalogEmpty {
+                if state.catalogEmpty {
                     emptyCatalog
                 } else {
-                    EmptyMessage(sentence: text.trimmingCharacters(in: .whitespaces).isEmpty
+                    EmptyMessage(sentence: state.text.trimmingCharacters(in: .whitespaces).isEmpty
                                  ? "No card matches these filters."
-                                 : "No card matches \"\(text)\".")
+                                 : "No card matches \"\(state.text)\".")
                 }
             }
             .accessibilityElement(children: .contain)
@@ -58,7 +83,7 @@ struct CatalogSearchView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cellMinWidth), spacing: Theme.columnGap)],
                           spacing: Theme.rowGap) {
-                    if let cards {
+                    if let cards = state.cards {
                         ForEach(cards) { card in
                             NavigationLink(value: card) { CardCell(content: cellContent(card)) }
                                 .buttonStyle(.plain)
@@ -70,8 +95,10 @@ struct CatalogSearchView: View {
                         ForEach(0..<Self.placeholders, id: \.self) { _ in PlaceholderCell() }
                     }
                 }
+                .scrollTargetLayout()
                 .padding(Theme.margin)
             }
+            .scrollPosition(id: $state.scrolledTo, anchor: .top)
             .accessibilityIdentifier("gallery")
         }
     }
@@ -86,13 +113,13 @@ struct CatalogSearchView: View {
     /// With no store file open (P8), the reason and a reset that the next launch does (not for a lack of disk space).
     /// One sentence and at most one action each; the status line below the sidebar keeps the details (progress, reason).
     @ViewBuilder private var emptyCatalog: some View {
-        if let failure = model.storeFailure {
+        if model.storeFailure != nil {
             Group {
                 if model.catalogResetRequested {
                     EmptyMessage(sentence: "Quit and open the app again to reset the catalog.")
                 } else {
-                    // The failure text says what happened and what to do.
-                    EmptyMessage(sentence: failure) {
+                    // One clean sentence here; the technical reason (`failure`) is the status line's.
+                    EmptyMessage(sentence: "The catalog cannot be opened.") {
                         if model.canResetCatalog {
                             Button("Reset the catalog…") { confirmReset = true }
                                 .accessibilityIdentifier("reset-catalog")
@@ -120,8 +147,8 @@ struct CatalogSearchView: View {
     }
 
     private var subtitle: String {
-        guard let cards else { return "" }
-        if hasMore { return "\(Self.limit)+ cards" }
+        guard let cards = state.cards else { return "" }
+        if state.hasMore { return "\(Self.limit)+ cards" }
         return cards.count == 1 ? "1 card" : "\(cards.count) cards"
     }
 
@@ -131,12 +158,14 @@ struct CatalogSearchView: View {
         guard !Task.isCancelled else { return }
         let game = model.gameID
         // One card more than shown tells whether there are more.
-        let found = (try? await model.reader.search(game: game, text: text, filter: filter, limit: Self.limit + 1)) ?? []
+        let found = (try? await model.reader.search(game: game, text: state.text, filter: state.filter, limit: Self.limit + 1)) ?? []
         let empty = found.isEmpty ? (try? await model.reader.progress(game: game))?.fetched == 0 : false
         guard !Task.isCancelled else { return }
-        cards = Array(found.prefix(Self.limit))
-        hasMore = found.count > Self.limit
-        catalogEmpty = empty
+        let shown = Array(found.prefix(Self.limit))
+        // On a return to All cards the same search runs again: unchanged results are not written, so nothing redraws.
+        if state.cards != shown { state.cards = shown }
+        state.hasMore = found.count > Self.limit
+        state.catalogEmpty = empty
     }
 
     private func loadSets() async {

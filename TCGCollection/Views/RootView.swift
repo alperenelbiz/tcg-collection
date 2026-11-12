@@ -3,17 +3,22 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmRebuild = false
+    /// All cards' search, filters, results and card pages, for the life of this window.
+    @State private var catalog = CatalogMemory()
 
     var body: some View {
         NavigationSplitView {
             Sidebar(screen: model.screen)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
+            // One screen at a time: a hidden screen would still fill the toolbar (its menus, search field and title).
+            // All cards keeps what it showed in `catalog`, so a visit to the Collection loses nothing.
             switch model.screen {
             case .collection:
                 CollectionPlaceholder()
             case .allCards:
-                CatalogStack(gameID: model.gameID, confirmRebuild: $confirmRebuild)
+                CatalogStack(gameID: model.gameID, state: catalog.state(game: model.gameID, search: model.options.search),
+                             confirmRebuild: $confirmRebuild)
                     // Search text, filters and the open card page belong to one game.
                     .id(model.gameID)
             }
@@ -36,13 +41,13 @@ struct RootView: View {
 private struct CatalogStack: View {
     /// The game this stack belongs to; `RootView` makes a new stack when the game changes.
     let gameID: String
+    @Bindable var state: CatalogScreenState
     @Binding var confirmRebuild: Bool
     @Environment(AppModel.self) private var model
-    @State private var path = NavigationPath()
 
     var body: some View {
-        NavigationStack(path: $path) {
-            CatalogSearchView(search: model.options.search ?? "")
+        NavigationStack(path: $state.path) {
+            CatalogSearchView(state: state)
                 .toolbar {
                     ToolbarItem {
                         Menu("Catalog") {
@@ -59,7 +64,7 @@ private struct CatalogStack: View {
             // The stack of the old game is still alive for a moment: only the new one takes the card.
             guard let card = model.pendingCard, card.gameID == gameID else { return }
             model.pendingCard = nil
-            path.append(card)
+            state.path.append(card)
         }
     }
 }
@@ -83,9 +88,6 @@ private struct Sidebar: View {
     /// Optional, as the split view wants it: on the iPhone, going back to the sidebar clears it. The screen itself stays
     /// in the model, which keeps it.
     @State private var selection: Screen?
-    /// The system emphasizes the selection (the accent fill) while the sidebar has focus in the active window.
-    @FocusState private var listFocused: Bool
-    @Environment(\.appearsActive) private var appearsActive
 
     init(screen: Screen) {
         _selection = State(initialValue: screen)
@@ -105,15 +107,14 @@ private struct Sidebar: View {
             .tint(Theme.text)
             .accessibilityIdentifier("game-picker")
             Section("Lists") {
-                SidebarRow(title: "Collection", icon: "square.stack", onAccent: emphasized(.collection)).tag(Screen.collection)
+                row(.collection, title: "Collection", icon: "rectangle.portrait.on.rectangle.portrait")
                     .accessibilityIdentifier("sidebar-collection")
             }
             Section("Catalog") {
-                SidebarRow(title: "All cards", icon: "square.grid.2x2", onAccent: emphasized(.allCards)).tag(Screen.allCards)
+                row(.allCards, title: "All cards", icon: "square.grid.2x2")
                     .accessibilityIdentifier("sidebar-all-cards")
             }
         }
-        .focused($listFocused)
         .onChange(of: selection) { _, new in if let new { model.screen = new } }
         .onChange(of: model.screen) { _, new in selection = new }
         .safeAreaInset(edge: .bottom) {
@@ -128,33 +129,45 @@ private struct Sidebar: View {
         #endif
     }
 
-    /// True while the row of `screen` is drawn on the accent fill. Not on the iPhone, whose list shows no selection fill.
-    private func emphasized(_ screen: Screen) -> Bool {
-        #if os(macOS)
-        selection == screen && listFocused && appearsActive
-        #else
-        false
-        #endif
+    /// A row of the list's selection. The selected one draws its own accent fill over the system's (grey without focus,
+    /// the user's colour with a system accent other than Multicolor), so it is amber in every state; it stays the list's
+    /// real selection for the arrow keys and VoiceOver.
+    private func row(_ screen: Screen, title: String, icon: String) -> some View {
+        let selected = selection == screen
+        return SidebarRow(title: title, icon: icon, selected: selected)
+            .tag(screen)
+            .listRowBackground(selected ? SelectionFill() : nil)
     }
 }
 
-/// A sidebar row: a 16 pt outline icon in `muted` and the title in `text`. The selected row is the system's selection,
-/// drawn in the app's accent (the `AccentColor` asset). On that fill (`onAccent`) icon and title are `ground`, as the
-/// mockup has them: the system's white on the amber accent reads at under 2:1. (`backgroundProminence` does not report
-/// the fill in a macOS 27 sidebar, so the sidebar works it out.)
+/// The selected sidebar row's fill: `accent`, with the size of the system's selection on macOS 27 (measured: 10 pt in
+/// from each side, 10 pt corners, the row's full height), so none of the system's own fill shows around it.
+private struct SelectionFill: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(Theme.accent)
+            .padding(.horizontal, 10)
+    }
+}
+
+/// A sidebar row: an outline icon (`sidebarIconSize`) in `muted` and the title in `text`. Selected, it sits on the
+/// accent fill and both are `ground`, as the mockup has them: white on the amber accent reads at under 2:1.
 private struct SidebarRow: View {
     let title: String
     let icon: String
-    let onAccent: Bool
+    let selected: Bool
 
     var body: some View {
         Label {
             Text(title)
-                .foregroundStyle(onAccent ? Theme.ground : Theme.text)
+                .foregroundStyle(selected ? Theme.ground : Theme.text)
         } icon: {
             Image(systemName: icon)
+                .resizable()
+                .scaledToFit()
                 .symbolVariant(.none)
-                .foregroundStyle(onAccent ? Theme.ground : Theme.muted)
+                .frame(width: Theme.sidebarIconSize, height: Theme.sidebarIconSize)
+                .foregroundStyle(selected ? Theme.ground : Theme.muted)
         }
     }
 }

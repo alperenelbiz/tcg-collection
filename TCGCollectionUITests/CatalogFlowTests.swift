@@ -196,6 +196,40 @@ final class CatalogFlowTests: UITestCase {
         shot("18-after-reset")
     }
 
+    /// Task 4 fix 1: the selected sidebar row is on the accent fill with and without focus in the sidebar (the system's
+    /// own selection is a grey pill while another control has focus).
+    func testTheSelectedSidebarRowIsAmberWithAndWithoutFocus() {
+        let app = launch(game: "riftbound")
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))
+        element(app, "sidebar-all-cards").click()                // the sidebar has focus
+        assertAccentFill(app, row: "sidebar-all-cards")
+        searchField(app).click()                                 // focus moves to the search field
+        assertAccentFill(app, row: "sidebar-all-cards")
+        shot("19-sidebar-selection-search-focused")
+    }
+
+    /// Task 4 fix 6: the catalog keeps its search text and its cells while the Collection is on screen.
+    func testTheCatalogKeepsItsSearchAcrossScreens() {
+        let app = launch(game: "riftbound")
+        let cells = cardCells(app)
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        let all = cells.count
+        let search = searchField(app)
+        search.click()
+        search.typeText("rune")
+        XCTAssertTrue(waitUntil { cells.count > 0 && cells.count < all })
+        let found = identifiers(cells)
+        element(app, "sidebar-collection").click()
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil { cells.count == 0 }, "catalog cells are visible on the Collection: \(identifiers(cells))")
+        shot("20-collection-over-a-search")
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == found }, "\(identifiers(cells)), before \(found)")
+        XCTAssertEqual(text(searchField(app)), "rune")
+        shot("21-catalog-search-kept")
+    }
+
     /// `launch(storeRoot:)`: the app runs offline on the given root, without fixtures, and tearDown leaves the root
     /// (checked in `tearDown` below, after the base class has run).
     func testAGivenStoreRootIsOfflineAndKept() throws {

@@ -51,6 +51,7 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(collection.descendants(matching: .staticText).matching(sentence).firstMatch.exists)
         XCTAssertFalse(element(app, "gallery").exists)
         XCTAssertTrue(waitUntil { self.text(app.staticTexts["status-line"]).hasPrefix("Catalog up to date") })
+        assertAccentFill(app, row: "sidebar-collection")
         shot("collection-03-empty-collection")
 
         element(app, "sidebar-all-cards").click()
@@ -59,6 +60,25 @@ final class CollectionFlowTests: UITestCase {
         element(app, "sidebar-collection").click()
         XCTAssertTrue(collection.waitForExistence(timeout: 10))
         XCTAssertFalse(element(app, "gallery").exists)
+        assertAccentFill(app, row: "sidebar-collection")
         shot("collection-04-sidebar-collection-selected")
+    }
+
+    /// Task 4 fix 1: the drawn accent fill sits on the list's own selection, so the arrow keys still move it and the
+    /// screen follows.
+    func testTheArrowKeysMoveTheSidebarSelection() {
+        let app = launch(game: "riftbound", extra: ["-screen", "collection"])
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 20))
+        element(app, "sidebar-collection").click()
+        app.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 10))
+        assertAccentFill(app, row: "sidebar-all-cards")
+        // VoiceOver reads the selection from the row (the static text inside it is never "selected").
+        let row = app.outlineRows.containing(.any, identifier: "sidebar-all-cards").firstMatch
+        XCTAssertTrue(row.exists && row.isSelected, "the All cards row is not the list's selection")
+        app.typeKey(.upArrow, modifierFlags: [])
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
+        assertAccentFill(app, row: "sidebar-collection")
+        shot("collection-05-arrow-up-to-collection")
     }
 }
