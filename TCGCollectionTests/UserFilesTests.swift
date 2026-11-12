@@ -45,6 +45,29 @@ struct UserFilesTests {
         #expect(UserFiles.newest(of: [v(0, "current")]) == 0)
     }
 
+    /// Item 5 and 6: what this app may replace. A file that does not read as this version's game file is never replaced.
+    @Test func whatThisAppMayNotRewrite() {
+        #expect(UserFiles.refusal(Data(#"{"version":1,"collection":[]}"#.utf8)) == nil)
+        #expect(UserFiles.refusal(Data("{}".utf8)) == nil)
+        #expect(UserFiles.refusal(Data(#"{"version":2}"#.utf8)) == .notRewritable(newerVersion: true))
+        for bytes in [#"{"version":"1"}"#, #"{"version":1.5}"#, #"{"collection":{"a":1}}"#, "[1]", "not json", ""] {
+            #expect(UserFiles.refusal(Data(bytes.utf8)) == .notRewritable(newerVersion: false), "\(bytes)")
+        }
+    }
+
+    /// Item 6, the decision of `resolveConflicts` (its `NSFileVersion` part needs two devices): when the current file is one
+    /// this app must not rewrite, every version is left as it is (no replace, no backup, no "resolved" mark). Otherwise the
+    /// newest wins.
+    @Test func aConflictOverAFileThatMustNotBeRewrittenIsLeftAlone() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        let mine = Data(#"{"version":1,"collection":[]}"#.utf8)
+        for current in [#"{"version":2}"#, #"{"version":"1"}"#, #"{"collection":{"a":1}}"#, "[1]", "not json"] {
+            #expect(UserFiles.conflictPlan([(t, Data(current.utf8)), (t.addingTimeInterval(30), mine)]) == .leave, "\(current)")
+        }
+        #expect(UserFiles.conflictPlan([(t, mine), (t.addingTimeInterval(30), mine)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([(t.addingTimeInterval(60), mine), (t.addingTimeInterval(30), Data(#"{"version":2}"#.utf8))]) == .settle(winner: 0))
+    }
+
     @Test func theBackupName() throws {
         let date = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 12, hour: 10, minute: 15, second: 0)))
         let file = URL(fileURLWithPath: "/x/riftbound.json")

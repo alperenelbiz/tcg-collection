@@ -124,6 +124,15 @@ final class UserLibrary {
             failures[game] = nil
             return
         }
+        if let refusal = error as? UserFilesError {
+            // The file on disk must not be replaced (item 5): the game is read-only for this run, as a refused file at load.
+            let shown = rows(game: game)
+            files[game] = nil
+            refused[game] = Self.refusedText("\(game).json", refusal)
+            failures[game] = nil
+            if rows(game: game) != shown { version += 1 }
+            return
+        }
         var isDirectory: ObjCBool = false
         let folderThere = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue
         failures[game] = folderThere ? "\(game).json could not be saved (\(error.localizedDescription))." : Self.missingFolder(folder)
@@ -292,19 +301,28 @@ final class UserLibrary {
         let content: GameRead.Content
         do {
             if let data = try UserFiles.read(url) { content = .file(try GameUserFile(data: data)) } else { content = .missing }
+        } catch let error as UserFilesError {
+            content = .refused(refusedText(name, error))
         } catch GameUserFileError.newerVersion {
-            content = .refused("\(name) was written by a newer version of the app.")
-        } catch UserFilesError.notDownloaded {
-            content = .refused("\(name) is not downloaded from iCloud yet.")
+            content = .refused(refusedText(name, .notRewritable(newerVersion: true)))
         } catch {
-            content = .refused("\(name) cannot be read.")
+            content = .refused(refusedText(name, .notRewritable(newerVersion: false)))
         }
         return GameRead(content: content, backup: backup, conflictFailure: conflictFailure)
     }
 
+    /// The problem of a game file that is not used in this run.
+    private nonisolated static func refusedText(_ name: String, _ reason: UserFilesError) -> String {
+        switch reason {
+        case .notRewritable(newerVersion: true): "\(name) was written by a newer version of the app."
+        case .notRewritable(newerVersion: false): "\(name) cannot be read."
+        case .notDownloaded: "\(name) is not downloaded from iCloud yet."
+        }
+    }
+
     @concurrent private nonisolated static func store(_ data: Data, at url: URL) async -> (any Error)? {
         do {
-            try UserFiles.write(data, to: url)
+            try UserFiles.writeGameFile(data, to: url)
             return nil
         } catch {
             return error

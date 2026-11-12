@@ -3,6 +3,16 @@ import Foundation
 nonisolated enum UserFilesError: Error, Equatable {
     /// iCloud keeps the file as `.<name>.icloud`: it exists, but is not on this device yet. A download was asked for.
     case notDownloaded
+    /// The game file on disk is one this app must not replace: written by a newer version, or not readable as a game file.
+    case notRewritable(newerVersion: Bool)
+}
+
+/// What `resolveConflicts` does with the versions of a file.
+nonisolated enum ConflictPlan: Equatable, Sendable {
+    /// The current file must not be rewritten: every version stays as it is.
+    case leave
+    /// This version (0 is the current one) becomes the file; every other version is saved beside it.
+    case settle(winner: Int)
 }
 
 /// The files of the user folder: `<game id>.json` per game and `settings.json`. Every read and write goes through
@@ -44,6 +54,26 @@ nonisolated enum UserFiles {
         try coordinate(writing: url, options: .forReplacing) { url in try data.write(to: url, options: .atomic) }
     }
 
+    /// Replaces a game file, unless the file on disk at that moment (read inside the same coordinated write) is one this
+    /// app must not rewrite: then it throws `notRewritable` and the file stays as it is. A file iCloud has not downloaded
+    /// (`.<name>.icloud`) throws `notDownloaded`: writing beside it would replace it on every device.
+    static func writeGameFile(_ data: Data, to url: URL) throws {
+        try coordinate(writing: url, options: .forReplacing) { url in
+            let onDisk: Data?
+            do {
+                onDisk = try Data(contentsOf: url)
+            } catch where isNoSuchFile(error) {
+                onDisk = nil
+            }
+            if let onDisk {
+                if let reason = refusal(onDisk) { throw reason }
+            } else if FileManager.default.fileExists(atPath: placeholder(of: url).path) {
+                throw UserFilesError.notDownloaded
+            }
+            try data.write(to: url, options: .atomic)
+        }
+    }
+
     /// Writes `settings.json` (`{"version": 1}`) into a folder that has none. The folder must exist; it is not made.
     static func writeSettingsIfMissing(in folder: URL) throws {
         let url = folder.appending(path: settingsName)
@@ -67,11 +97,12 @@ nonisolated enum UserFiles {
 
     // MARK: Conflict versions (Review Focus 1)
 
-    /// Settles the conflict versions iCloud keeps when two devices changed the file offline. The newest of the current
+    /// Settles the conflict versions iCloud keeps when two devices changed a game file offline. The newest of the current
     /// and the conflict versions (by modification date) becomes the file; every other version is first written beside it
     /// as `<name>.conflict-<yyyy-MM-dd-HHmmss>.json`. Only then are the conflict versions marked resolved and removed.
-    /// Returns the first backup, or nil when there was no conflict. A version is never removed before its backup is written:
-    /// when a backup fails, this throws and every version stays as it was.
+    /// Returns the first backup, or nil when nothing was settled. A version is never removed before its backup is written:
+    /// when a backup fails, this throws and every version stays as it was. When the current file is one this app must not
+    /// rewrite (`conflictPlan` → `.leave`), nothing is touched; the read that follows refuses the file.
     static func resolveConflicts(of url: URL, now: Date) throws -> URL? {
         guard let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url), !conflicts.isEmpty else { return nil }
         let coordinator = NSFileCoordinator()
@@ -82,7 +113,7 @@ nonisolated enum UserFiles {
             for version in conflicts {
                 versions.append((version.modificationDate ?? .distantPast, try Data(contentsOf: version.url)))
             }
-            let winner = newest(of: versions)
+            guard case .settle(let winner) = conflictPlan(versions) else { return nil }
             var backups: [URL] = []
             for (index, version) in versions.enumerated() where index != winner {
                 // Inside an accessor, a second file is coordinated with the same coordinator.
@@ -100,6 +131,26 @@ nonisolated enum UserFiles {
             }
             return backups.first
         }
+    }
+
+    /// Why this app must not replace a game file with these bytes on disk; nil when it may (they read as a game file of this
+    /// app's version). A newer, malformed or unreadable file is never replaced.
+    static func refusal(_ onDisk: Data) -> UserFilesError? {
+        do {
+            _ = try GameUserFile(data: onDisk)
+            return nil
+        } catch GameUserFileError.newerVersion {
+            return .notRewritable(newerVersion: true)
+        } catch {
+            return .notRewritable(newerVersion: false)
+        }
+    }
+
+    /// The conflict decision. `versions[0]` is the current file: when this app must not rewrite it, everything is left;
+    /// else the newest version wins.
+    static func conflictPlan(_ versions: [(date: Date, data: Data)]) -> ConflictPlan {
+        guard let current = versions.first, refusal(current.data) == nil else { return .leave }
+        return .settle(winner: newest(of: versions))
     }
 
     /// The index of the newest version; a tie keeps the earlier one (index 0 is the current version).

@@ -114,6 +114,43 @@ struct UserLibraryTests {
         #expect(try stored(a, "riftbound").map(\.count) == [1])
     }
 
+    /// Item 5: a file this app must not rewrite appears on disk before our queued write runs (another device's newer app,
+    /// or a broken file). The write is refused inside the coordinated write, the file stays byte-identical, and the game is
+    /// read-only for the run with the problem of a refused file.
+    @MainActor @Test func aFileThatAppearsBeforeOurWriteAndMustNotBeRewrittenIsKept() async throws {
+        let cases: [(Data, String)] = [
+            (Data(#"{"version":2,"collection":[],"x":1}"#.utf8), "riftbound.json was written by a newer version of the app."),
+            (Data(#"{"version":1,"collection":{"a":1}}"#.utf8), "riftbound.json cannot be read."),
+            (Data(#"{"version":"1"}"#.utf8), "riftbound.json cannot be read."),
+            (Data("[1]".utf8), "riftbound.json cannot be read."),
+        ]
+        for (onDisk, text) in cases {
+            let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+            let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+            lib.setCount(1, game: "riftbound", key: riftFoil, name: "A")         // version-1 rows; the write is queued
+            try onDisk.write(to: file)                                          // before the write runs
+            await lib.flush()
+            #expect(try Data(contentsOf: file) == onDisk)
+            #expect(lib.problem == text); #expect(lib.rows(game: "riftbound").isEmpty)
+            lib.setCount(2, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+            #expect(try Data(contentsOf: file) == onDisk)
+            lib.setCount(1, game: "cyberpunk", key: riftFoil, name: "A"); await lib.flush()
+            #expect(try stored(dir, "cyberpunk").map(\.count) == [1])
+        }
+    }
+
+    /// Item 5: a file that iCloud has not downloaded (`.riftbound.json.icloud`) is not missing: our write does not make a
+    /// new `riftbound.json` beside it.
+    @MainActor @Test func aWriteDoesNotReplaceAFileThatIsNotDownloaded() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A")
+        try Data().write(to: dir.appending(path: ".riftbound.json.icloud"))
+        await lib.flush()
+        #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "riftbound.json").path))
+        #expect(lib.problem == "riftbound.json is not downloaded from iCloud yet.")
+    }
+
     /// Item 9: false before the first load, true after it, false while a folder is switched and when the folder is missing.
     @MainActor @Test(.timeLimit(.minutes(1))) func isLoadedFollowsTheFolder() async throws {
         let a = tempDir(), b = tempDir()
