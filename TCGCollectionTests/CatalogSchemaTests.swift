@@ -80,6 +80,31 @@ struct CatalogSchemaTests {
         _ = try CatalogStore(url: try newStoreURL(), availableCapacity: { _ in 0 })   // no file
     }
 
+    /// Fix round 1, item 4: the migration copies the products table and leaves the old pages free in the file. The store
+    /// is vacuumed once after it, so the file is not larger than before; every row is there. A second open neither
+    /// migrates nor vacuums.
+    @Test func aMigratedStoreIsVacuumedOnce() async throws {
+        let url = try newStoreURL()
+        let extra = (1...3000).map { id in
+            ProductRecord(productID: 1_000_000 + id, gameID: "riftbound", groupID: 24819, name: "Card \(id)", cardName: "Card \(id)",
+                          searchKey: "card \(id)", number: "\(id)", rarity: "Common", cardType: "Champion Unit",
+                          typeFacets: ["Champion Unit", "Gear"], rulesText: "", url: "", fields: ["Number": "\(id)"])
+        }
+        try await writePhase1Store(at: url, extra: extra)
+        let before = try sizeAndDate(url).size
+
+        let store = try CatalogStore(url: url)
+        #expect(store.opening.migration != nil); #expect(store.opening.vacuum != nil)
+        let after = try sizeAndDate(url).size
+        #expect(after <= before + 16_384, "\(before) bytes before the migration, \(after) after")
+        let rows = try await store.allProducts(game: "riftbound")
+        #expect(rows.count == extra.count + 3)
+        #expect(rows.first { $0.productID == 1_000_001 } == extra[0])
+
+        let again = try CatalogStore(url: url)
+        #expect(again.opening == StoreOpening())
+    }
+
     /// `|a|b|` holds the type facets; an empty text and `||` hold none.
     @Test func theTypeFacetsComeFromTheFacetText() {
         let row = CatalogProduct(product(id: 1, cardType: "Champion Unit"))

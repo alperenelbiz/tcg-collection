@@ -165,8 +165,8 @@ func writeClosedStore(at url: URL, products: [ProductRecord] = [product(id: 1)])
     try await waitUntilClosed(url)
 }
 
-/// Writes a phase 1 store (the V1 schema) at `url`: set 24819 and the Riftbound fixture products. Closes it.
-func writePhase1Store(at url: URL) async throws {
+/// Writes a phase 1 store (the V1 schema) at `url`: set 24819, the Riftbound fixture products and `extra`. Closes it.
+func writePhase1Store(at url: URL, extra: [ProductRecord] = []) async throws {
     do {
         let container = try ModelContainer(for: Schema(versionedSchema: CatalogSchemaV1.self), configurations: ModelConfiguration(url: url))
         let context = ModelContext(container)
@@ -175,6 +175,7 @@ func writePhase1Store(at url: URL) async throws {
         for record in try ProductParser.products(fixture("products-89.json"), game: Games.game("riftbound")!).cards {
             context.insert(CatalogSchemaV1.CatalogProduct(record))
         }
+        for record in extra { context.insert(CatalogSchemaV1.CatalogProduct(record)) }
         try context.save()
     }
     try await waitUntilClosed(url)

@@ -144,6 +144,12 @@ final class AppModel {
         let opened = Self.openStore(paths: paths, now: now(), defaults: defaults)
         store = opened.store
         storeFailure = opened.failure
+        #if DEBUG
+        if let migration = store.opening.migration {
+            let vacuum = store.opening.vacuum.map { "vacuumed in \(Int($0 / .milliseconds(1))) ms" } ?? "not vacuumed"
+            FileHandle.standardOutput.write(Data("catalog store migrated in \(Int(migration / .milliseconds(1))) ms, \(vacuum)\n".utf8))
+        }
+        #endif
         reader = CatalogStore(modelContainer: store.modelContainer)
         pictures = PictureStore(directory: paths.pictures, fetcher: options.offline ? NoNetwork() : fetcher)
         ygoLoader = YGOIndexLoader(paths: paths, fetcher: fetcher)

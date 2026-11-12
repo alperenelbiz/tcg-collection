@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import os
 import SwiftData
 
 nonisolated struct CardFilter: Sendable, Equatable {
@@ -50,6 +51,14 @@ nonisolated enum StoreOpenError: Error {
     }
 }
 
+/// What `CatalogStore(url:)` did to the file besides opening it.
+nonisolated struct StoreOpening: Sendable, Equatable {
+    /// How long the migration to the current schema took; nil when the file needed none.
+    var migration: Duration?
+    /// How long the vacuum after the migration took; nil when there was none (no migration, or it failed: see the log).
+    var vacuum: Duration?
+}
+
 /// What Core Data says about a store file before anything opens it.
 nonisolated enum StoreFile {
     /// The file's metadata, or the error of reading them; nil when there is no file.
@@ -72,6 +81,31 @@ nonisolated enum StoreFile {
     static func availableCapacity(_ url: URL) -> Int? {
         let values = try? url.deletingLastPathComponent().resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         return values?.volumeAvailableCapacityForImportantUsage.map(Int.init)
+    }
+
+    private static let log = Logger(subsystem: "TCGCollection2", category: "catalog-store")
+
+    /// Rebuilds the store file so that the pages a migration freed go back to the volume: the migration copies the
+    /// products table, and the store's incremental auto-vacuum is never run (measured: 243 MB became 386 MB, 219.5 MB of
+    /// it free). Through Core Data, on the SQLite stack SwiftData uses: `NSSQLiteManualVacuumOption` runs `VACUUM` when
+    /// the store is added. With history tracking on, as SwiftData opens the store. Call it only while no container has the
+    /// file open. Returns the time it took; nil when it failed, which is logged and changes nothing else.
+    static func vacuum(_ url: URL) -> Duration? {
+        let clock = ContinuousClock(), start = clock.now
+        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: CatalogSchemaV2.models) else {
+            log.error("The catalog store was not vacuumed: no model for the current schema.")
+            return nil
+        }
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        do {
+            let store = try coordinator.addPersistentStore(
+                type: .sqlite, at: url, options: [NSSQLiteManualVacuumOption: true, NSPersistentHistoryTrackingKey: true])
+            try coordinator.remove(store)
+            return clock.now - start
+        } catch {
+            log.error("The catalog store was not vacuumed after its migration: \(String(describing: error), privacy: .public)")
+            return nil
+        }
     }
 
     /// The free space a migration of the file at `url` needs: twice the file (the migration copies the products table
@@ -132,15 +166,18 @@ actor CatalogStore: ModelActor {
     nonisolated let modelContainer: ModelContainer
     nonisolated let modelExecutor: any ModelExecutor
     private nonisolated let executor: CatalogExecutor
+    /// What `init(url:)` did to the file: a migration and the vacuum after it. Empty for a store made on a container.
+    nonisolated let opening: StoreOpening
 
     nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
 
     /// A store on an existing container: the reader of `AppModel` shares the writer's container.
-    init(modelContainer: ModelContainer) {
+    init(modelContainer: ModelContainer, opening: StoreOpening = StoreOpening()) {
         let executor = CatalogExecutor(modelContainer: modelContainer)
         self.executor = executor
         modelExecutor = executor
         self.modelContainer = modelContainer
+        self.opening = opening
     }
 
     /// Opens the store file at `url` with the current schema, and migrates a store of an older version first. A
@@ -149,20 +186,31 @@ actor CatalogStore: ModelActor {
     init(url: URL, availableCapacity: (URL) -> Int? = StoreFile.availableCapacity) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let metadata = StoreFile.metadata(url)
+        var migrates = false
         if case .success(let values)? = metadata, StoreFile.needsMigration(values) {
             // Not opened at all: a migration that runs out of space fails half way, and the file is kept anyway.
             let needed = StoreFile.spaceForMigration(url)
             if let available = availableCapacity(url), available < needed { throw StoreOpenError.notEnoughSpace(needed: needed) }
+            migrates = true
         }
         let schema = Schema(versionedSchema: CatalogSchemaV2.self)
-        let container: ModelContainer
-        do {
-            container = try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
-                                           configurations: ModelConfiguration(schema: schema, url: url))
-        } catch {
-            throw StoreOpenError.cannotOpen(error, fileError: metadata?.failure)
+        func open() throws -> ModelContainer {
+            do {
+                return try ModelContainer(for: schema, migrationPlan: CatalogMigrationPlan.self,
+                                          configurations: ModelConfiguration(schema: schema, url: url))
+            } catch {
+                throw StoreOpenError.cannotOpen(error, fileError: metadata?.failure)
+            }
         }
-        self.init(modelContainer: container)
+        var opening = StoreOpening()
+        if migrates {
+            // The migration on a container of its own, released at once, so the store file is closed after it.
+            let clock = ContinuousClock(), start = clock.now
+            try autoreleasepool { _ = try open() }
+            opening.migration = clock.now - start
+            opening.vacuum = StoreFile.vacuum(url)
+        }
+        self.init(modelContainer: try open(), opening: opening)
     }
 
     /// An empty store that lives in memory only: the last fallback when no store file can be opened. It needs no disk.
