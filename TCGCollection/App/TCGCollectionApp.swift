@@ -47,6 +47,9 @@ struct TCGCollectionApp: App {
                     // the app's `AccentColor` asset (Theme.accent): on macOS 27 a `.tint` here does not reach the
                     // sidebar's selection, and it colours the label of every other button and the game picker.
                     .preferredColorScheme(.dark)
+                    #if DEBUG && os(macOS)
+                    .testWindowPlacement(model.options)
+                    #endif
                     .task {
                         #if os(macOS)
                         appDelegate.library = model.library
