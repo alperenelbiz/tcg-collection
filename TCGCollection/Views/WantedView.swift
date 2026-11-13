@@ -90,7 +90,7 @@ struct WantedView: View {
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
         // The list is read (also an empty one): its PDF can be made.
         let pdfReady = phase == .list || phase == .empty
-        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined)
+        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined, offline: model.options.offline)
         let join = WantedJoin.key(game: game, model: model)
         content(phase, shown: shown, listed: listed)
             .listScreen("wanted", note: phase == .list ? listed?.note : nil)
@@ -126,7 +126,7 @@ struct WantedView: View {
             Color.clear
         case .empty:
             EmptyMessage(sentence: "Nothing on your wanted list.") {
-                Button("Search a card") { model.screen = .allCards }
+                Button("Search a card") { model.showRoot(of: .allCards) }
                     .accessibilityIdentifier("wanted-search-catalog")
             }
         case .list:

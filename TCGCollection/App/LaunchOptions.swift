@@ -28,6 +28,9 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
     /// it through `launchImport`, which ignores it where it is not allowed.
     var importCSV: URL?
+    /// `-importCSVDelay <milliseconds>` (DEBUG, with `-importCSV`): the import sheet opens that long after the launch, so a
+    /// UI test can open a page before it.
+    var importCSVDelay: Int?
     /// `-exportPDF <path>` (DEBUG, with `-store` and `-screen wanted|for-sale`, a new `.pdf` file inside the root): that
     /// screen writes the PDF of its list there once it is read on a settled catalog with prices, for the UI tests, which
     /// do not drive the save panel. Read it through `launchPDF`, which ignores it where it is not allowed.
@@ -72,6 +75,7 @@ nonisolated struct LaunchOptions: Sendable {
         askUserFolder = value("-askUserFolder") == "YES"
         screen = value("-screen").flatMap(Screen.init(rawValue:))
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
+        importCSVDelay = value("-importCSVDelay").flatMap { Int($0) }
         exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }
         pictureDelay = value("-pictureDelay").flatMap { Int($0) }
     }

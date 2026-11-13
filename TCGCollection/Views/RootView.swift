@@ -22,7 +22,7 @@ struct RootView: View {
             // One screen at a time: a hidden screen would still fill the toolbar (its menus, search field and title).
             // Each screen keeps what it showed (`collection`, `wanted`, `forSale`, `catalog`), so a visit to another one
             // loses nothing; its open pages too (`kept(on:in:)`). Search text, filters and the open pages belong to one
-            // game (`.id`).
+            // game: a game switch drops the kept state of every screen (`keep(game:)` below; `.id` makes new stacks).
             switch model.screen {
             case .collection:
                 let state = collection.state(game: model.gameID)
@@ -45,6 +45,13 @@ struct RootView: View {
                     // Search text, filters and the open card page belong to one game.
                     .id(model.gameID)
             }
+        }
+        // Every screen of the old game starts afresh, not only the one on show.
+        .onChange(of: model.gameID) { _, game in
+            catalog.keep(game: game)
+            collection.keep(game: game)
+            wanted.keep(game: game)
+            forSale.keep(game: game)
         }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
@@ -100,19 +107,29 @@ private struct CatalogStack: View {
             // The stack of the old game is still alive for a moment: only the new one takes the card.
             guard let card = model.pendingCard, card.gameID == gameID else { return }
             model.pendingCard = nil
-            state.path.append(card)
+            // Through the kept path: `-card` switched by code (`showRoot`), so the card's page replaces any kept page.
+            $state.path.kept(on: .allCards, in: model).wrappedValue.append(card)
         }
     }
 }
 
 extension Binding where Value == NavigationPath {
-    /// The path of `screen`'s navigation stack, kept in that screen's state, so its open pages are there again after a
-    /// visit to another screen. A stack that leaves the window writes an empty path through its binding (seen on macOS
-    /// 27: the sidebar shows one screen at a time, so a switch removes the stack); that write comes when `model.screen` is
-    /// already another screen, and is not taken. Every write while the screen is on show is taken: a link, Back, a game
-    /// switch (the new game's state is a fresh one anyway).
+    /// The path of `screen`'s navigation stack, kept in that screen's state, so its open pages are there again when the
+    /// sidebar returns to it.
+    /// - A stack that leaves the window writes an empty path through its binding (seen on macOS 27: the sidebar shows one
+    ///   screen at a time, so a switch removes the stack). That write comes when `model.screen` is already another
+    ///   screen, and is not taken.
+    /// - After a switch made by code (`AppModel.showRoot(of:)`: "Search a card", the import, `-card`) the screen reads as
+    ///   its root, whatever it kept; the first page opened or closed there replaces the kept pages
+    ///   (`AppModel.pagesChanged(on:)`).
+    /// - Every write while the screen is on show is taken: a link, Back, a game switch (the new game's state is fresh).
     func kept(on screen: Screen, in model: AppModel) -> Binding<NavigationPath> {
-        Binding(get: { wrappedValue }, set: { if model.screen == screen { wrappedValue = $0 } })
+        Binding(get: { model.showsRoot(screen) ? NavigationPath() : wrappedValue },
+                set: { path in
+                    guard model.screen == screen else { return }
+                    model.pagesChanged(on: screen)
+                    wrappedValue = path
+                })
     }
 }
 

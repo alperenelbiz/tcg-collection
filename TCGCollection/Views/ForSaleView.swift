@@ -72,7 +72,7 @@ struct ForSaleView: View {
         let phase = ListPhase.of(listed, game: state.gameID, library: library)
         // The list is read (also an empty one): its PDF can be made.
         let pdfReady = phase == .list || phase == .empty
-        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined)
+        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined, offline: model.options.offline)
         let join = RowsJoin.key(game: state.gameID, model: model)
         // The dialog follows the live for-sale count of its printing (a reload, another window): it opens again with the
         // new numbers, and closes when nothing is for sale any more (`follow`).
@@ -111,7 +111,7 @@ struct ForSaleView: View {
             Color.clear
         case .empty:
             EmptyMessage(sentence: "Nothing for sale.") {
-                Button("Open the collection") { model.screen = .collection }
+                Button("Open the collection") { model.showRoot(of: .collection) }
                     .accessibilityIdentifier("for-sale-open-collection")
             }
         case .list:

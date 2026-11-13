@@ -109,7 +109,7 @@ struct CollectionView: View {
             EmptyMessage(sentence: "No cards in this collection yet.") {
                 Button("Import CSV…") { model.chooseCSVFile() }
                     .accessibilityIdentifier("collection-empty-import")
-                Button("Search a card") { model.screen = .allCards }
+                Button("Search a card") { model.showRoot(of: .allCards) }
                     .accessibilityIdentifier("collection-search-catalog")
             }
         case .list:

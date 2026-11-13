@@ -77,6 +77,15 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]).launchImport(isDebugBuild: true) == nil)
     }
 
+    /// `-importCSVDelay <milliseconds>` (DEBUG, with `-importCSV`): the import starts that long after the launch, so a UI
+    /// test can open a page first (fix round 2). Not a number: ignored.
+    @Test func theImportCanWait() {
+        #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-importCSV", "/tmp/c.csv", "-importCSVDelay", "8000"])
+                    .importCSVDelay == 8000)
+        #expect(LaunchOptions(arguments: ["app", "-importCSVDelay", "soon"]).importCSVDelay == nil)
+        #expect(LaunchOptions(arguments: ["app"]).importCSVDelay == nil)
+    }
+
     /// `-exportPDF <path>` is honoured only in a Debug build with `-store`, with `-screen wanted` or `for-sale`, and with a
     /// path inside the store root (not the root itself); in every other case it is ignored (fails closed).
     @Test func theExportFlagNeedsADebugBuildAStoreAListScreenAndAPathInTheRoot() {

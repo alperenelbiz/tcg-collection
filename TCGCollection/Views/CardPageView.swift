@@ -108,12 +108,10 @@ struct CardPageView: View {
                 .padding(.top, 18)
             }
             RuleLine()
-            // A new wanted entry saves the card's name (the title), not the printing's bracketed product name. The set of
-            // each printing names a pin on another printing.
-            let printingSets = Dictionary(printings.map { ($0.productID, setNames[$0.groupID] ?? "") },
-                                          uniquingKeysWith: { first, _ in first })
+            // A new wanted entry saves the card's name (the title), not the printing's bracketed product name. What each
+            // printing is names a pin on another printing.
             OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
-                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printingSets: printingSets))
+                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game)))
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -128,6 +126,16 @@ struct CardPageView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Each printing of the card as the pin line names it: set, number, rarity, and its first finish line (the price
+    /// table's first finish, `Normal` when it has none).
+    private func pinPrintings(_ printings: [ProductRecord], game: GameDefinition) -> [Int: PinPrinting] {
+        Dictionary(printings.map { printing in
+            (printing.productID,
+             PinPrinting(set: setNames[printing.groupID] ?? "", number: printing.number, rarity: printing.rarity,
+                         firstFinish: model.prices.prices(game: game.id, productID: printing.productID).first?.finish ?? "Normal"))
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     private func otherPrintings(_ printings: [ProductRecord], game: GameDefinition) -> some View {
@@ -200,9 +208,9 @@ struct OwnedFinishes: View {
     let offered: [String]
     /// The price table's prices of the product; nil for a page without a price column (a product not in the catalog).
     let prices: [FinishPrice]?
-    /// The card of the page, for its Wanted line: its key, the name a new entry saves, and the set name of each of its
-    /// printings (product id: set). Nil: no Wanted line (a printing that left the catalog).
-    var wanted: (cardKey: String, name: String, printingSets: [Int: String])? = nil
+    /// The card of the page, for its Wanted line: its key, the name a new entry saves, and each of its printings as the pin
+    /// line names it (by product id). Nil: no Wanted line (a printing that left the catalog).
+    var wanted: (cardKey: String, name: String, printings: [Int: PinPrinting])? = nil
 
     @Environment(AppModel.self) private var model
 
@@ -236,12 +244,12 @@ struct OwnedFinishes: View {
                     let count = CollectionRules.count(rows, for: key)
                     let forSale = sale.first { $0.key == key }?.count ?? 0
                     GridRow {
-                        // One line, never cut: a finish name is what tells two lines apart.
-                        Text(finish)
-                            .foregroundStyle(Theme.text)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .accessibilityIdentifier("card-finish-\(finish)")
+                        // One line when the row fits the column, else two: a finish name is what tells two lines
+                        // apart, and a name that may not wrap made the row wider than the column (the window grew).
+                        ViewThatFits(in: .horizontal) {
+                            finishName(finish).lineLimit(1).fixedSize()
+                            finishName(finish).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        }
                         if let prices {
                             price(prices.first { $0.finish == finish }?.price.shown)
                                 .lineLimit(1)
@@ -260,11 +268,17 @@ struct OwnedFinishes: View {
             // `Normal` when it has none). The page has no selected finish.
             if let wanted, let first = finishes.first {
                 WantedLine(gameID: gameID, cardKey: wanted.cardKey, name: wanted.name,
-                           pin: PrintingKey(productID: productID, finish: first), printingSets: wanted.printingSets)
+                           pin: PrintingKey(productID: productID, finish: first), printings: wanted.printings)
                     .padding(.top, 6)
             }
             if let locked { CountsLockedLine(text: locked) }
         }
+    }
+
+    private func finishName(_ finish: String) -> some View {
+        Text(finish)
+            .foregroundStyle(Theme.text)
+            .accessibilityIdentifier("card-finish-\(finish)")
     }
 
     @ViewBuilder private func price(_ shown: ShownPrice?) -> some View {
@@ -312,9 +326,8 @@ struct CountsLockedLine: View {
 /// pin off the list), and from a count of 1 the pin, so it can be seen and cleared from any page of the card:
 /// - no pin: "Want this printing" (`wanted-pin`) pins `pin`, the printing on screen with its first finish line;
 /// - pinned to `pin`: "Any printing" (`wanted-pin`) takes the pin away;
-/// - pinned to another printing or finish: one muted line (`wanted-pinned`) "Pinned to <its set>" (`printingSets`; "Pinned
-///   to a printing that left the catalog" when it is not among them), then "Want this printing" (`wanted-pin`, moves the
-///   pin here) and "Any printing" (`wanted-unpin`, clears it).
+/// - pinned to another printing or finish: one muted line (`wanted-pinned`, `pinnedText`) that names the pinned printing,
+///   then "Want this printing" (`wanted-pin`, moves the pin here) and "Any printing" (`wanted-unpin`, clears it).
 /// `pin` nil (a card not in the catalog): nothing to pin; a pin the entry still has is named and can be cleared. A new
 /// entry saves `name`. While the game cannot change: no number (`—`), no pin, the control off; the page's locked line
 /// says why.
@@ -323,8 +336,8 @@ struct WantedLine: View {
     let cardKey: String
     let name: String
     let pin: PrintingKey?
-    /// The set name of each printing of the card, by product id.
-    var printingSets: [Int: String] = [:]
+    /// Each printing of the card as the pin line names it, by product id.
+    var printings: [Int: PinPrinting] = [:]
 
     @Environment(AppModel.self) private var model
 
@@ -348,9 +361,11 @@ struct WantedLine: View {
                 }
             }
             if let pinned, pinned != pin {
-                Text(Self.pinnedText(pinned, sets: printingSets))
+                // It names set, number and rarity: it wraps rather than cut (306 pt at the 900 pt window).
+                Text(Self.pinnedText(pinned, shown: pin, printings: printings))
                     .font(Theme.lineFont)
                     .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("wanted-pinned")
                 HStack(spacing: 8) {
                     if let pin { pinButton("Want this printing", to: pin, identifier: "wanted-pin") }
@@ -362,11 +377,19 @@ struct WantedLine: View {
         .disabled(locked)
     }
 
-    /// "Pinned to <set of the pinned printing>"; "Pinned to a printing that left the catalog" when it is not a printing of
-    /// the card any more; "Pinned to another printing" when its set has no name.
-    static func pinnedText(_ pinned: PrintingKey, sets: [Int: String]) -> String {
-        guard let set = sets[pinned.productID] else { return "Pinned to a printing that left the catalog" }
-        return set.isEmpty ? "Pinned to another printing" : "Pinned to \(set)"
+    /// What the pin line says of `pinned`, seen from the printing `shown` (nil: the page of a card that left the catalog):
+    /// - another finish of the product shown: "Pinned to <finish> of this printing";
+    /// - another printing: "Pinned to <set> · <number> · <rarity>" (a part the product lacks is left out), then
+    ///   " · <finish>" when the pinned finish is not that printing's first finish line; "Pinned to another printing" when
+    ///   it has none of them;
+    /// - a product that is not a printing of the card any more: "Pinned to a printing that left the catalog".
+    static func pinnedText(_ pinned: PrintingKey, shown: PrintingKey?, printings: [Int: PinPrinting]) -> String {
+        if let shown, pinned.productID == shown.productID { return "Pinned to \(pinned.finish) of this printing" }
+        guard let printing = printings[pinned.productID] else { return "Pinned to a printing that left the catalog" }
+        var parts = [printing.set, printing.number, printing.rarity].filter { !$0.isEmpty }
+        if parts.isEmpty { return "Pinned to another printing" }
+        if pinned.finish != printing.firstFinish { parts.append(pinned.finish) }
+        return "Pinned to " + parts.joined(separator: " · ")
     }
 
     private func pinButton(_ title: String, to key: PrintingKey?, identifier: String) -> some View {
@@ -382,6 +405,15 @@ struct WantedLine: View {
         library.setWanted(library.wantedCount(game: gameID, cardKey: cardKey) + delta, game: gameID, cardKey: cardKey,
                           name: name)
     }
+}
+
+/// One printing of a card as the pin line names it (`WantedLine.pinnedText`).
+nonisolated struct PinPrinting: Equatable, Sendable {
+    let set: String
+    let number: String
+    let rarity: String
+    /// The printing's first finish line on its page: the price table's first finish, `Normal` when it has none.
+    let firstFinish: String
 }
 
 /// A label (11 pt, `muted`) over a value, for stats.

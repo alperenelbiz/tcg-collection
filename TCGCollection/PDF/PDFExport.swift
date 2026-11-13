@@ -91,9 +91,10 @@ final class PDFExport {
 
     /// `-exportPDF` writes once the screen's list is read (`listRead`) by a join made on a settled catalog
     /// (`catalogSettled`) that had the game's prices (`priceDay`): then the PDF has the pictures and prices a person sees.
-    nonisolated static func launchReady(listRead: Bool, joined: CollectionJoin?) -> Bool {
+    /// Offline no price step ever runs, so the PDF does not wait for a price day (without one its prices are "—").
+    nonisolated static func launchReady(listRead: Bool, joined: CollectionJoin?, offline: Bool = false) -> Bool {
         guard listRead, let joined else { return false }
-        return joined.catalogSettled && joined.priceDay != nil
+        return joined.catalogSettled && (offline || joined.priceDay != nil)
     }
 
     /// What the status line says when the save panel ends: nothing after a save or a cancel; else "The PDF could not be

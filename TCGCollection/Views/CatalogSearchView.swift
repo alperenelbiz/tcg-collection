@@ -32,6 +32,11 @@ final class CatalogMemory {
         current = fresh
         return fresh
     }
+
+    /// As `ScreenMemory.keep(game:)`: a state of another game than the window's is dropped.
+    func keep(game: String) {
+        if let current, current.gameID != game { self.current = nil }
+    }
 }
 
 /// The catalog of the selected game: search field, three filter menus, and a gallery of cards.

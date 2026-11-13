@@ -33,13 +33,30 @@ struct WantedViewTests {
         #expect(settled.cards.map { settled.link(for: $0) } == [.card, .none])
     }
 
-    /// Fix round 1: a pin on another printing than the one shown is named on the card page by that printing's set.
+    /// Fix rounds 1 and 2: a pin on another printing or finish than the one shown is named on the card page: the pinned
+    /// printing's set, number and rarity (a part the product lacks is left out), and its finish when that is not the
+    /// printing's first finish line; the shown product with another finish; a printing that left the catalog.
     @Test func aPinOnAnotherPrintingIsNamed() {
-        let sets = [719834: "Beyond the Brave", 719835: "Beyond the Brave", 9: ""]
-        #expect(WantedLine.pinnedText(PrintingKey(productID: 719834, finish: "1st Edition"), sets: sets)
-                == "Pinned to Beyond the Brave")
-        #expect(WantedLine.pinnedText(PrintingKey(productID: 1, finish: "Normal"), sets: sets)
-                == "Pinned to a printing that left the catalog")
-        #expect(WantedLine.pinnedText(PrintingKey(productID: 9, finish: "Normal"), sets: sets) == "Pinned to another printing")
+        let printings = [
+            719834: PinPrinting(set: "Beyond the Brave", number: "BETB-EN001", rarity: "Super Rare", firstFinish: "1st Edition"),
+            719835: PinPrinting(set: "Beyond the Brave", number: "BETB-EN001", rarity: "Starlight Rare", firstFinish: "1st Edition"),
+            7: PinPrinting(set: "Origins", number: "", rarity: "Rare", firstFinish: "Normal"),
+            9: PinPrinting(set: "", number: "", rarity: "", firstFinish: "Normal"),
+        ]
+        let shown = PrintingKey(productID: 719835, finish: "1st Edition")
+        func text(_ id: Int, _ finish: String, shown: PrintingKey? = shown) -> String {
+            WantedLine.pinnedText(PrintingKey(productID: id, finish: finish), shown: shown, printings: printings)
+        }
+        // Another printing of the same set: its number and rarity tell it apart.
+        #expect(text(719834, "1st Edition") == "Pinned to Beyond the Brave · BETB-EN001 · Super Rare")
+        #expect(text(719834, "Unlimited") == "Pinned to Beyond the Brave · BETB-EN001 · Super Rare · Unlimited")
+        // The product shown, another finish.
+        #expect(text(719835, "Unlimited") == "Pinned to Unlimited of this printing")
+        // A part the product lacks is left out; a product with none of them.
+        #expect(text(7, "Normal") == "Pinned to Origins · Rare")
+        #expect(text(9, "Normal") == "Pinned to another printing")
+        // A printing that left the catalog, also on the page of a card that left it (nothing shown).
+        #expect(text(1, "Normal") == "Pinned to a printing that left the catalog")
+        #expect(text(719834, "1st Edition", shown: nil) == "Pinned to Beyond the Brave · BETB-EN001 · Super Rare")
     }
 }

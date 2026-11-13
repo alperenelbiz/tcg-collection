@@ -142,6 +142,13 @@ struct PDFExportTests {
         #expect(!PDFExport.launchReady(listRead: true, joined: joined(settled: false, day: "2026-11-12")))
         #expect(!PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: nil)))
         #expect(!PDFExport.launchReady(listRead: true, joined: nil))
+        // Task 4 fix round 2: offline no price step will ever run, so the PDF does not wait for a price day (its prices
+        // are then "—"); online it does.
+        #expect(PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: nil), offline: true))
+        #expect(!PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: nil), offline: false))
+        #expect(PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: "2026-11-12"), offline: true))
+        #expect(!PDFExport.launchReady(listRead: false, joined: joined(settled: true, day: nil), offline: true))
+        #expect(!PDFExport.launchReady(listRead: true, joined: nil, offline: true))
     }
 
     /// Every picture fails (a bad answer, or offline): a PDF with the names and grey blocks, each address asked once.

@@ -116,10 +116,14 @@ final class AppModel {
     }
     var game: GameDefinition { Games.game(gameID) ?? Games.all[0] }
     /// The sidebar selection, kept in `UserDefaults` (key `screen`; with `-store`, the root's own). `-screen` wins at
-    /// launch; a new root opens on the Collection.
+    /// launch; a new root opens on the Collection. The sidebar sets it (a person's click: the screen comes back with the
+    /// pages it kept); code switches with `showRoot(of:)`.
     var screen: Screen {
         didSet { defaults.set(screen.rawValue, forKey: Self.screenKey) }
     }
+    /// Screens that a switch made by code opened (`showRoot(of:)`) and whose pages have not changed since: they show their
+    /// root, not the pages kept from an earlier visit (`Binding.kept(on:in:)`).
+    private(set) var rootShown: Set<Screen> = []
     private(set) var status: Status = .idle("") {
         didSet {
             #if DEBUG
@@ -286,6 +290,21 @@ final class AppModel {
     /// True when no catalog step of this run is running or still to come for the game (`catalogPending`): the catalog
     /// then holds every product of the game it is going to hold in this run.
     func catalogSettled(game: String) -> Bool { !catalogPending.contains(game) }
+
+    /// A switch made by code ("Search a card", "Open the collection", the import, `-card`): `screen` opens on its root, not
+    /// on a page kept from an earlier visit; only the sidebar returns to kept pages.
+    func showRoot(of screen: Screen) {
+        rootShown.insert(screen)
+        self.screen = screen
+    }
+
+    /// True while `screen` shows its root after a switch made by code (`showRoot(of:)`).
+    func showsRoot(_ screen: Screen) -> Bool { rootShown.contains(screen) }
+
+    /// A page was opened or closed on `screen` while it was on show: it shows its own pages again.
+    func pagesChanged(on screen: Screen) {
+        if rootShown.contains(screen) { rootShown.remove(screen) }
+    }
 
     /// `-exportPDF`: the file the list screen `screen` writes its PDF to, once; nil for any other screen, and after the
     /// first take.
@@ -485,7 +504,7 @@ final class AppModel {
         defer { importsBeingSaid -= 1 }
         importing = nil
         gameID = applied.gameID
-        screen = .collection
+        showRoot(of: .collection)
         // An earlier import's notice is not this one's result.
         noticeTask?.cancel()
         statusNotice = nil
@@ -566,8 +585,18 @@ final class AppModel {
     private func launch() async {
         watchSaleNotices()
         #if DEBUG
-        // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read.
-        if let file = options.launchImport(isDebugBuild: Self.isDebugBuild) { await importCSV(from: file) }
+        // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
+        // `-importCSVDelay` it opens that long after the launch, so a UI test can open a page first; it holds nothing.
+        if let file = options.launchImport(isDebugBuild: Self.isDebugBuild) {
+            if let delay = options.importCSVDelay {
+                Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(delay))
+                    await self?.importCSV(from: file)
+                }
+            } else {
+                await importCSV(from: file)
+            }
+        }
         #endif
         await library.load()
         prices.load(paths: paths)
@@ -614,7 +643,7 @@ final class AppModel {
         guard let id = options.card, let product = try? await reader.product(id),
               let game = Games.game(product.gameID) else { return }
         gameID = game.id
-        screen = .allCards
+        showRoot(of: .allCards)
         pendingCard = CardTarget(gameID: game.id, cardKey: CardName.searchKey(product.cardName), startProductID: product.productID)
     }
 

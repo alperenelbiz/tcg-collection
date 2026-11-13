@@ -20,6 +20,12 @@ final class ScreenMemory<State: GameScreenState> {
         current = fresh
         return fresh
     }
+
+    /// The window's game is now `game`: a state of another game is dropped, also while this screen is not on show, so
+    /// every screen of the old game starts afresh (`RootView` calls it on every game switch).
+    func keep(game: String) {
+        if let current, current.gameID != game { self.current = nil }
+    }
 }
 
 /// A list screen's join with the catalog (the Collection, For Sale, Wanted): what the latest join read, and what the

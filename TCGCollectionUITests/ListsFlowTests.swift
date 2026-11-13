@@ -351,9 +351,11 @@ final class ListsFlowTests: UITestCase {
     /// printings; its page opens on 719835 (Starlight Rare, the newest: one set, the higher id). "Other printings" →
     /// 719834 (Super Rare), `wanted-plus`, "Want this printing": the entry saves the card's name (not "(Starlight Rare)")
     /// and pins 719834 1st Edition. Wanted shows that printing's set and that finish's price ($14.50: not its cheapest
-    /// finish, $9.00, nor the card's cheapest, $3.10). Fix round 1: on another printing's page the pin is named ("Pinned
-    /// to Beyond the Brave") with both choices; "Want this printing" moves it there, and from the first printing's page
-    /// "Any printing" clears it; the cell then shows the cheapest again. The prices are this test's own (`writePinPrices`).
+    /// finish, $9.00, nor the card's cheapest, $3.10). Fix rounds 1 and 2: on another printing's page the pin is named
+    /// ("Pinned to Beyond the Brave · BETB-EN001 · Super Rare") with both choices; "Want this printing" moves it there,
+    /// "Any printing" on that pinned page clears it in the file (then it is pinned again), and from the first printing's
+    /// page "Any printing" clears it; the cell then shows the cheapest again. The prices are this test's own
+    /// (`writePinPrices`).
     func testPinAPrinting() throws {
         let app = try launch(game: "yu-gi-oh") { root in try self.writePinPrices(in: root) }
         let card = element(app, "card-cell-swiftwind panther warrior")
@@ -407,21 +409,33 @@ final class ListsFlowTests: UITestCase {
         // The pin seen and moved from the other printing's page: 719835.
         showPrinting(app, 719835, facts: facts, rarity: "Starlight Rare")
         XCTAssertTrue(pinned.waitForExistence(timeout: 5))
-        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave")
+        // Fix round 2: the line names the printing (one set holds both), not only its set.
+        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave · BETB-EN001 · Super Rare")
+        XCTAssertGreaterThan(pinned.frame.height, 20, "the pin line is cut on one line: \(pinned.frame)")   // it wraps
         XCTAssertEqual(pin.label, "Want this printing")
         XCTAssertEqual(unpin.label, "Any printing")
         shot("lists-33-card-page-pinned-elsewhere")
         pin.click()
         XCTAssertTrue(waitUntil { pin.label == "Any printing" && !pinned.exists && !unpin.exists }, pin.label)
+        let pinnedTo719835 = [StoredWanted(cardKey: "swiftwind panther warrior", name: "Swiftwind Panther Warrior", count: 1,
+                                           pinProductID: 719835, pinFinish: "1st Edition")]
+        XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "yu-gi-oh")) == pinnedTo719835 },
+                      "\(String(describing: try? storedWanted(game: "yu-gi-oh")))")
+
+        // Fix round 2: "Any printing" on the pinned printing's own page clears the pin in the file; then pinned again.
+        pin.click()
+        XCTAssertTrue(waitUntil { pin.label == "Want this printing" }, pin.label)
         XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "yu-gi-oh"))
-                == [StoredWanted(cardKey: "swiftwind panther warrior", name: "Swiftwind Panther Warrior", count: 1,
-                                 pinProductID: 719835, pinFinish: "1st Edition")] },
+                == [StoredWanted(cardKey: "swiftwind panther warrior", name: "Swiftwind Panther Warrior", count: 1)] },
+                      "\(String(describing: try? storedWanted(game: "yu-gi-oh")))")
+        pin.click()
+        XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "yu-gi-oh")) == pinnedTo719835 },
                       "\(String(describing: try? storedWanted(game: "yu-gi-oh")))")
 
         // And cleared from the page of 719834, which is not the pinned printing now.
         showPrinting(app, 719834, facts: facts, rarity: "Super Rare")
         XCTAssertTrue(pinned.waitForExistence(timeout: 5))
-        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave")
+        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave · BETB-EN001 · Starlight Rare")
         unpin.click()
         XCTAssertTrue(waitUntil { pin.label == "Want this printing" && !pinned.exists && !unpin.exists }, pin.label)
         goBack(app)
@@ -714,6 +728,115 @@ final class ListsFlowTests: UITestCase {
         }
         XCTAssertTrue(saleCell.waitForExistence(timeout: 10), "For Sale did not start afresh after a game switch")
         XCTAssertFalse(page.exists)
+
+        // Fix round 2: also the screens not on show. A Collection page open → All cards → Cyberpunk and back → the
+        // Collection shows its gallery.
+        element(app, "sidebar-collection").click()
+        let ownedCell = app.buttons["collection-cell-721334-Normal"]
+        XCTAssertTrue(ownedCell.waitForExistence(timeout: 10))
+        ownedCell.click()
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(app.buttons["card-cell-dockside lock up"].waitForExistence(timeout: 10))
+        for name in ["Cyberpunk TCG", "Riftbound"] {
+            element(app, "game-picker").click()
+            XCTAssertTrue(app.menuItems[name].firstMatch.waitForExistence(timeout: 5))
+            app.menuItems[name].firstMatch.click()
+            XCTAssertTrue(waitUntil { self.element(app, "game-picker").value as? String == name },
+                          "\(String(describing: element(app, "game-picker").value))")
+        }
+        element(app, "sidebar-collection").click()
+        XCTAssertTrue(ownedCell.waitForExistence(timeout: 10), "the Collection kept a page of the old game")
+        XCTAssertFalse(page.exists)
+    }
+
+    // MARK: Switches made by code (phase 2C task 4, fix round 2)
+
+    /// A switch made by code shows the target screen's root, not a page kept there: All cards → a card page → the sidebar
+    /// to Wanted (empty) → "Search a card" shows All cards' gallery and search field. A sidebar return to Wanted and back
+    /// shows All cards as it was last seen (the gallery).
+    func testSearchACardShowsAllCardsAtItsRoot() throws {
+        let app = launch(game: "riftbound")
+        let card = element(app, "card-cell-dockside lock up")
+        XCTAssertTrue(card.waitForExistence(timeout: 20))
+        card.click()
+        let page = element(app, "card-page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        element(app, "sidebar-wanted").click()
+        let search = element(app, "wanted-search-catalog")
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.click()
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "All cards did not open on its gallery")
+        XCTAssertFalse(page.exists, "All cards showed the page it kept")
+        XCTAssertTrue(searchField(app).exists)
+        assertAccentFill(app, row: "sidebar-all-cards")
+        shot("lists-35-search-a-card-shows-the-gallery")
+        element(app, "sidebar-wanted").click()
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertFalse(page.exists)
+        card.click()                                             // a page opened there is kept as before
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        element(app, "sidebar-wanted").click()
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "a page opened after the switch was not kept")
+    }
+
+    /// The import's switch shows the Collection's root: a Collection page open → All cards → the import sheet
+    /// (`-importCSVDelay`, as Cmd+I would open it; the system panel is not driven) → Import shows the imported list, not
+    /// the old page.
+    func testAnImportShowsTheCollectionAtItsRoot() throws {
+        let csv = Self.fixturesDirectory.appending(path: "collection-riftbound.csv").path
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection", "-importCSV", csv, "-importCSVDelay", "12000"]) { root in
+            try self.writeCollection([StoredRow(productID: 721334, finish: "Normal", count: 1, name: "Dockside Lock-Up")],
+                                     game: "riftbound", in: root)
+        }
+        let cell = app.buttons["collection-cell-721334-Normal"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "the cell is not a link")
+        cell.click()
+        let page = element(app, "card-page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        element(app, "sidebar-all-cards").click()
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 10))
+        XCTAssertFalse(app.sheets.firstMatch.exists, "the import sheet came before the page was left: raise -importCSVDelay")
+        let apply = element(app, "import-apply")
+        XCTAssertTrue(apply.waitForExistence(timeout: 25), "no import sheet")
+        XCTAssertTrue(waitUntil(timeout: 15) { apply.isEnabled }, "Import stayed off")
+        apply.click()
+        XCTAssertTrue(app.buttons["collection-cell-721334-Foil"].waitForExistence(timeout: 10), "the Collection did not show its list")
+        XCTAssertFalse(page.exists, "the Collection showed the page it kept")
+        assertAccentFill(app, row: "sidebar-collection")
+        shot("lists-36-import-shows-the-collection")
+    }
+
+    /// The finish column at 900 pt with a long made-up finish ("1st Edition Holofoil", no price): its name may take two
+    /// lines, the other names stay whole on one line, the window keeps its width, and every control of the row is inside
+    /// the window and hittable.
+    func testALongFinishNameKeepsTheRowInTheWindow() throws {
+        let app = try launch(game: "yu-gi-oh") { root in try self.writePinPrices(in: root, longFinish: true) }
+        let card = element(app, "card-cell-swiftwind panther warrior")
+        XCTAssertTrue(card.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        card.click()
+        let facts = app.staticTexts["card-facts-line"]
+        XCTAssertTrue(facts.waitForExistence(timeout: 10))
+        showPrinting(app, 719834, facts: facts, rarity: "Super Rare")
+        let long = "1st Edition Holofoil"
+        XCTAssertTrue(element(app, "card-finish-\(long)").waitForExistence(timeout: 5))
+        assertFinishLines(app, ["1st Edition", "Unlimited"])
+        let name = element(app, "card-finish-\(long)"), window = app.windows.firstMatch.frame
+        // A row wider than the column does not stay inside it: SwiftUI widens the window to the content (seen: 937 pt).
+        XCTAssertEqual(window.width, 900, accuracy: 1, "the row widened the window")
+        XCTAssertLessThan(name.frame.height, 40, "more than two lines: \(name.frame)")
+        XCTAssertLessThanOrEqual(name.frame.maxX, element(app, "count-minus-\(long)").frame.minX)
+        for control in ["count-minus-", "count-plus-", "sale-minus-", "sale-plus-"].map({ $0 + long }) {
+            let element = element(app, control)
+            XCTAssertTrue(element.isHittable, "\(control) is not hittable")
+            XCTAssertLessThanOrEqual(element.frame.maxX, window.maxX, "\(control) leaves the window: \(element.frame)")
+        }
+        shot("lists-34-card-page-long-finish")
     }
 
     // MARK: Helpers
@@ -782,13 +905,16 @@ final class ListsFlowTests: UITestCase {
     /// the price step then has that day and downloads nothing, so the fixture archive (which has no Yu-Gi-Oh! price) does
     /// not replace them. Yu-Gi-Oh!: Swiftwind Panther Warrior 719834 (Super Rare) 1st Edition $14.50, Unlimited $9.00;
     /// 719835 (Starlight Rare) 1st Edition $3.10. The other games have none. The form is the app's `GamePrices`.
-    private func writePinPrices(in root: URL) throws {
+    /// With `longFinish`, 719834 also has a made-up "1st Edition Holofoil" line (113 pt at 13 pt) without a shown price
+    /// ("No price"), for the narrow finish column (fix round 2); the card's prices stay the same.
+    private func writePinPrices(in root: URL, longFinish: Bool = false) throws {
         let support = root.appending(path: "support", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let none = #"{"day": "2099-12-31", "finishes": [], "rows": {}}"#
+        let long = longFinish ? #", "2": {"mid": 50}"# : ""
         let yugioh = """
-        {"day": "2099-12-31", "finishes": ["1st Edition", "Unlimited"],
-         "rows": {"719834": {"0": {"market": 14.5}, "1": {"market": 9}}, "719835": {"0": {"market": 3.1}}}}
+        {"day": "2099-12-31", "finishes": ["1st Edition", "Unlimited"\(longFinish ? #", "1st Edition Holofoil""# : "")],
+         "rows": {"719834": {"0": {"market": 14.5}, "1": {"market": 9}\(long)}, "719835": {"0": {"market": 3.1}}}}
         """
         for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
             try Data((game == "yu-gi-oh" ? yugioh : none).utf8).write(to: support.appending(path: "prices-\(game).json"))
