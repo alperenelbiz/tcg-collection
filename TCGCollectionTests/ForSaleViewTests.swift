@@ -43,4 +43,24 @@ struct ForSaleViewTests {
         // Nothing for sale: an empty list, not the rows of the collection.
         #expect(state.content(sale: [])?.entries.isEmpty == true)
     }
+
+    /// Fix round 1: a for-sale printing the last join did not cover (a reload added it after the join) is pending until the
+    /// next join ends, also on a settled catalog: the join has not looked for its product, so it is not "not in the
+    /// catalog any more". A covered printing whose product is missing still is.
+    @Test func aPrintingTheJoinDidNotCoverIsPending() throws {
+        let rows = [CollectionRow(productID: 1, finish: "Normal", count: 3, condition: "", name: "Dockside Lock-Up"),
+                    CollectionRow(productID: 9, finish: "Normal", count: 1, condition: "", name: "Gone Card")]
+        let state = ForSaleScreenState(gameID: "riftbound")
+        state.join.joined = CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 1, priceDay: nil, catalogSettled: true)
+        state.join.catalogHasProducts = true
+        state.join.entries = CollectionList.entries(rows: rows, products: [1: product(id: 1, name: "Dockside Lock-Up")],
+                                                    setNames: [:]) { _ in nil }
+        let sale = [SaleEntry(productID: 1, finish: "Normal", count: 1, name: "Dockside Lock-Up"),
+                    SaleEntry(productID: 9, finish: "Normal", count: 1, name: "Gone Card"),
+                    SaleEntry(productID: 4, finish: "Foil", count: 2, name: "Added By A Reload")]
+        let content = try #require(state.content(sale: sale))
+        #expect(content.entries.map(\.name) == ["Dockside Lock-Up", "Gone Card", "Added By A Reload"])
+        #expect(content.entries.map { content.link(for: $0) } == [.card, .unknownPrinting, .none])
+        #expect(content.uncovered == [PrintingKey(productID: 4, finish: "Foil")])
+    }
 }

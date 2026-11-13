@@ -49,9 +49,10 @@ final class ListsFlowTests: UITestCase {
                       "\(String(describing: try? storedForSale(game: "riftbound")))")
     }
 
-    /// C7: "Sold" asks once; "Sold all 2" takes both copies out of the collection and the list, and writes one sold record
-    /// with today's day and the printing's price. For Sale is then empty, with its one action; the Collection keeps ×1.
-    /// "Sold" is off while its dialog is open, so the copies are sold once (Review Focus 3).
+    /// C7: "Sold" asks once; Cancel changes nothing (the file's bytes stay). "Sold all 2" takes both copies out of the
+    /// collection and the list, and writes one sold record with today's day and the printing's price. For Sale is then
+    /// empty, with its one action; the Collection keeps ×1. "Sold" is off while its dialog is open, so the copies are sold
+    /// once (Review Focus 3).
     func testSoldTakesTheCopiesOutOnce() throws {
         let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
             try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 3, forSale: 2))
@@ -63,6 +64,16 @@ final class ListsFlowTests: UITestCase {
                       element(app, "for-sale-cell-721334-Normal").label)
         XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("2 copies · 1 printing · $10.24"), app.windows.firstMatch.title)
         shot("lists-04-for-sale-before-sold")
+        let file = try XCTUnwrap(root).appending(path: "user/riftbound.json")
+        let before = try Data(contentsOf: file)
+        sold.click()
+        let cancel = app.sheets.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        cancel.click()
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "Cancel did not close the dialog")
+        XCTAssertTrue(waitUntil { sold.isEnabled }, "Sold stayed off after Cancel")
+        XCTAssertEqual(text(element(app, "for-sale-value-721334-Normal")), "2")
+        XCTAssertEqual(try Data(contentsOf: file), before, "Cancel changed the file")
         sold.click()
         let all = app.sheets.buttons["Sold all 2"].firstMatch
         XCTAssertTrue(all.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
@@ -123,6 +134,97 @@ final class ListsFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.identifiers(self.collectionCells(app)) == ["collection-cell-722282-Normal"] },
                       "\(identifiers(collectionCells(app)))")
         shot("lists-09-collection-without-the-sold-printing")
+    }
+
+    /// Fix round 1, D4: a double click on "Sold 1" sells one copy once: one record, one copy less owned and for sale.
+    func testADoubleClickOnSoldOneSellsOne() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 3, forSale: 2))
+        }
+        let sold = element(app, "for-sale-sold-721334-Normal")
+        XCTAssertTrue(sold.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        sold.click()
+        let one = app.sheets.buttons["Sold 1"].firstMatch
+        XCTAssertTrue(one.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        one.doubleClick()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "for-sale-value-721334-Normal")) == "1" },
+                      text(element(app, "for-sale-value-721334-Normal")))
+        XCTAssertTrue(waitUntil { (try? self.storedSold(game: "riftbound"))?.map(\.count) == [1] },
+                      "\(String(describing: try? storedSold(game: "riftbound")))")
+        XCTAssertEqual(try storedCollection(game: "riftbound"), [StoredRow(productID: 721334, finish: "Normal", count: 2, name: "Dockside Lock-Up")])
+        XCTAssertEqual(try storedForSale(game: "riftbound"), [StoredSale(productID: 721334, finish: "Normal", count: 1, name: "Dockside Lock-Up")])
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+    }
+
+    /// Fix round 1, item B: the dialog follows the live for-sale count. Another device lowers it from 2 to 1 while the
+    /// dialog is open (a coordinated write the app reads again): the title says 1 and "Sold all" goes. When nothing is for
+    /// sale any more, the dialog closes and nothing was sold.
+    func testTheSoldDialogFollowsTheLiveCount() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 2, forSale: 2))
+        }
+        let sold = element(app, "for-sale-sold-721334-Normal")
+        XCTAssertTrue(sold.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        sold.click()
+        XCTAssertTrue(app.sheets.buttons["Sold all 2"].firstMatch.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.staticTexts.matching(Self.showing("Sold 2 of Dockside Lock-Up?")).firstMatch.exists)
+        shot("lists-13-sold-dialog-two-for-sale")
+
+        try changeUserFile(game: "riftbound", json: Self.saleFile(owned: 2, forSale: 1))
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "for-sale-value-721334-Normal")) == "1" },
+                      "the reload did not reach the app: \(text(element(app, "for-sale-value-721334-Normal")))")
+        XCTAssertTrue(app.sheets.staticTexts.matching(Self.showing("Sold 1 of Dockside Lock-Up?")).firstMatch.waitForExistence(timeout: 10),
+                      app.sheets.firstMatch.debugDescription)
+        let soldAll = NSPredicate(format: "label BEGINSWITH %@", "Sold all")
+        XCTAssertTrue(waitUntil { app.sheets.buttons.matching(soldAll).count == 0 }, app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.buttons["Sold 1"].firstMatch.exists)
+        shot("lists-14-sold-dialog-after-a-reload")
+
+        try changeUserFile(game: "riftbound", json: Self.saleFile(owned: 2, forSale: 0))
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "the dialog stayed open with nothing for sale")
+        let screen = element(app, "for-sale-screen")
+        XCTAssertTrue(screen.descendants(matching: .staticText).matching(Self.showing("Nothing for sale.")).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(try storedSold(game: "riftbound"), [])
+        shot("lists-15-dialog-closed-nothing-for-sale")
+    }
+
+    /// Fix round 1, D5: two printings for sale, one without a price. The search narrows the cells and the subtitle (the
+    /// Collection's "x of y" form, the sum of the shown printings); `−` at 1 takes a printing off the list.
+    func testSearchAndMinusToZeroOnForSale() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "collection": [{"productID": 721334, "finish": "Normal", "count": 1, "condition": "", "name": "Dockside Lock-Up"},
+                            {"productID": 722282, "finish": "Normal", "count": 1, "condition": "", "name": "Calm Rune (R02a)"}],
+             "forSale": [{"productID": 721334, "finish": "Normal", "count": 1, "name": "Dockside Lock-Up"},
+                         {"productID": 722282, "finish": "Normal", "count": 1, "name": "Calm Rune (R02a)"}]}
+            """)
+        }
+        let cells = forSaleCells(app)
+        XCTAssertTrue(waitUntil(timeout: 20) { cells.count == 2 }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntilSynced(app))
+        let title = { app.windows.firstMatch.title }
+        XCTAssertTrue(waitUntil { title().hasSuffix("2 copies · 2 printings · $5.12 + 1 without a price") }, title())
+        let search = searchField(app)
+        search.click()
+        search.typeText("rune")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["for-sale-cell-722282-Normal"] }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntil { title().hasSuffix("1 of 2 copies · 1 of 2 printings · 1 without a price") }, title())
+        shot("lists-16-for-sale-search")
+        search.typeKey("a", modifierFlags: .command)
+        search.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(waitUntil { cells.count == 2 }, "\(identifiers(cells))")
+
+        element(app, "for-sale-minus-721334-Normal").click()
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["for-sale-cell-722282-Normal"] }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntil { title().hasSuffix("1 copy · 1 printing · 1 without a price") }, title())
+        XCTAssertTrue(waitUntil { (try? self.storedForSale(game: "riftbound"))
+                == [StoredSale(productID: 722282, finish: "Normal", count: 1, name: "Calm Rune (R02a)")] },
+                      "\(String(describing: try? storedForSale(game: "riftbound")))")
+        XCTAssertEqual(try storedCollection(game: "riftbound").map(\.count), [1, 1], "the owned counts changed")
+        shot("lists-17-for-sale-minus-to-zero")
     }
 
     /// C8: 3 owned, 3 for sale; `−` of the owned count on the card page takes the for-sale count down with it, and the

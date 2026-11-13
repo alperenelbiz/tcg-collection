@@ -171,6 +171,19 @@ class UITestCase: XCTestCase {
         try Data(json.utf8).write(to: folder.appending(path: "\(game).json"))
     }
 
+    /// Replaces `<root>/user/<game>.json` while the app runs, as another device does: a coordinated write, which the app's
+    /// folder presenter reports, so the app reads the file again.
+    func changeUserFile(game: String, json: String) throws {
+        let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")
+        var coordination: NSError?
+        var writing: (any Error)?
+        NSFileCoordinator().coordinate(writingItemAt: file, options: .forReplacing, error: &coordination) { url in
+            do { try Data(json.utf8).write(to: url, options: .atomic) } catch { writing = error }
+        }
+        if let coordination { throw coordination }
+        if let writing { throw writing }
+    }
+
     /// `<root>/user/<game>.json` of the running test's root as the app last wrote it, as a JSON object; nil with no file.
     func storedUserFile(game: String) throws -> [String: Any]? {
         let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")

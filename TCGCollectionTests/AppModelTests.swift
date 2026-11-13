@@ -651,6 +651,35 @@ struct AppModelTests {
 
     /// A for-sale count that follows an owned count down is said once in the status line, as an import's summary is;
     /// the library's notice is cleared.
+    /// C7: a sale writes the price of that moment (the price table's, for the printing's finish) and says nothing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleWritesThePriceOfTheMoment() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        try model.prices.replace("riftbound", with: fixturePrices(), paths: model.paths)
+        let key = PrintingKey(productID: 721334, finish: "Normal")
+        model.library.setCount(3, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        #expect(model.sell(2, game: "riftbound", key: key))
+        #expect(model.library.sold(game: "riftbound").map(\.price) == [5.12])
+        #expect(model.library.count(game: "riftbound", key: key) == 1)
+        #expect(model.statusNotice == nil)
+    }
+
+    /// Fix round 1: a sale the library refuses (the copies for sale changed while the dialog was open: here 1 left of the
+    /// 2 it offered) sells nothing, and the status line says so.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aRefusedSaleIsSaid() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let key = PrintingKey(productID: 721334, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        model.library.setForSale(1, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        let version = model.library.version
+        #expect(!model.sell(2, game: "riftbound", key: key))
+        #expect(model.statusNotice == "Nothing was sold: the copies for sale changed.")
+        #expect(model.library.version == version && model.library.sold(game: "riftbound").isEmpty)
+        #expect(model.library.forSaleCount(game: "riftbound", key: key) == 1)
+    }
+
     @MainActor @Test(.timeLimit(.minutes(1))) func aSaleNoticeIsSaidInTheStatusLine() async throws {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

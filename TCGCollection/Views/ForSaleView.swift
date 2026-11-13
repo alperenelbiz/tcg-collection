@@ -19,13 +19,19 @@ final class ForSaleScreenState: GameScreenState {
         self.gameID = gameID
     }
 
+    /// True when the search text has a word to match.
+    var searching: Bool { !CardName.searchKey(text).isEmpty }
+
     /// What For Sale lists: the for-sale printings on the last join (`SaleList.entries`), with the Collection's catalog
     /// states (`RowsJoin.content`: a printing the catalog lacks is pending while the game's catalog downloads); without a
-    /// join's entries, the for-sale printings alone, by their saved names. Nil until a join of this game has ended.
+    /// join's entries, the for-sale printings alone, by their saved names. A printing the last join did not read is
+    /// pending until the next one (`uncovered`). Nil until a join of this game has ended.
     func content(sale: [SaleEntry]) -> CollectionContent? {
-        join.content(rows: SaleList.entries(sale: sale, collection: []).map(\.row)) {
+        guard var content = join.content(rows: SaleList.entries(sale: sale, collection: []).map(\.row), listing: {
             SaleList.entries(sale: sale, collection: $0)
-        }
+        }) else { return nil }
+        content.uncovered = Set(sale.map(\.key)).subtracting((join.entries ?? []).map(\.id))
+        return content
     }
 }
 
@@ -44,8 +50,8 @@ struct ForSaleView: View {
     /// The printing "Sold" asks about (C7); nil while no dialog is open.
     @State private var selling: Sale?
 
-    /// What "Sold" asks about: the printing, its name, and its for-sale count when the button was clicked.
-    private struct Sale {
+    /// What "Sold" asks about: the printing, its name, and the for-sale count the open dialog was made for.
+    private struct Sale: Equatable {
         let key: PrintingKey
         let name: String
         let count: Int
@@ -55,31 +61,37 @@ struct ForSaleView: View {
         let library = model.library
         // Nil until a join of this game has ended. The for-sale counts are read here, so a change shows at once.
         let listed = state.content(sale: library.forSale(game: state.gameID))
+        let all = listed?.entries ?? []
         let shown = listed.map {
             CollectionList.shown($0, text: state.text, groupID: nil, rarity: nil, price: .any, playset: .any,
                                  playsetSize: model.game.playset, sort: state.sort)
         } ?? []
         let phase = ListPhase.of(listed, game: state.gameID, library: library)
         let join = RowsJoin.key(game: state.gameID, model: model)
+        // The dialog follows the live for-sale count of its printing (a reload, another window): it opens again with the
+        // new numbers, and closes when nothing is for sale any more (`follow`).
+        let dialog = selling.flatMap { SaleList.soldDialog(name: $0.name, forSale: $0.count) }
+        let live = selling.map { library.forSaleCount(game: state.gameID, key: $0.key) }
         content(phase, shown: shown, listed: listed)
             .listScreen("for-sale", note: phase == .list ? listed?.note : nil)
             .navigationTitle("For Sale")
-            .navigationSubtitle(phase == .list ? SaleList.totals(listed?.entries ?? []) : "")
+            .navigationSubtitle(phase != .list ? "" : state.searching ? SaleList.totals(shown, of: all) : SaleList.totals(all))
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
                     SortMenu(sort: $state.sort, identifier: "for-sale-sort")
                 }
             }
-            .confirmationDialog(selling.map { "Sold \($0.count) of \($0.name)?" } ?? "",
-                                isPresented: Binding(get: { selling != nil }, set: { if !$0 { selling = nil } }),
-                                titleVisibility: .visible, presenting: selling) { sale in
-                Button("Sold 1", role: .destructive) { sell(1, of: sale) }
-                if sale.count > 1 {
-                    Button("Sold all \(sale.count)", role: .destructive) { sell(sale.count, of: sale) }
+            // Plain buttons: selling is what the dialog is for, not a mistake to warn about (the system's destructive red
+            // on its dark fill reads badly).
+            .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { selling = nil } }),
+                                titleVisibility: .visible, presenting: dialog) { dialog in
+                ForEach(dialog.choices, id: \.self) { choice in
+                    Button(choice.label) { sell(choice.count) }
                 }
                 Button("Cancel", role: .cancel) {}
             }
+            .onChange(of: live) { _, live in follow(live) }
             .task(id: join) { await state.join.run(join, model: model) }
     }
 
@@ -141,12 +153,37 @@ struct ForSaleView: View {
         library.setForSale(library.forSaleCount(game: game, key: entry.id) + delta, game: game, key: entry.id, name: entry.name)
     }
 
-    /// C7: `count` copies leave the collection and the list, and one sold record is written, with the printing's own
-    /// price for its finish at this moment (the price table's, as the cell shows it; none when it has none). A sale the
-    /// library refuses (a second click, a count changed meanwhile: more than are for sale or owned) sells nothing.
-    private func sell(_ count: Int, of sale: Sale) {
+    /// How long a closed dialog is given to go before it opens again. Measured on macOS 27: a dialog closed and opened
+    /// again at once stays open with its first numbers (SwiftUI keeps it presented); after this pause it opens anew. Too
+    /// short on some Mac, the old numbers stay, and a choice the count no longer allows is refused and said.
+    private static let reopenPause = Duration.milliseconds(400)
+
+    /// The open dialog's printing has a new for-sale count (`live`): the dialog closes, and opens again with the new numbers
+    /// after `reopenPause`; at 0 it only closes (`SaleList.follow`).
+    private func follow(_ live: Int?) {
+        guard let sale = selling, let live else { return }
+        switch SaleList.follow(shown: sale.count, live: live) {
+        case .keep:
+            return
+        case .close:
+            selling = nil
+        case .reopen(let count):
+            selling = nil
+            Task { @MainActor in
+                try? await Task.sleep(for: Self.reopenPause)
+                // Not when another dialog was opened during the pause.
+                guard selling == nil else { return }
+                selling = Sale(key: sale.key, name: sale.name, count: count)
+            }
+        }
+    }
+
+    /// C7, a choice of the dialog: `count` copies leave the collection and the list, and one sold record is written at the
+    /// price of this moment (`AppModel.sell`, which says so when the library refuses). The dialog's printing is taken
+    /// first: a second activation before the dialog has closed (a double click) finds none and sells nothing.
+    private func sell(_ count: Int) {
+        guard let sale = selling else { return }
         selling = nil
-        let game = state.gameID
-        model.library.sell(count, game: game, key: sale.key, price: model.prices.shown(game: game, key: sale.key))
+        model.sell(count, game: state.gameID, key: sale.key)
     }
 }

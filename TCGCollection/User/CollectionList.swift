@@ -49,12 +49,15 @@ nonisolated struct CollectionContent: Equatable {
     let settled: Bool
     /// One muted line above the gallery that says what the catalog cannot give; nil when it gives everything.
     let note: String?
+    /// Printings the join that made `entries` did not read (For Sale: a printing a reload added after it): pending until
+    /// the next join, whatever the catalog's state.
+    var uncovered: Set<PrintingKey> = []
 
     /// Where a cell opens: its card page when the catalog has its product; the page of a printing that left the catalog
-    /// when the catalog is settled; else nowhere (pending).
+    /// when the catalog is settled and the join read the printing; else nowhere (pending).
     func link(for entry: CollectionEntry) -> CollectionCellLink {
         if entry.product != nil { return .card }
-        return settled ? .unknownPrinting : .none
+        return settled && !uncovered.contains(entry.id) ? .unknownPrinting : .none
     }
 }
 

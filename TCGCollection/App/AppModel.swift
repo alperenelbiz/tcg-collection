@@ -50,6 +50,8 @@ nonisolated enum StatusText {
         "Catalog: the store cannot be opened (\(reason))"
     }
     static let prices = "Updating prices…"
+    /// A Sold choice the library refused: the copies for sale changed while the dialog was open (C7).
+    static let nothingSold = "Nothing was sold: the copies for sale changed."
     static let ygoIndex = "Updating Yu-Gi-Oh! pictures…"
 
     static func catalog(_ progress: SyncProgress, gameName: String) -> String {
@@ -484,6 +486,19 @@ final class AppModel {
         let sale = library.saleNotice
         library.clearSaleNotice()
         say("Imported: \(applied.summary)" + (sale.map { ". \($0)" } ?? ""))
+    }
+
+    /// C7: sells `count` copies of a printing on the For Sale list, at the price of this moment (the price table's, for
+    /// the printing's finish; none when it has none). When the library refuses (more than are for sale or owned by now:
+    /// the copies for sale changed while the dialog was open), nothing is sold and the status line says so. True when it
+    /// sold.
+    @discardableResult
+    func sell(_ count: Int, game: String, key: PrintingKey) -> Bool {
+        guard library.sell(count, game: game, key: key, price: prices.shown(game: game, key: key)) else {
+            say(StatusText.nothingSold)
+            return false
+        }
+        return true
     }
 
     /// Shows `text` in the status line for `noticeDuration`, unless something else is said or the status changes first.
