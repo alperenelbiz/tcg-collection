@@ -30,7 +30,16 @@ struct CardImage: View {
         let image: CGImage
         init(_ image: CGImage) { self.image = image }
     }
-    private static let cache = NSCache<NSString, Entry>()
+    /// Decoded pictures kept in memory, by picture address and size. An NSCache without a cost limit only gives way under
+    /// memory pressure, which macOS signals late: a gallery scrolled end to end held gigabytes (a cell's picture is about
+    /// 2.6 MB decoded). Over the limit the cache drops entries; a dropped picture is decoded again from its file on disk.
+    static let memoryLimit = 300 * 1024 * 1024
+    nonisolated static func cost(of image: CGImage) -> Int { image.bytesPerRow * image.height }
+    private static let cache: NSCache<NSString, Entry> = {
+        let cache = NSCache<NSString, Entry>()
+        cache.totalCostLimit = memoryLimit
+        return cache
+    }()
 
     var body: some View {
         Theme.surface
@@ -73,7 +82,7 @@ struct CardImage: View {
             if !Task.isCancelled { missing = true }
             return
         }
-        Self.cache.setObject(Entry(decoded.image), forKey: key)
+        Self.cache.setObject(Entry(decoded.image), forKey: key, cost: Self.cost(of: decoded.image))
         if !Task.isCancelled { picture = decoded.image }
     }
 

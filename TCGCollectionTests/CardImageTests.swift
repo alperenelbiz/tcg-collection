@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 @testable import TCGCollection2
 
@@ -19,5 +20,17 @@ struct CardImageTests {
     @Test func aPageDecodesEnoughPixelsForItsPicture() {
         #expect(PictureSize.page.maxPixels == 1200)
         #expect(PictureSize.page.maxPixels >= Int((280.0 * 86 / 59 * 2).rounded(.up)))
+    }
+
+    /// Decoded pictures are kept in memory up to a limit: a cell's picture is about 2.6 MB (688 × 960 px, 4 bytes each),
+    /// so a gallery scrolled end to end would else hold gigabytes. The cost of an entry is its decoded size.
+    @Test func decodedPicturesAreKeptUpToAMemoryLimit() throws {
+        #expect(CardImage.memoryLimit == 300 * 1024 * 1024)
+        let space = CGColorSpaceCreateDeviceRGB()
+        let context = try #require(CGContext(data: nil, width: 688, height: 960, bitsPerComponent: 8, bytesPerRow: 688 * 4,
+                                             space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(context.makeImage())
+        #expect(CardImage.cost(of: image) == 688 * 4 * 960)
+        #expect(CardImage.memoryLimit / CardImage.cost(of: image) >= 100)   // room for a few screens of cells
     }
 }
