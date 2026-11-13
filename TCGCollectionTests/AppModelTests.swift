@@ -440,11 +440,14 @@ struct AppModelTests {
         first.screen = .allCards
         #expect(model(["app", "-store", root]).screen == .allCards)
         #expect(model(["app", "-store", root, "-screen", "collection"]).screen == .collection)   // -screen wins
-        #expect(model(["app", "-store", root, "-screen", "wanted"]).screen == .allCards)         // an unknown name is ignored
+        #expect(model(["app", "-store", root, "-screen", "sold"]).screen == .allCards)           // an unknown name is ignored
         #expect(model(["app", "-store", tempRoot().path]).screen == .collection)                 // another root, nothing saved
         model(["app", "-store", root]).screen = .forSale
         #expect(model(["app", "-store", root]).screen == .forSale)
         #expect(model(["app", "-store", root, "-screen", "for-sale"]).screen == .forSale)
+        model(["app", "-store", root]).screen = .wanted
+        #expect(model(["app", "-store", root]).screen == .wanted)
+        #expect(model(["app", "-store", root, "-screen", "wanted"]).screen == .wanted)
     }
 
     /// `-card` opens a card page, which lives under All cards: the screen follows, whatever `-screen` says.

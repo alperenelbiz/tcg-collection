@@ -108,8 +108,9 @@ struct CardPageView: View {
                 .padding(.top, 18)
             }
             RuleLine()
-            OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name,
-                          offered: finishes.map(\.finish), prices: finishes)
+            // A new wanted entry saves the card's name (the title), not the printing's bracketed product name.
+            OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
+                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName))
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -184,7 +185,8 @@ struct CardPageView: View {
 /// finish: its name, its price ("No price" in `muted` when it has none; no price column at all when `prices` is nil), a
 /// `CountControl` labelled with the finish (owned) and one for sale (`sale-…-<finish>`; its `+` is off at the owned count).
 /// The finishes are `offered` (the price table's, or `Normal` when there are none) and then every owned or for-sale finish
-/// that `offered` does not list.
+/// that `offered` does not list. Under the lines, for a card of the catalog, its Wanted line (`WantedLine`), whose pin is
+/// this product and its first finish line.
 /// While the library refuses changes of the game, no number is shown (`—`), the controls are off, and one muted line
 /// under them says why (`card-counts-locked`): the game's own problem, or "Reading your collection…".
 struct OwnedFinishes: View {
@@ -195,6 +197,9 @@ struct OwnedFinishes: View {
     let offered: [String]
     /// The price table's prices of the product; nil for a page without a price column (a product not in the catalog).
     let prices: [FinishPrice]?
+    /// The card of the page, for its Wanted line: its key and the name a new entry saves. Nil: no Wanted line (a printing
+    /// that left the catalog).
+    var wanted: (cardKey: String, name: String)? = nil
 
     @Environment(AppModel.self) private var model
 
@@ -240,13 +245,14 @@ struct OwnedFinishes: View {
             }
             .font(Theme.bodyFont)
             .disabled(locked != nil)
-            if let locked {
-                Text(locked)
-                    .font(Theme.lineFont)
-                    .foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("card-counts-locked")
+            // The pin of "Want this printing": this product and its first finish line (the price table's first finish,
+            // `Normal` when it has none). The page has no selected finish.
+            if let wanted, let first = finishes.first {
+                WantedLine(gameID: gameID, cardKey: wanted.cardKey, name: wanted.name,
+                           pin: PrintingKey(productID: productID, finish: first))
+                    .padding(.top, 6)
             }
+            if let locked { CountsLockedLine(text: locked) }
         }
     }
 
@@ -274,6 +280,63 @@ struct OwnedFinishes: View {
     private func stepForSale(by delta: Int, finish: String) {
         let library = model.library, key = PrintingKey(productID: productID, finish: finish)
         library.setForSale(library.forSaleCount(game: gameID, key: key) + delta, game: gameID, key: key, name: name)
+    }
+}
+
+/// Why the count controls of a page are off (`UserLibrary.countsLocked`): one muted line under them.
+struct CountsLockedLine: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("card-counts-locked")
+    }
+}
+
+/// A card's Wanted line (C2, C6), under the finish lines of its page: "Wanted" and one `CountControl` for the card
+/// (`wanted-minus`, `wanted-value`, `wanted-plus`; `−` at 1 takes the card and its pin off the list), and, from count 1,
+/// the pin (`wanted-pin`): "Want this printing" pins `pin`; when `pin` is the entry's pin, "Any printing" takes it away.
+/// `pin` nil: no pin (a card not in the catalog). A new entry saves `name`. While the game cannot change, no number (`—`),
+/// no pin, the control off; the page's locked line says why.
+struct WantedLine: View {
+    let gameID: String
+    let cardKey: String
+    let name: String
+    let pin: PrintingKey?
+
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let library = model.library
+        let locked = library.countsLocked(game: gameID) != nil
+        let entry = library.wanted(game: gameID).first { $0.cardKey == cardKey }
+        let count = entry?.count ?? 0
+        HStack(spacing: 16) {
+            Text("Wanted")
+                .foregroundStyle(Theme.text)
+            CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "") { step(by: $0 - count) }
+            if !locked, count > 0, let pin {
+                let pinned = entry?.pin == pin
+                Button(pinned ? "Any printing" : "Want this printing") {
+                    library.setPin(pinned ? nil : pin, game: gameID, cardKey: cardKey)
+                }
+                .buttonStyle(FieldButtonStyle())
+                .accessibilityIdentifier("wanted-pin")
+            }
+        }
+        .font(Theme.bodyFont)
+        .disabled(locked)
+    }
+
+    /// As the owned count: the step goes onto the library's current count, so two clicks before the next render both
+    /// count.
+    private func step(by delta: Int) {
+        let library = model.library
+        library.setWanted(library.wantedCount(game: gameID, cardKey: cardKey) + delta, game: gameID, cardKey: cardKey,
+                          name: name)
     }
 }
 

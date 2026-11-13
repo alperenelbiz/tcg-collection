@@ -18,11 +18,12 @@ nonisolated enum Status: Equatable, Sendable {
 /// What the window shows, chosen in the sidebar. The raw value is the `-screen` flag's value and the stored one.
 nonisolated enum Screen: String, Hashable, Sendable {
     case collection
+    case wanted
     case forSale = "for-sale"
     case allCards = "all-cards"
 
-    /// A list of the user's (the Collection, For Sale): it shows the library's lines (a problem, a settled conflict)
-    /// itself, on the screen and its pages. On any other screen the sidebar shows them.
+    /// A list of the user's (the Collection, Wanted, For Sale): it shows the library's lines (a problem, a settled
+    /// conflict) itself, on the screen and its pages. On any other screen the sidebar shows them.
     var isList: Bool { self != .allCards }
 }
 

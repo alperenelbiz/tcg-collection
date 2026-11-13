@@ -401,6 +401,26 @@ actor CatalogStore: ModelActor {
         return rows.map(\.record).sorted { Self.older($1, than: $0, dates: dates) }
     }
 
+    /// The printings of many cards of `game` at once (Wanted), by card key, each card's newest set first as
+    /// `printings(game:cardKey:)` gives them. A key the store has no product of the game for is left out. Read in batches
+    /// of 500 keys through the `(gameID, cardKey)` index, so a long list never builds one huge `IN` list.
+    func printings(game: String, cardKeys: [String]) throws -> [String: [ProductRecord]] {
+        let unique = Array(Set(cardKeys))
+        guard !unique.isEmpty else { return [:] }
+        var found: [String: [ProductRecord]] = [:]
+        for start in stride(from: 0, to: unique.count, by: 500) {
+            let batch = Array(unique[start..<min(start + 500, unique.count)])
+            for row in try modelContext.fetch(FetchDescriptor<CatalogProduct>(
+                predicate: #Predicate { $0.gameID == game && batch.contains($0.cardKey) })) {
+                found[row.cardKey, default: []].append(row.record)
+            }
+        }
+        let dates = Dictionary(
+            try setRows(game: game).compactMap { row in row.publishedOn.map { (row.groupID, $0) } },
+            uniquingKeysWith: { first, _ in first })
+        return found.mapValues { $0.sorted { Self.older($1, than: $0, dates: dates) } }
+    }
+
     func product(_ productID: Int) throws -> ProductRecord? {
         var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.productID == productID })
         descriptor.fetchLimit = 1

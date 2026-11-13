@@ -27,9 +27,11 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-screen", "collection"]).screen == .collection)
         #expect(LaunchOptions(arguments: ["app", "-screen", "all-cards"]).screen == .allCards)
         #expect(LaunchOptions(arguments: ["app", "-screen", "for-sale"]).screen == .forSale)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "wanted"]).screen == .wanted)
         #expect(LaunchOptions(arguments: ["app", "-screen", "allCards"]).screen == nil)      // the flag's spelling only
         #expect(LaunchOptions(arguments: ["app", "-screen", "forSale"]).screen == nil)
-        #expect(LaunchOptions(arguments: ["app", "-screen", "wanted"]).screen == nil)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "Wanted"]).screen == nil)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "sold"]).screen == nil)
         #expect(LaunchOptions(arguments: ["app"]).screen == nil)
     }
     @Test func theUserTestRootIsInTheStoreRoot() {

@@ -5,7 +5,8 @@ import SwiftUI
 /// the game's file is refused or not read yet) shows `—` and turns both buttons off. `set` gets the new count (the shown
 /// count ± 1); a parent's `.disabled` turns both off too.
 /// Identifiers: `<prefix>-minus-<key>`, `<prefix>-value-<key>`, `<prefix>-plus-<key>`; by default `count-…-<label>` (a
-/// label with spaces, such as `1st Edition`, keeps them). VoiceOver reads "Remove one <label>" and "Add one <label>".
+/// label with spaces, such as `1st Edition`, keeps them); an empty key gives `<prefix>-minus` (the card page's Wanted
+/// control: `wanted-minus`). VoiceOver reads "Remove one <label>" and "Add one <label>".
 struct CountControl: View {
     let count: Int?
     let label: String
@@ -30,14 +31,15 @@ struct CountControl: View {
     }
 
     var body: some View {
+        let suffix = key.isEmpty ? "" : "-\(key)"
         HStack(spacing: 0) {
-            step("−", name: "Remove one \(label)", identifier: "\(prefix)-minus-\(key)", to: (count ?? 0) - 1)
+            step("−", name: "Remove one \(label)", identifier: "\(prefix)-minus\(suffix)", to: (count ?? 0) - 1)
                 .disabled((count ?? 0) == 0)
             Text(count.map(String.init) ?? "—")
                 .foregroundStyle(Theme.text)
                 .frame(minWidth: Self.numberWidth)
-                .accessibilityIdentifier("\(prefix)-value-\(key)")
-            step("+", name: "Add one \(label)", identifier: "\(prefix)-plus-\(key)", to: (count ?? 0) + 1)
+                .accessibilityIdentifier("\(prefix)-value\(suffix)")
+            step("+", name: "Add one \(label)", identifier: "\(prefix)-plus\(suffix)", to: (count ?? 0) + 1)
                 .disabled(count == nil || maximum.map { (count ?? 0) >= $0 } == true)
         }
         .font(Theme.bodyFont)

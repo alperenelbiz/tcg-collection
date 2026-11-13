@@ -8,6 +8,8 @@ struct RootView: View {
     @State private var catalog = CatalogMemory()
     /// The Collection's search, filters, sort, scroll position and pages, for the life of this window.
     @State private var collection = CollectionMemory()
+    /// Wanted's search, sort, scroll position and pages, for the life of this window.
+    @State private var wanted = WantedMemory()
     /// For Sale's search, sort, scroll position and pages, for the life of this window.
     @State private var forSale = ForSaleMemory()
 
@@ -18,12 +20,16 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
             // One screen at a time: a hidden screen would still fill the toolbar (its menus, search field and title).
-            // Each screen keeps what it showed (`collection`, `forSale`, `catalog`), so a visit to another one loses
-            // nothing. Search text, filters and the open pages belong to one game (`.id`).
+            // Each screen keeps what it showed (`collection`, `wanted`, `forSale`, `catalog`), so a visit to another one
+            // loses nothing. Search text, filters and the open pages belong to one game (`.id`).
             switch model.screen {
             case .collection:
                 let state = collection.state(game: model.gameID)
                 ListStack(path: Bindable(state).path) { CollectionView(state: state) }
+                    .id(model.gameID)
+            case .wanted:
+                let state = wanted.state(game: model.gameID)
+                ListStack(path: Bindable(state).path) { WantedView(state: state) }
                     .id(model.gameID)
             case .forSale:
                 let state = forSale.state(game: model.gameID)
@@ -95,7 +101,7 @@ private struct CatalogStack: View {
     }
 }
 
-/// A list screen (the Collection, For Sale) and the pages pushed on it, in the screen's own navigation stack.
+/// A list screen (the Collection, Wanted, For Sale) and the pages pushed on it, in the screen's own navigation stack.
 private struct ListStack<Content: View>: View {
     @Binding var path: NavigationPath
     @ViewBuilder let content: Content
@@ -134,7 +140,8 @@ private struct Sidebar: View {
             Section("Lists") {
                 row(.collection, title: "Collection", icon: "rectangle.portrait.on.rectangle.portrait")
                     .accessibilityIdentifier("sidebar-collection")
-                // Wanted (`star`) comes here (phase 2C task 4).
+                row(.wanted, title: "Wanted", icon: "star")
+                    .accessibilityIdentifier("sidebar-wanted")
                 row(.forSale, title: "For Sale", icon: "tag")
                     .accessibilityIdentifier("sidebar-for-sale")
             }
@@ -202,9 +209,9 @@ private struct SidebarRow: View {
 
 /// What the user folder needs said: a problem (the folder is missing, a file is refused, a write failed) and a settled
 /// conflict, each with its one action. On a list screen it is this game's problem (`UserLibrary.problem(game:)`); in the
-/// sidebar the first problem of all. Shown on a list screen (the Collection, For Sale: `Screen.isList`) and the pages
-/// pushed on it, or in the sidebar's status area while another screen is showing; the identifier `collection-problem` is
-/// in one place at a time.
+/// sidebar the first problem of all. Shown on a list screen (the Collection, Wanted, For Sale: `Screen.isList`) and the
+/// pages pushed on it, or in the sidebar's status area while another screen is showing; the identifier
+/// `collection-problem` is in one place at a time.
 struct LibraryLines: View {
     let inSidebar: Bool
     @Environment(AppModel.self) private var model

@@ -251,6 +251,24 @@ struct CatalogStoreTests {
         #expect(try await s.products(ids: [], game: "riftbound").isEmpty)
     }
 
+    /// Phase 2C task 4: the printings of many cards at once (Wanted), by card key, each card's in the order the card page
+    /// reads them (`printings(game:cardKey:)`, newest set first). Only the game's own products; a key the store has no
+    /// product for is left out; repeated keys and more keys than one batch of 500 holds.
+    @Test func printingsOfManyCards() async throws {
+        let s = try await filledStore()
+        let warrior = "swiftwind panther warrior", token = "token joey and red eyes black dragon"
+        let found = try await s.printings(game: "yu-gi-oh", cardKeys: [warrior, token, "gone card", warrior, "dockside lock up"])
+        #expect(Set(found.keys) == [warrior, token])
+        #expect(found[warrior] == (try await s.printings(game: "yu-gi-oh", cardKey: warrior)))
+        #expect(found[warrior]?.map(\.productID) == [719835, 719834])           // one set: the higher id first
+        #expect(found[token]?.map(\.productID) == [719829])
+        #expect(try await s.printings(game: "riftbound", cardKeys: [warrior]).isEmpty)   // another game's card
+        #expect(try await s.printings(game: "riftbound", cardKeys: []).isEmpty)
+        let many = try await s.printings(game: "riftbound", cardKeys: (1...1_000).map { "card \($0)" } + ["calm rune", "dockside lock up"])
+        #expect(Set(many.keys) == ["calm rune", "dockside lock up"])
+        #expect(many["calm rune"]?.map(\.productID) == [722282])
+    }
+
     @Test func replaceProductsIsRepeatableAndRecordsTheDate() async throws {
         let s = try await filledStore(); let d = Date(timeIntervalSince1970: 1_800_000_000)
         let (cards, _) = try ProductParser.products(fixture("products-92.json"), game: Games.game("cyberpunk")!)

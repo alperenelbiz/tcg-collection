@@ -1,9 +1,9 @@
 import SwiftUI
 
-// The parts of a list screen (the Collection, For Sale): its state memory, the join of the rows with the catalog,
-// and the shared views.
+// The parts of a list screen (the Collection, Wanted, For Sale): its state memory, the join of the rows with the
+// catalog, and the shared views.
 
-/// The state of a list screen (the Collection, For Sale) for one game, kept by `ScreenMemory`.
+/// The state of a list screen (the Collection, Wanted, For Sale) for one game, kept by `ScreenMemory`.
 protocol GameScreenState: AnyObject {
     var gameID: String { get }
     init(gameID: String)
@@ -108,8 +108,14 @@ enum ListPhase {
 
     /// `listed`: what the screen lists, nil until a join of the game has ended.
     static func of(_ listed: CollectionContent?, game: String, library: UserLibrary) -> ListPhase {
-        if let listed, !listed.entries.isEmpty { return .list }
-        if library.canChange(game: game) { return listed == nil ? .loading : .empty }
+        of(listing: listed.map { !$0.entries.isEmpty }, game: game, library: library)
+    }
+
+    /// `listing`: whether the screen lists anything (Wanted lists cards, not `CollectionContent`); nil until a join of the
+    /// game has ended.
+    static func of(listing: Bool?, game: String, library: UserLibrary) -> ListPhase {
+        if listing == true { return .list }
+        if library.canChange(game: game) { return listing == nil ? .loading : .empty }
         return library.problem(game: game) == nil ? .loading : .unavailable
     }
 }

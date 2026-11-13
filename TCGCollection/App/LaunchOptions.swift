@@ -22,8 +22,8 @@ nonisolated struct LaunchOptions: Sendable {
     /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
     /// it in a Release build and without `-store`.
     var askUserFolder = false
-    /// `-screen collection|for-sale|all-cards`: the sidebar selection of this launch, for tests and snapshots. Any other value is
-    /// ignored (the stored selection is used).
+    /// `-screen collection|wanted|for-sale|all-cards`: the sidebar selection of this launch, for tests and snapshots. Any
+    /// other value is ignored (the stored selection is used).
     var screen: Screen?
     /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
     /// it through `launchImport`, which ignores it where it is not allowed.
