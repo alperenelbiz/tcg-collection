@@ -11,24 +11,11 @@ extension WantedList {
     }
 }
 
-/// The Wanted list joined with the catalog: the printings of every wanted card, the set names, and what the catalog
-/// said. `RowsJoin` joins collection rows, which are printings; Wanted speaks in cards and needs each card's printings, so
-/// it has this join of its own, run as `RowsJoin.run` runs: once per `CollectionJoin` (`RowsJoin.key`), off the main
-/// thread through `reader`, again only when the key changed or the last one failed (`CollectionList.joinIsDue`); a failed
-/// read keeps what the last one read. The live list is laid on it on every render (`content`), so a count or a pin shows
-/// at once.
-@Observable
-final class WantedJoin {
-    /// The last join that succeeded on a catalog with this game's products. Nil until one did.
-    var read: WantedRead?
-    /// The latest join threw (the catalog could not be read): `read` stays as it was, and the next appearance of the screen
-    /// tries again.
-    var failed = false
-    /// The catalog has products of this game. Without, the cards are listed alone.
-    var catalogHasProducts = false
-    /// What the latest join that ended read.
-    var joined: CollectionJoin?
+/// The Wanted list joined with the catalog (`CatalogJoin`): the printings of every wanted card and the set names. The
+/// live list is laid on it on every render (`content`), so a count or a pin shows at once.
+typealias WantedJoin = CatalogJoin<WantedRead>
 
+extension CatalogJoin where Read == WantedRead {
     /// What Wanted lists (`WantedList.content`); nil until a join of this game has ended. The catalog counts as settled as
     /// it was for the join that made `read`, as for the Collection.
     func content(wanted: [WantedEntry], rows: [CollectionRow],
@@ -38,38 +25,15 @@ final class WantedJoin {
                                   catalogSettled: joined.catalogSettled, price: price)
     }
 
-    /// Reads the printings of the game's wanted cards, its set names and whether it has products, when `key` differs from
-    /// the last join or the last one failed.
+    /// Reads the printings of the game's wanted cards (one store call) and its set names (`run`).
     func run(_ key: CollectionJoin, model: AppModel) async {
-        let library = model.library
-        // Before the folder is read the list is empty: no join, the screen shows its loading layout.
-        guard library.isLoaded, CollectionList.joinIsDue(key, last: joined, lastFailed: failed) else { return }
-        let game = key.game, keys = Set(library.wanted(game: game).map(\.cardKey))
-        let printings: [String: [ProductRecord]], sets: [SetRecord], hasProducts: Bool
-        do {
-            printings = try await model.reader.printings(game: game, cardKeys: Array(keys))
-            sets = try await model.reader.sets(game: game)
-            hasProducts = try await model.reader.hasProducts(game: game)
-        } catch {
-            // A read error never turns the cards into unknown ones: the last good read stays (`content`).
-            guard !Task.isCancelled else { return }
-            failed = true
-            joined = key
-            return
+        let keys = Set(model.library.wanted(game: key.game).map(\.cardKey))
+        await run(key, loaded: model.library.isLoaded, reader: model.reader) { reader, game in
+            let printings = try await reader.printings(game: game, cardKeys: Array(keys))
+            let sets = try await reader.sets(game: game)
+            let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
+            return WantedRead(printings: printings, keys: keys, setNames: names)
         }
-        guard !Task.isCancelled else { return }
-        failed = false
-        catalogHasProducts = hasProducts
-        joined = key
-        // No product of this game yet: every card would be missing; the cards are listed alone.
-        guard hasProducts else {
-            read = nil
-            return
-        }
-        let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let fresh = WantedRead(printings: printings, keys: keys, setNames: names)
-        // On a return to the screen with the same list nothing is written, so nothing redraws.
-        if read != fresh { read = fresh }
     }
 }
 
@@ -125,7 +89,7 @@ struct WantedView: View {
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
         // The list is read (also an empty one): its PDF can be made.
         let pdfReady = phase == .list || phase == .empty
-        let join = RowsJoin.key(game: game, model: model)
+        let join = WantedJoin.key(game: game, model: model)
         content(phase, shown: shown, listed: listed)
             .listScreen("wanted", note: phase == .list ? listed?.note : nil)
             .navigationDestination(for: UnknownCard.self) { card in

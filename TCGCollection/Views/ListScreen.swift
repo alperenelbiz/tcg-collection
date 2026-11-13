@@ -22,20 +22,74 @@ final class ScreenMemory<State: GameScreenState> {
     }
 }
 
-/// The game's collection rows joined with the catalog and the prices: what the Collection lists, and what For Sale lays
-/// its printings on (`SaleList.entries`). Each list screen's state has its own, so the window keeps it with the screen.
+/// A list screen's join with the catalog (the Collection, For Sale, Wanted): what the latest join read, and what the
+/// catalog said. Each list screen's state has its own, so the window keeps it with the screen. `Read` is what a screen
+/// reads (`RowsJoin`: the collection's entries; `WantedJoin`: the wanted cards' printings).
 @Observable
-final class RowsJoin {
-    /// The last join that succeeded on a catalog with this game's products, in the file's order. Nil until one did.
-    var entries: [CollectionEntry]?
-    /// The latest join threw (the catalog could not be read): `entries` stays as it was, and the next appearance of the
+final class CatalogJoin<Read: Equatable & Sendable> {
+    /// The last join that succeeded on a catalog with this game's products. Nil until one did.
+    var read: Read?
+    /// The latest join threw (the catalog could not be read): `read` stays as it was, and the next appearance of the
     /// screen tries again.
     var failed = false
-    /// The catalog has products of this game. Without, the rows are listed alone.
+    /// The catalog has products of this game. Without, the screen lists its rows alone.
     var catalogHasProducts = false
     /// What the latest join that ended read: a join with the same inputs is not done again (a return from another
     /// screen), unless it failed (`CollectionList.joinIsDue`).
     var joined: CollectionJoin?
+
+    /// What a join of the game reads now.
+    static func key(game: String, model: AppModel) -> CollectionJoin {
+        CollectionJoin(game: game, libraryVersion: model.library.version, catalogVersion: model.catalogVersion,
+                       priceDay: model.prices.day(game: game), catalogSettled: model.catalogSettled(game: game))
+    }
+
+    /// Joins once per `key`: when `key` differs from the last join or the last one failed, and only once the folder is
+    /// read (`loaded`; before, the screen shows its loading layout). `read` reads through `reader` (off the main thread)
+    /// with the game; then the join asks whether the game has products.
+    /// - A read that throws keeps the last good read (a read error never turns rows into unknown ones), marks the join
+    ///   failed with its key, and the next appearance of the screen tries again.
+    /// - A cancelled join (the screen went away, or its key changed meanwhile) stores nothing.
+    /// - Without products of the game nothing is kept: every product would be missing, the screen lists its rows alone.
+    /// - The read is stored only when it differs, so a return to the screen with the same rows redraws nothing.
+    /// Returns the read when the join stored it (a catalog with the game's products); else nil.
+    @discardableResult
+    func run(_ key: CollectionJoin, loaded: Bool, reader: CatalogStore,
+             read reading: (CatalogStore, String) async throws -> Read) async -> Read? {
+        guard loaded, CollectionList.joinIsDue(key, last: joined, lastFailed: failed) else { return nil }
+        let value: Read, hasProducts: Bool
+        do {
+            value = try await reading(reader, key.game)
+            hasProducts = try await reader.hasProducts(game: key.game)
+        } catch {
+            guard !Task.isCancelled else { return nil }
+            failed = true
+            joined = key
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        failed = false
+        catalogHasProducts = hasProducts
+        joined = key
+        guard hasProducts else {
+            read = nil
+            return nil
+        }
+        if read != value { read = value }
+        return value
+    }
+}
+
+/// The game's collection rows joined with the catalog and the prices: what the Collection lists, and what For Sale lays
+/// its printings on (`SaleList.entries`).
+typealias RowsJoin = CatalogJoin<[CollectionEntry]>
+
+extension CatalogJoin where Read == [CollectionEntry] {
+    /// The joined entries, in the file's order (`read`).
+    var entries: [CollectionEntry]? {
+        get { read }
+        set { read = newValue }
+    }
 
     /// What a list screen lists (`CollectionList.content`); nil until a join of this game has ended. `listing` makes the
     /// screen's entries from the joined ones (For Sale: `SaleList.entries`); `rows` are what it lists without them. The
@@ -48,52 +102,21 @@ final class RowsJoin {
                                       catalogHasProducts: catalogHasProducts, catalogSettled: joined.catalogSettled)
     }
 
-    /// What a join of the game reads now.
-    static func key(game: String, model: AppModel) -> CollectionJoin {
-        CollectionJoin(game: game, libraryVersion: model.library.version, catalogVersion: model.catalogVersion,
-                       priceDay: model.prices.day(game: game), catalogSettled: model.catalogSettled(game: game))
-    }
-
-    /// Joins the game's rows with the catalog (products and set names through `reader`, off the main thread) and the
-    /// prices, when `key` differs from the last join or the last one failed. Filtering and sorting then run in memory on
-    /// every keystroke. Returns the products and sets it read when it joined on a catalog with the game's products (the
-    /// Collection's Filter menu comes from them); else nil.
+    /// Joins the game's rows with the catalog (products and set names through `reader`) and the prices (`run`). Filtering
+    /// and sorting then run in memory on every keystroke. Returns the products and sets it read when it stored the
+    /// entries (the Collection's Filter menu comes from them); else nil.
     @discardableResult
     func run(_ key: CollectionJoin, model: AppModel) async -> (products: [Int: ProductRecord], sets: [SetRecord])? {
-        let library = model.library
-        // Before the folder is read the rows are empty: no join, the screen shows its loading layout. A failed join is
-        // tried again the next time the screen appears.
-        guard library.isLoaded, CollectionList.joinIsDue(key, last: joined, lastFailed: failed) else { return nil }
-        let game = key.game, rows = library.rows(game: game)
-        let products: [Int: ProductRecord], sets: [SetRecord], hasProducts: Bool
-        do {
-            products = try await model.reader.products(ids: rows.map(\.productID), game: game)
-            sets = try await model.reader.sets(game: game)
-            hasProducts = try await model.reader.hasProducts(game: game)
-        } catch {
-            // A read error never turns the rows into unknown printings: the last good entries stay (`content`).
-            guard !Task.isCancelled else { return nil }
-            failed = true
-            joined = key
-            return nil
+        let rows = model.library.rows(game: key.game), prices = model.prices
+        var menu: (products: [Int: ProductRecord], sets: [SetRecord])?
+        let stored = await run(key, loaded: model.library.isLoaded, reader: model.reader) { reader, game in
+            let products = try await reader.products(ids: rows.map(\.productID), game: game)
+            let sets = try await reader.sets(game: game)
+            menu = (products, sets)
+            let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
+            return CollectionList.entries(rows: rows, products: products, setNames: names) { prices.shown(game: game, key: $0) }
         }
-        guard !Task.isCancelled else { return nil }
-        failed = false
-        catalogHasProducts = hasProducts
-        joined = key
-        // No product of this game yet: every product would be missing; the rows are listed alone.
-        guard hasProducts else {
-            entries = nil
-            return nil
-        }
-        let prices = model.prices
-        let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
-        let joinedEntries = CollectionList.entries(rows: rows, products: products, setNames: names) {
-            prices.shown(game: game, key: $0)
-        }
-        // On a return to the screen with the same rows nothing is written, so nothing redraws.
-        if entries != joinedEntries { entries = joinedEntries }
-        return (products, sets)
+        return stored == nil ? nil : menu
     }
 }
 
