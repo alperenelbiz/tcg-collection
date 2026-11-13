@@ -269,6 +269,17 @@ struct CatalogStoreTests {
         #expect(many["calm rune"]?.map(\.productID) == [722282])
     }
 
+    /// Fix round 1: one card key in two games (a Riftbound card named as a Yu-Gi-Oh! one): each game gets only its own
+    /// printings.
+    @Test func printingsOfManyCardsStayInTheirGame() async throws {
+        let s = try await filledStore()
+        try await s.replaceProducts(of: 24819, with: [product(id: 5, groupID: 24819, name: "Swiftwind Panther Warrior")], at: .now)
+        let warrior = "swiftwind panther warrior"
+        #expect(try await s.printings(game: "yu-gi-oh", cardKeys: [warrior])[warrior]?.map(\.productID) == [719835, 719834])
+        #expect(try await s.printings(game: "riftbound", cardKeys: [warrior])[warrior]?.map(\.productID) == [5])
+        #expect(try await s.printings(game: "cyberpunk", cardKeys: [warrior]).isEmpty)
+    }
+
     @Test func replaceProductsIsRepeatableAndRecordsTheDate() async throws {
         let s = try await filledStore(); let d = Date(timeIntervalSince1970: 1_800_000_000)
         let (cards, _) = try ProductParser.products(fixture("products-92.json"), game: Games.game("cyberpunk")!)

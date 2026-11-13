@@ -36,6 +36,9 @@ nonisolated struct WantedRead: Sendable, Equatable {
     /// The card keys the join looked up.
     var keys: Set<String>
     var setNames: [Int: String]
+    /// The copies owned of each card of `printings` when the join ran (`WantedList.ownedByCard`): read once per join, not
+    /// on every render (the screen does not show them; `WantedCard.owned`).
+    var ownedByCard: [String: Int] = [:]
 }
 
 /// Where a Wanted cell opens (`WantedContent.link(for:)`).
@@ -171,17 +174,11 @@ nonisolated enum WantedList {
             return "\(shown) of \(whole) \(whole == 1 ? one : many)"
         }
         func copies(_ cards: [WantedCard]) -> Int { cards.reduce(0) { $0 + $1.entry.count } }
-        var parts = [part(copies(cards), all.map(copies), "copy", "copies"), part(cards.count, all?.count, "card", "cards")]
         let priced = cards.filter { $0.price != nil }
-        let unpriced = cards.count - priced.count
-        if !priced.isEmpty {
-            let sum = priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.entry.count) }
-            parts.append(CardFacts.priceText(ShownPrice(amount: sum, isLow: false))
-                         + (unpriced > 0 ? " + \(unpriced) without a price" : ""))
-        } else if unpriced > 0 {
-            parts.append("\(unpriced) without a price")
-        }
-        return parts.joined(separator: " · ")
+        let sum = priced.isEmpty ? nil : priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.entry.count) }
+        let tail = CollectionList.priceTail(sum: sum, unpriced: cards.count - priced.count)
+        return ([part(copies(cards), all.map(copies), "copy", "copies"), part(cards.count, all?.count, "card", "cards")]
+                + [tail].compactMap { $0 }).joined(separator: " · ")
     }
 
     /// What Wanted lists, with the Collection's catalog states (`CollectionList.content`):
@@ -190,15 +187,14 @@ nonisolated enum WantedList {
     /// - `catalogHasProducts`: without products the cards are listed alone (saved names, no picture, no price).
     /// - `catalogSettled`: only on a settled catalog is a card without a printing "not in the catalog any more";
     ///   otherwise it is pending, with the downloading line.
-    /// A card the join did not look up (added since) is pending until the next join. `rows` give `owned`.
-    static func content(_ wanted: [WantedEntry], rows: [CollectionRow], read: WantedRead?, joinFailed: Bool,
+    /// A card the join did not look up (added since) is pending until the next join. `owned` comes from the read.
+    static func content(_ wanted: [WantedEntry], read: WantedRead?, joinFailed: Bool,
                         catalogHasProducts: Bool, catalogSettled: Bool,
                         price: (WantedEntry, [ProductRecord]) -> ShownPrice?) -> WantedContent {
         let keys = Set(wanted.map(\.cardKey))
         func listed(_ read: WantedRead?, settled: Bool, note: String?) -> WantedContent {
-            let printings = read?.printings ?? [:]
-            return WantedContent(cards: cards(wanted, printings: printings, price: price,
-                                              ownedByCard: ownedByCard(rows: rows, printings: printings)),
+            return WantedContent(cards: cards(wanted, printings: read?.printings ?? [:], price: price,
+                                              ownedByCard: read?.ownedByCard ?? [:]),
                                  settled: settled, note: note, uncovered: keys.subtracting(read?.keys ?? []),
                                  setNames: read?.setNames ?? [:])
         }

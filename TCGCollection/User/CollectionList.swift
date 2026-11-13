@@ -187,6 +187,15 @@ nonisolated enum CollectionList {
         last != key || lastFailed
     }
 
+    /// The price part of a list's totals (For Sale, Wanted): `sum`, the summed price of the priced items (nil when none
+    /// has a price), and `unpriced`, the items left out of it: `$10.24`, `$10.24 + 1 without a price`, `2 without a
+    /// price`; nil when there is neither.
+    static func priceTail(sum: Double?, unpriced: Int) -> String? {
+        let without = unpriced > 0 ? "\(unpriced) without a price" : nil
+        guard let sum else { return without }
+        return CardFacts.priceText(ShownPrice(amount: sum, isLow: false)) + (without.map { " + \($0)" } ?? "")
+    }
+
     /// `120 copies · 74 printings`, `1 copy · 1 printing`. With `all` (a filter or search text is on), the shown part of
     /// it: `12 of 120 copies · 9 of 74 printings`; the noun then follows the whole.
     static func totals(_ entries: [CollectionEntry], of all: [CollectionEntry]? = nil) -> String {

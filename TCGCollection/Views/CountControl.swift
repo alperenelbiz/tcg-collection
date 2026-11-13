@@ -6,13 +6,16 @@ import SwiftUI
 /// count ± 1); a parent's `.disabled` turns both off too.
 /// Identifiers: `<prefix>-minus-<key>`, `<prefix>-value-<key>`, `<prefix>-plus-<key>`; by default `count-…-<label>` (a
 /// label with spaces, such as `1st Edition`, keeps them); an empty key gives `<prefix>-minus` (the card page's Wanted
-/// control: `wanted-minus`). VoiceOver reads "Remove one <label>" and "Add one <label>".
+/// control: `wanted-minus`). VoiceOver reads "Remove one <label>" and "Add one <label>", or `spoken` when given (Wanted:
+/// "Want one fewer", "Want one more").
 struct CountControl: View {
     let count: Int?
     let label: String
     let maximum: Int?
     let prefix: String
     let key: String
+    /// What VoiceOver reads for `−` and `+`; nil: "Remove one <label>", "Add one <label>".
+    let spoken: (remove: String, add: String)?
     let set: (Int) -> Void
 
     /// The field's height; a text button beside it (`FieldButtonStyle`) has the same.
@@ -21,25 +24,26 @@ struct CountControl: View {
     private static let numberWidth: CGFloat = 28
 
     init(count: Int?, label: String, maximum: Int? = nil, prefix: String = "count", key: String? = nil,
-         set: @escaping (Int) -> Void) {
+         spoken: (remove: String, add: String)? = nil, set: @escaping (Int) -> Void) {
         self.count = count
         self.label = label
         self.maximum = maximum
         self.prefix = prefix
         self.key = key ?? label
+        self.spoken = spoken
         self.set = set
     }
 
     var body: some View {
         let suffix = key.isEmpty ? "" : "-\(key)"
         HStack(spacing: 0) {
-            step("−", name: "Remove one \(label)", identifier: "\(prefix)-minus\(suffix)", to: (count ?? 0) - 1)
+            step("−", name: spoken?.remove ?? "Remove one \(label)", identifier: "\(prefix)-minus\(suffix)", to: (count ?? 0) - 1)
                 .disabled((count ?? 0) == 0)
             Text(count.map(String.init) ?? "—")
                 .foregroundStyle(Theme.text)
                 .frame(minWidth: Self.numberWidth)
                 .accessibilityIdentifier("\(prefix)-value\(suffix)")
-            step("+", name: "Add one \(label)", identifier: "\(prefix)-plus\(suffix)", to: (count ?? 0) + 1)
+            step("+", name: spoken?.add ?? "Add one \(label)", identifier: "\(prefix)-plus\(suffix)", to: (count ?? 0) + 1)
                 .disabled(count == nil || maximum.map { (count ?? 0) >= $0 } == true)
         }
         .font(Theme.bodyFont)

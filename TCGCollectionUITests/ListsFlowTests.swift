@@ -317,6 +317,8 @@ final class ListsFlowTests: UITestCase {
         XCTAssertEqual(text(element(app, "wanted-value")), "0")
         XCTAssertFalse(element(app, "wanted-minus").isEnabled, "− is on at 0")
         XCTAssertFalse(element(app, "wanted-pin").exists, "the pin is offered at 0")
+        XCTAssertEqual(plus.label, "Want one more")                     // fix round 1: what VoiceOver reads
+        XCTAssertEqual(element(app, "wanted-minus").label, "Want one fewer")
         shot("lists-18-card-page-wanted-zero")
         plus.click()
         plus.click()
@@ -349,8 +351,9 @@ final class ListsFlowTests: UITestCase {
     /// printings; its page opens on 719835 (Starlight Rare, the newest: one set, the higher id). "Other printings" →
     /// 719834 (Super Rare), `wanted-plus`, "Want this printing": the entry saves the card's name (not "(Starlight Rare)")
     /// and pins 719834 1st Edition. Wanted shows that printing's set and that finish's price ($14.50: not its cheapest
-    /// finish, $9.00, nor the card's cheapest, $3.10). On the pinned page "Any printing" takes the pin away, and the cell
-    /// shows the cheapest again. The prices are this test's own (`writePinPrices`).
+    /// finish, $9.00, nor the card's cheapest, $3.10). Fix round 1: on another printing's page the pin is named ("Pinned
+    /// to Beyond the Brave") with both choices; "Want this printing" moves it there, and from the first printing's page
+    /// "Any printing" clears it; the cell then shows the cheapest again. The prices are this test's own (`writePinPrices`).
     func testPinAPrinting() throws {
         let app = try launch(game: "yu-gi-oh") { root in try self.writePinPrices(in: root) }
         let card = element(app, "card-cell-swiftwind panther warrior")
@@ -398,8 +401,29 @@ final class ListsFlowTests: UITestCase {
         cell.click()                                             // the page opens on the pinned printing
         XCTAssertTrue(waitUntil { self.text(facts).contains("Super Rare") }, text(facts))
         XCTAssertTrue(waitUntil { pin.exists && pin.label == "Any printing" }, pin.label)
+        let pinned = element(app, "wanted-pinned"), unpin = element(app, "wanted-unpin")
+        XCTAssertFalse(pinned.exists || unpin.exists, "the pinned printing's page names another pin")
+
+        // The pin seen and moved from the other printing's page: 719835.
+        showPrinting(app, 719835, facts: facts, rarity: "Starlight Rare")
+        XCTAssertTrue(pinned.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave")
+        XCTAssertEqual(pin.label, "Want this printing")
+        XCTAssertEqual(unpin.label, "Any printing")
+        shot("lists-33-card-page-pinned-elsewhere")
         pin.click()
-        XCTAssertTrue(waitUntil { pin.label == "Want this printing" }, pin.label)
+        XCTAssertTrue(waitUntil { pin.label == "Any printing" && !pinned.exists && !unpin.exists }, pin.label)
+        XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "yu-gi-oh"))
+                == [StoredWanted(cardKey: "swiftwind panther warrior", name: "Swiftwind Panther Warrior", count: 1,
+                                 pinProductID: 719835, pinFinish: "1st Edition")] },
+                      "\(String(describing: try? storedWanted(game: "yu-gi-oh")))")
+
+        // And cleared from the page of 719834, which is not the pinned printing now.
+        showPrinting(app, 719834, facts: facts, rarity: "Super Rare")
+        XCTAssertTrue(pinned.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(pinned), "Pinned to Beyond the Brave")
+        unpin.click()
+        XCTAssertTrue(waitUntil { pin.label == "Want this printing" && !pinned.exists && !unpin.exists }, pin.label)
         goBack(app)
         XCTAssertTrue(waitUntil { cell.label == "Swiftwind Panther Warrior, ×1, $3.10" }, cell.label)
         XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("1 copy · 1 card · $3.10"), app.windows.firstMatch.title)
@@ -448,7 +472,7 @@ final class ListsFlowTests: UITestCase {
 
     /// Review Focus 4: a wanted card whose key the catalog does not have stays on the list with its saved name, no picture
     /// and no price. Once the catalog is settled, its cell opens a small page that says so and has its count; `−` on the
-    /// cell takes it off the list, and Wanted is empty with its one action. "Search a card" opens All cards, where a new
+    /// cell takes it off the list, and Wanted is empty with its one action. Fix round 1: `+` on that page changes it. "Search a card" opens All cards, where a new
     /// entry saves the card's name, not the printing's bracketed product name ("Calm Rune (R02a)").
     func testAWantedCardThatLeftTheCatalogStays() throws {
         let app = try launch(game: "riftbound", extra: ["-screen", "wanted"]) { _ in
@@ -470,11 +494,21 @@ final class ListsFlowTests: UITestCase {
         XCTAssertEqual(text(app.staticTexts["card-title"]), "Gone Card")
         XCTAssertEqual(text(element(app, "wanted-value")), "1")
         XCTAssertFalse(element(app, "wanted-pin").exists, "a card without a printing has nothing to pin")
+        XCTAssertFalse(element(app, "wanted-unpin").exists || element(app, "wanted-pinned").exists, "no pin to name")
+        // Fix round 1: it can be changed there too.
+        element(app, "wanted-plus").click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "wanted-value")) == "2" }, text(element(app, "wanted-value")))
+        XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "riftbound"))
+                == [StoredWanted(cardKey: "gone card", name: "Gone Card", count: 2)] },
+                      "\(String(describing: try? storedWanted(game: "riftbound")))")
         shot("lists-27-unknown-card-page")
         goBack(app)
+        XCTAssertTrue(waitUntil { cell.label == "Gone Card, ×2, no price" }, cell.label)
 
         let minus = element(app, "wanted-cell-minus-gone card")
         XCTAssertTrue(minus.waitForExistence(timeout: 10))
+        minus.click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "wanted-cell-value-gone card")) == "1" })
         minus.click()
         let screen = element(app, "wanted-screen")
         XCTAssertTrue(screen.descendants(matching: .staticText).matching(Self.showing("Nothing on your wanted list.")).firstMatch
@@ -630,6 +664,21 @@ final class ListsFlowTests: UITestCase {
     }
 
     // MARK: Helpers
+
+    /// Shows the printing `productID` on the open card page through "Other printings" (the rows are below the test
+    /// window's edge: scroll down, click on the row's text), waits until the facts line has `rarity`, and scrolls back up
+    /// to the Wanted line.
+    private func showPrinting(_ app: XCUIApplication, _ productID: Int, facts: XCUIElement, rarity: String,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let page = element(app, "card-page"), row = element(app, "printing-row-\(productID)")
+        page.scroll(byDeltaX: 0, deltaY: -2000)
+        XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen", file: file, line: line)
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        XCTAssertTrue(waitUntil { self.text(facts).contains(rarity) }, text(facts), file: file, line: line)
+        page.scroll(byDeltaX: 0, deltaY: 2000)
+        XCTAssertTrue(waitUntil { self.element(app, "wanted-plus").isHittable }, "the Wanted line is not on screen",
+                      file: file, line: line)
+    }
 
     /// Each finish name of the card page (`card-finish-<finish>`) is on one line and as wide as its whole text at 13 pt
     /// (not cut to "Unlimit…"), its price is right of it, and its "For sale" control ends inside the window.

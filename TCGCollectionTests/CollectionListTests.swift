@@ -116,6 +116,17 @@ struct CollectionListTests {
         #expect(CollectionList.joinIsDue(1, last: 1, lastFailed: true))
     }
 
+    /// The price part of a list's totals (For Sale, Wanted): the summed price, then what has no price; nothing when the
+    /// list has neither.
+    @Test func thePriceTailOfAListsTotals() {
+        #expect(CollectionList.priceTail(sum: 41.5, unpriced: 0) == "$41.50")
+        #expect(CollectionList.priceTail(sum: 10.24, unpriced: 1) == "$10.24 + 1 without a price")
+        #expect(CollectionList.priceTail(sum: 0, unpriced: 0) == "$0.00")
+        #expect(CollectionList.priceTail(sum: 12_000, unpriced: 3) == "$12,000.00 + 3 without a price")
+        #expect(CollectionList.priceTail(sum: nil, unpriced: 2) == "2 without a price")
+        #expect(CollectionList.priceTail(sum: nil, unpriced: 0) == nil)
+    }
+
     @Test func totalsLine() {
         #expect(CollectionList.totals([]) == "0 copies · 0 printings")
         // 120 copies in 74 printings: 8 of one copy, one of 4, 64 of one copy, one of 44.

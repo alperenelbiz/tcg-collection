@@ -65,7 +65,7 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// Task 4 fix 1: the drawn accent fill sits on the list's own selection, so the arrow keys still move it and the
-    /// screen follows. The rows are Collection, For Sale (phase 2C), All cards.
+    /// screen follows. The rows are Collection, Wanted, For Sale (phase 2C), All cards.
     func testTheArrowKeysMoveTheSidebarSelection() {
         let app = launch(game: "riftbound", extra: ["-screen", "collection"])
         XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 20))

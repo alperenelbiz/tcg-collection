@@ -144,7 +144,7 @@ struct WantedListTests {
 
     private func content(_ wanted: [WantedEntry], read: WantedRead?, failed: Bool = false, hasProducts: Bool = true,
                          settled: Bool) throws -> WantedContent {
-        WantedList.content(wanted, rows: [], read: read, joinFailed: failed, catalogHasProducts: hasProducts,
+        WantedList.content(wanted, read: read, joinFailed: failed, catalogHasProducts: hasProducts,
                            catalogSettled: settled, price: WantedList.price(try table(), game: "riftbound"))
     }
 
@@ -179,6 +179,15 @@ struct WantedListTests {
         let unread = try content(wanted, read: nil, failed: true, settled: true)
         #expect(unread.note == CollectionList.catalogUnreadable && unread.cards.allSatisfy { $0.shown == nil })
         #expect(try content([], read: read([:], keys: []), settled: true).cards.isEmpty)
+    }
+
+    /// Fix round 1: `owned` comes from the join's read (counted once per join), not from the rows on every render; with no
+    /// read it is 0.
+    @Test func ownedComesFromTheRead() throws {
+        var joined = read(["twin": twin], keys: ["twin"])
+        joined.ownedByCard = ["twin": 4]
+        #expect(try content([entry()], read: joined, settled: true).cards.map(\.owned) == [4])
+        #expect(try content([entry()], read: nil, hasProducts: false, settled: true).cards.map(\.owned) == [0])
     }
 
     /// The cell's count line: `×2`; with a pin that is shown, `×1 · <its set>`. A pin that fell back shows `×1` only.

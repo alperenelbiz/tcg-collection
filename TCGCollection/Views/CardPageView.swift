@@ -108,9 +108,12 @@ struct CardPageView: View {
                 .padding(.top, 18)
             }
             RuleLine()
-            // A new wanted entry saves the card's name (the title), not the printing's bracketed product name.
+            // A new wanted entry saves the card's name (the title), not the printing's bracketed product name. The set of
+            // each printing names a pin on another printing.
+            let printingSets = Dictionary(printings.map { ($0.productID, setNames[$0.groupID] ?? "") },
+                                          uniquingKeysWith: { first, _ in first })
             OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
-                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName))
+                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printingSets: printingSets))
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -197,9 +200,9 @@ struct OwnedFinishes: View {
     let offered: [String]
     /// The price table's prices of the product; nil for a page without a price column (a product not in the catalog).
     let prices: [FinishPrice]?
-    /// The card of the page, for its Wanted line: its key and the name a new entry saves. Nil: no Wanted line (a printing
-    /// that left the catalog).
-    var wanted: (cardKey: String, name: String)? = nil
+    /// The card of the page, for its Wanted line: its key, the name a new entry saves, and the set name of each of its
+    /// printings (product id: set). Nil: no Wanted line (a printing that left the catalog).
+    var wanted: (cardKey: String, name: String, printingSets: [Int: String])? = nil
 
     @Environment(AppModel.self) private var model
 
@@ -257,7 +260,7 @@ struct OwnedFinishes: View {
             // `Normal` when it has none). The page has no selected finish.
             if let wanted, let first = finishes.first {
                 WantedLine(gameID: gameID, cardKey: wanted.cardKey, name: wanted.name,
-                           pin: PrintingKey(productID: productID, finish: first))
+                           pin: PrintingKey(productID: productID, finish: first), printingSets: wanted.printingSets)
                     .padding(.top, 6)
             }
             if let locked { CountsLockedLine(text: locked) }
@@ -305,15 +308,23 @@ struct CountsLockedLine: View {
 }
 
 /// A card's Wanted line (C2, C6), under the finish lines of its page: "Wanted" and one `CountControl` for the card
-/// (`wanted-minus`, `wanted-value`, `wanted-plus`; `−` at 1 takes the card and its pin off the list), and, from count 1,
-/// the pin (`wanted-pin`): "Want this printing" pins `pin`; when `pin` is the entry's pin, "Any printing" takes it away.
-/// `pin` nil: no pin (a card not in the catalog). A new entry saves `name`. While the game cannot change, no number (`—`),
-/// no pin, the control off; the page's locked line says why.
+/// (`wanted-minus`, `wanted-value`, `wanted-plus`, read "Want one fewer" / "Want one more"; `−` at 1 takes the card and its
+/// pin off the list), and from a count of 1 the pin, so it can be seen and cleared from any page of the card:
+/// - no pin: "Want this printing" (`wanted-pin`) pins `pin`, the printing on screen with its first finish line;
+/// - pinned to `pin`: "Any printing" (`wanted-pin`) takes the pin away;
+/// - pinned to another printing or finish: one muted line (`wanted-pinned`) "Pinned to <its set>" (`printingSets`; "Pinned
+///   to a printing that left the catalog" when it is not among them), then "Want this printing" (`wanted-pin`, moves the
+///   pin here) and "Any printing" (`wanted-unpin`, clears it).
+/// `pin` nil (a card not in the catalog): nothing to pin; a pin the entry still has is named and can be cleared. A new
+/// entry saves `name`. While the game cannot change: no number (`—`), no pin, the control off; the page's locked line
+/// says why.
 struct WantedLine: View {
     let gameID: String
     let cardKey: String
     let name: String
     let pin: PrintingKey?
+    /// The set name of each printing of the card, by product id.
+    var printingSets: [Int: String] = [:]
 
     @Environment(AppModel.self) private var model
 
@@ -322,21 +333,46 @@ struct WantedLine: View {
         let locked = library.countsLocked(game: gameID) != nil
         let entry = library.wanted(game: gameID).first { $0.cardKey == cardKey }
         let count = entry?.count ?? 0
-        HStack(spacing: 16) {
-            Text("Wanted")
-                .foregroundStyle(Theme.text)
-            CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "") { step(by: $0 - count) }
-            if !locked, count > 0, let pin {
-                let pinned = entry?.pin == pin
-                Button(pinned ? "Any printing" : "Want this printing") {
-                    library.setPin(pinned ? nil : pin, game: gameID, cardKey: cardKey)
+        // The pin choices need a count (an entry) and a game that can change.
+        let pinned = locked || count == 0 ? nil : entry?.pin
+        let offersPin = !locked && count > 0
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 16) {
+                Text("Wanted")
+                    .foregroundStyle(Theme.text)
+                CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "",
+                             spoken: (remove: "Want one fewer", add: "Want one more")) { step(by: $0 - count) }
+                if offersPin, let pin, pinned == nil || pinned == pin {
+                    pinButton(pinned == pin ? "Any printing" : "Want this printing", to: pinned == pin ? nil : pin,
+                              identifier: "wanted-pin")
                 }
-                .buttonStyle(FieldButtonStyle())
-                .accessibilityIdentifier("wanted-pin")
+            }
+            if let pinned, pinned != pin {
+                Text(Self.pinnedText(pinned, sets: printingSets))
+                    .font(Theme.lineFont)
+                    .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("wanted-pinned")
+                HStack(spacing: 8) {
+                    if let pin { pinButton("Want this printing", to: pin, identifier: "wanted-pin") }
+                    pinButton("Any printing", to: nil, identifier: "wanted-unpin")
+                }
             }
         }
         .font(Theme.bodyFont)
         .disabled(locked)
+    }
+
+    /// "Pinned to <set of the pinned printing>"; "Pinned to a printing that left the catalog" when it is not a printing of
+    /// the card any more; "Pinned to another printing" when its set has no name.
+    static func pinnedText(_ pinned: PrintingKey, sets: [Int: String]) -> String {
+        guard let set = sets[pinned.productID] else { return "Pinned to a printing that left the catalog" }
+        return set.isEmpty ? "Pinned to another printing" : "Pinned to \(set)"
+    }
+
+    private func pinButton(_ title: String, to key: PrintingKey?, identifier: String) -> some View {
+        Button(title) { model.library.setPin(key, game: gameID, cardKey: cardKey) }
+            .buttonStyle(FieldButtonStyle())
+            .accessibilityIdentifier(identifier)
     }
 
     /// As the owned count: the step goes onto the library's current count, so two clicks before the next render both

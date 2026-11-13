@@ -31,17 +31,10 @@ nonisolated enum SaleList {
     /// printings. "" for an empty list.
     static func totals(_ entries: [CollectionEntry], of all: [CollectionEntry]? = nil) -> String {
         guard !(all ?? entries).isEmpty else { return "" }
-        var parts = [CollectionList.totals(entries, of: all)]
         let priced = entries.filter { $0.price != nil }
-        let unpriced = entries.count - priced.count
-        if !priced.isEmpty {
-            let sum = priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.row.count) }
-            parts.append(CardFacts.priceText(ShownPrice(amount: sum, isLow: false))
-                         + (unpriced > 0 ? " + \(unpriced) without a price" : ""))
-        } else if unpriced > 0 {
-            parts.append("\(unpriced) without a price")
-        }
-        return parts.joined(separator: " · ")
+        let sum = priced.isEmpty ? nil : priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.row.count) }
+        let tail = CollectionList.priceTail(sum: sum, unpriced: entries.count - priced.count)
+        return ([CollectionList.totals(entries, of: all)] + [tail].compactMap { $0 }).joined(separator: " · ")
     }
 
     /// C7: what the Sold dialog of a printing offers for its live for-sale count: "Sold 1", and "Sold all <n>" when more

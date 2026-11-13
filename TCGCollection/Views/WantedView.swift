@@ -18,21 +18,22 @@ typealias WantedJoin = CatalogJoin<WantedRead>
 extension CatalogJoin where Read == WantedRead {
     /// What Wanted lists (`WantedList.content`); nil until a join of this game has ended. The catalog counts as settled as
     /// it was for the join that made `read`, as for the Collection.
-    func content(wanted: [WantedEntry], rows: [CollectionRow],
-                 price: (WantedEntry, [ProductRecord]) -> ShownPrice?) -> WantedContent? {
+    func content(wanted: [WantedEntry], price: (WantedEntry, [ProductRecord]) -> ShownPrice?) -> WantedContent? {
         guard let joined else { return nil }
-        return WantedList.content(wanted, rows: rows, read: read, joinFailed: failed, catalogHasProducts: catalogHasProducts,
+        return WantedList.content(wanted, read: read, joinFailed: failed, catalogHasProducts: catalogHasProducts,
                                   catalogSettled: joined.catalogSettled, price: price)
     }
 
-    /// Reads the printings of the game's wanted cards (one store call) and its set names (`run`).
+    /// Reads the printings of the game's wanted cards (one store call) and its set names, and counts the copies owned of
+    /// each of those cards (`run`; the join's key changes with every change of the collection).
     func run(_ key: CollectionJoin, model: AppModel) async {
-        let keys = Set(model.library.wanted(game: key.game).map(\.cardKey))
+        let keys = Set(model.library.wanted(game: key.game).map(\.cardKey)), rows = model.library.rows(game: key.game)
         await run(key, loaded: model.library.isLoaded, reader: model.reader) { reader, game in
             let printings = try await reader.printings(game: game, cardKeys: Array(keys))
             let sets = try await reader.sets(game: game)
             let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
-            return WantedRead(printings: printings, keys: keys, setNames: names)
+            return WantedRead(printings: printings, keys: keys, setNames: names,
+                              ownedByCard: WantedList.ownedByCard(rows: rows, printings: printings))
         }
     }
 }
@@ -82,8 +83,7 @@ struct WantedView: View {
     var body: some View {
         let library = model.library, game = state.gameID
         // Nil until a join of this game has ended. The wanted counts and pins are read here, so a change shows at once.
-        let listed = state.join.content(wanted: library.wanted(game: game), rows: library.rows(game: game),
-                                        price: WantedList.price(model.prices, game: game))
+        let listed = state.join.content(wanted: library.wanted(game: game), price: WantedList.price(model.prices, game: game))
         let all = listed?.cards ?? []
         let shown = WantedList.sorted(WantedList.filtered(all, text: state.text), by: state.sort)
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
@@ -152,7 +152,8 @@ struct WantedView: View {
                        label: listed.accessibilityText(for: card), link: listed.link(for: card))
                 .accessibilityIdentifier("wanted-cell-\(card.id)")
             HStack(spacing: 8) {
-                CountControl(count: card.entry.count, label: "\(card.name), wanted", prefix: "wanted-cell", key: card.id) {
+                CountControl(count: card.entry.count, label: "\(card.name), wanted", prefix: "wanted-cell", key: card.id,
+                             spoken: (remove: "Want one fewer \(card.name)", add: "Want one more \(card.name)")) {
                     step(by: $0 - card.entry.count, card: card)
                 }
                 Spacer(minLength: 0)
