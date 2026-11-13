@@ -163,11 +163,25 @@ class UITestCase: XCTestCase {
         try data.write(to: folder.appending(path: "\(game).json"))
     }
 
+    /// Writes `json` as `<root>/user/<game>.json` of the running test's root, as it is: a whole game file (the lists of
+    /// phase 2C, a version this app refuses). For `launch(prepare:)`, before the app starts.
+    func writeUserFile(game: String, json: String) throws {
+        let folder = try XCTUnwrap(root).appending(path: "user", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: folder.appending(path: "\(game).json"))
+    }
+
+    /// `<root>/user/<game>.json` of the running test's root as the app last wrote it, as a JSON object; nil with no file.
+    func storedUserFile(game: String) throws -> [String: Any]? {
+        let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any], "not an object: \(file.path)")
+    }
+
     /// The rows of `<root>/user/<game>.json` of the running test's root, as the app last wrote them; [] with no file.
     func storedCollection(game: String) throws -> [StoredRow] {
         let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")
-        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        guard let object = try storedUserFile(game: game) else { return [] }
         let rows = try XCTUnwrap(object["collection"] as? [[String: Any]], "no collection array in \(file.path)")
         return try rows.map { row in
             StoredRow(productID: try XCTUnwrap(row["productID"] as? Int), finish: try XCTUnwrap(row["finish"] as? String),

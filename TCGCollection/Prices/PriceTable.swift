@@ -41,6 +41,11 @@ final class PriceTable {
         }
     }
 
+    /// A printing's own price: its product's price for its finish, the finish as written; nil when there is none.
+    func shown(game: String, key: PrintingKey) -> ShownPrice? {
+        prices(game: game, productID: key.productID).first { $0.finish == key.finish }?.price.shown
+    }
+
     /// The lowest market price over the printings. A low price counts only when no printing has a market price.
     func cheapest(game: String, productIDs: [Int]) -> ShownPrice? {
         let shown = productIDs.flatMap { prices(game: game, productID: $0) }.compactMap(\.price.shown)

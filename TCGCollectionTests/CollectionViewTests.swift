@@ -15,9 +15,9 @@ struct CollectionViewTests {
 
         // A join made during the download: product 2 was not in yet.
         let entries = CollectionList.entries(rows: rows, products: [1: product(id: 1, name: "Calm Rune")], setNames: [:]) { _ in nil }
-        state.joined = CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 3, priceDay: nil, catalogSettled: false)
-        state.catalogHasProducts = true
-        state.entries = entries
+        state.join.joined = CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 3, priceDay: nil, catalogSettled: false)
+        state.join.catalogHasProducts = true
+        state.join.entries = entries
         let during = try #require(state.content(rows: rows))
         #expect(!during.settled && during.note == CollectionList.catalogDownloading)
         #expect(during.link(for: entries[0]) == .card && during.link(for: entries[1]) == .none)
@@ -26,13 +26,13 @@ struct CollectionViewTests {
         let settledEntries = CollectionList.entries(rows: rows, products: [1: product(id: 1, name: "Calm Rune"),
                                                                            2: product(id: 2, name: "Last Batch")],
                                                     setNames: [:]) { _ in nil }
-        state.joined = CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 4, priceDay: nil, catalogSettled: true)
-        state.entries = settledEntries
+        state.join.joined = CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 4, priceDay: nil, catalogSettled: true)
+        state.join.entries = settledEntries
         let after = try #require(state.content(rows: rows))
         #expect(after.settled && after.note == nil && settledEntries.allSatisfy { after.link(for: $0) == .card })
 
         // A settled join that still lacks a product: that row has left the catalog.
-        state.entries = entries
+        state.join.entries = entries
         #expect(state.content(rows: rows)?.link(for: entries[1]) == .unknownPrinting)
     }
 }

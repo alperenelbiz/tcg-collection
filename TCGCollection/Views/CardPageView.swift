@@ -179,10 +179,12 @@ struct CardPageView: View {
     }
 }
 
-/// What the user owns of one product and how to change it (B5): the line "In your collection: N" (`card-owned`, N over
-/// every finish of the product), then one line per finish: its name, its price ("No price" in `muted` when it has none;
-/// no price column at all when `prices` is nil) and a `CountControl` labelled with the finish. The finishes are `offered`
-/// (the price table's, or `Normal` when there are none) and then every owned finish that `offered` does not list.
+/// What the user owns and has for sale of one product, and how to change it (B5): the line "In your collection: N"
+/// (`card-owned`, N over every finish of the product), the column titles "Owned" and "For sale" once, then one line per
+/// finish: its name, its price ("No price" in `muted` when it has none; no price column at all when `prices` is nil), a
+/// `CountControl` labelled with the finish (owned) and one for sale (`sale-…-<finish>`; its `+` is off at the owned count).
+/// The finishes are `offered` (the price table's, or `Normal` when there are none) and then every owned or for-sale finish
+/// that `offered` does not list.
 /// While the library refuses changes of the game, no number is shown (`—`), the controls are off, and one muted line
 /// under them says why (`card-counts-locked`): the game's own problem, or "Reading your collection…".
 struct OwnedFinishes: View {
@@ -201,7 +203,8 @@ struct OwnedFinishes: View {
         // A refused file reads as no rows: its counts are not known, so none is shown (not a false 0).
         let locked = library.countsLocked(game: gameID)
         let rows = library.rows(game: gameID).filter { $0.productID == productID }
-        let finishes = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish))
+        let sale = library.forSale(game: gameID).filter { $0.productID == productID }
+        let finishes = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish) + sale.map(\.finish))
         VStack(alignment: .leading, spacing: 8) {
             Text("In your collection: \(locked == nil ? String(CollectionRules.copies(rows)) : "—")")
                 .font(Theme.labelFont)
@@ -209,8 +212,19 @@ struct OwnedFinishes: View {
                 .monospacedDigit()
                 .accessibilityIdentifier("card-owned")
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                // The column titles, once, above the first line: none over the finish and the price.
+                GridRow {
+                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    if prices != nil { Color.clear.gridCellUnsizedAxes([.horizontal, .vertical]) }
+                    Text("Owned")
+                    Text("For sale")
+                }
+                .font(Theme.lineFont)
+                .foregroundStyle(Theme.muted)
                 ForEach(finishes, id: \.self) { finish in
-                    let count = CollectionRules.count(rows, for: PrintingKey(productID: productID, finish: finish))
+                    let key = PrintingKey(productID: productID, finish: finish)
+                    let count = CollectionRules.count(rows, for: key)
+                    let forSale = sale.first { $0.key == key }?.count ?? 0
                     GridRow {
                         Text(finish)
                             .foregroundStyle(Theme.text)
@@ -219,6 +233,8 @@ struct OwnedFinishes: View {
                                 .gridColumnAlignment(.trailing)
                         }
                         CountControl(count: locked == nil ? count : nil, label: finish) { step(by: $0 - count, finish: finish) }
+                        CountControl(count: locked == nil ? forSale : nil, label: "\(finish) for sale", maximum: count,
+                                     prefix: "sale", key: finish) { stepForSale(by: $0 - forSale, finish: finish) }
                     }
                 }
             }
@@ -252,6 +268,12 @@ struct OwnedFinishes: View {
     private func step(by delta: Int, finish: String) {
         let library = model.library, key = PrintingKey(productID: productID, finish: finish)
         library.setCount(library.count(game: gameID, key: key) + delta, game: gameID, key: key, name: name)
+    }
+
+    /// The same for the for-sale count; the library keeps it within the owned count.
+    private func stepForSale(by delta: Int, finish: String) {
+        let library = model.library, key = PrintingKey(productID: productID, finish: finish)
+        library.setForSale(library.forSaleCount(game: gameID, key: key) + delta, game: gameID, key: key, name: name)
     }
 }
 

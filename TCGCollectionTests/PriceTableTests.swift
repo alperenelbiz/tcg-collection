@@ -34,6 +34,16 @@ struct PriceTableTests {
         #expect(table.day(game: "riftbound") == "2026-01-02")
     }
 
+    /// A printing's own price: its product's price for its finish, as the finish is written; nil when there is none.
+    @MainActor @Test func aPrintingsPriceIsItsFinishs() throws {
+        let table = try filledTable()
+        #expect(table.shown(game: "riftbound", key: PrintingKey(productID: 721334, finish: "Normal")) == ShownPrice(amount: 5.12, isLow: false))
+        #expect(table.shown(game: "riftbound", key: PrintingKey(productID: 721334, finish: "Foil")) == ShownPrice(amount: 9.5, isLow: true))
+        #expect(table.shown(game: "riftbound", key: PrintingKey(productID: 721334, finish: "foil")) == nil)
+        #expect(table.shown(game: "riftbound", key: PrintingKey(productID: 999, finish: "Normal")) == nil)
+        #expect(table.shown(game: "yu-gi-oh", key: PrintingKey(productID: 721334, finish: "Normal")) == nil)
+    }
+
     @MainActor @Test func cheapestUsesALowPriceOnlyWhenNoPrintingHasMarket() {
         let table = PriceTable()
         let prices = GamePrices(day: "2026-01-02", finishes: ["Normal"], rows: [
