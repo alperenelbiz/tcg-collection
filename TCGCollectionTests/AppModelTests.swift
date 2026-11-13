@@ -635,6 +635,73 @@ struct AppModelTests {
         #expect(model.gameID == "riftbound" && model.screen == .collection && model.importing == nil)
     }
 
+    // MARK: The for-sale notice (phase 2C task 2, C8)
+
+    /// Waits until `condition` holds; fails after 10 s.
+    @MainActor private func until(_ condition: () -> Bool) async throws {
+        let end = ContinuousClock.now + .seconds(10)
+        while !condition() {
+            guard ContinuousClock.now < end else { Issue.record("timed out"); return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// A for-sale count that follows an owned count down is said once in the status line, as an import's summary is;
+    /// the library's notice is cleared.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleNoticeIsSaidInTheStatusLine() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let key = PrintingKey(productID: 1, finish: "Normal")
+        model.library.setCount(3, game: "riftbound", key: key, name: "A")
+        model.library.setForSale(3, game: "riftbound", key: key, name: "A")
+        #expect(model.statusNotice == nil)
+        model.library.setCount(1, game: "riftbound", key: key, name: "")
+        try await until { model.statusNotice != nil }
+        #expect(model.statusNotice == "2 copies are no longer for sale.")
+        #expect(model.library.saleNotice == nil)
+        #expect(model.status == .idle("Offline · no prices yet"))
+    }
+
+    /// An import that takes copies off sale says both in its one line once its writes ran; while its sheet is open the
+    /// for-sale notice waits for it.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anImportThatTakesCopiesOffSaleSaysBoth() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let key = PrintingKey(productID: 1, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "A")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "A")
+        model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
+        model.library.replace(game: "riftbound", rows: [])                     // the sheet's Import
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == nil); #expect(model.library.saleNotice == "2 copies are no longer for sale.")
+        await model.importApplied(.init(gameID: "riftbound", games: ["riftbound"], summary: "1 not in the file (removed)"))
+        #expect(model.statusNotice == "Imported: 1 not in the file (removed). 2 copies are no longer for sale.")
+        #expect(model.library.saleNotice == nil)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == "Imported: 1 not in the file (removed). 2 copies are no longer for sale.")
+    }
+
+    /// The problem sentence of an import whose write failed stays in the status line: the for-sale notice does not hide
+    /// it, it waits behind it.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleNoticeDoesNotHideAProblem() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let folder = try #require(model.library.folder), key = PrintingKey(productID: 1, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "A")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "A")
+        await model.library.flush()
+        model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        model.library.replace(game: "riftbound", rows: [])
+        await model.importApplied(.init(gameID: "riftbound", games: ["riftbound"], summary: "1 not in the file (removed)"))
+        let problem = try #require(model.library.problem(game: "riftbound"))
+        #expect(model.statusNotice == problem)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == problem)
+        #expect(model.library.saleNotice == "2 copies are no longer for sale.")
+    }
+
     /// Fix round 1, item 5: while a file is still being read, and while an import is open, a second import (the panel, or
     /// a file) is ignored. The gate holds the first read, so it is in progress for sure.
     @MainActor @Test(.timeLimit(.minutes(1))) func aSecondImportIsIgnoredWhileOneIsReadOrOpen() async throws {

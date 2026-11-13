@@ -1,9 +1,12 @@
 import Foundation
 import Observation
 
-/// What the user owns, per game, in memory, kept in the user folder as one `<game id>.json` per game. Every change goes
-/// through it: memory first, then the whole game file, written on one serial path in the order of the changes.
-/// - It keeps each game's `GameUserFile`, not only its rows, so that what a newer app wrote survives a rewrite.
+/// What the user owns, wants, has for sale and sold, per game, in memory, kept in the user folder as one `<game id>.json`
+/// per game. Every change goes through it: memory first, then the whole game file, written on one serial path in the
+/// order of the changes.
+/// - It keeps each game's `GameUserFile`, not only its lists, so that what a newer app wrote survives a rewrite.
+/// - No for-sale count is over its owned count after a change (C8): each change lowers it in the same change and says so
+///   (`saleNotice`). A file read with more for sale than owned is kept as it is until the next change of that game.
 /// - A game whose file was refused (newer, unreadable, not downloaded) is read-only for this run: no rows, no change,
 ///   and the file is never touched. The other games keep working.
 /// - A folder that is missing at launch is said (`problem`) and nothing is written; a write never makes a folder. A
@@ -16,8 +19,11 @@ final class UserLibrary {
     /// A conflict was settled: "Two devices changed <game>. The older version is saved as <file name>." Until
     /// `clearNotice()`.
     private(set) var notice: String?
-    /// Goes up on every change of the rows (here or from another device), so views read them again.
+    /// Goes up on every change of a list (here or from another device), so views read them again.
     private(set) var version = 0
+    /// "<n> copies are no longer for sale.": a change made here lowered for-sale counts to the owned ones (C8). The copies
+    /// of every such change are summed until `clearSaleNotice()`.
+    private(set) var saleNotice: String?
     /// True when `load` found no folder at `folder`, or a reload found it gone: changes are refused until another folder
     /// is used, or (gone after the load) until a reload finds it back.
     private(set) var folderIsMissing = false
@@ -46,6 +52,10 @@ final class UserLibrary {
 
     @ObservationIgnored private let watcher: (any UserFileWatching)?
     @ObservationIgnored private let now: () -> Date
+    /// The time zone of a sold record's day.
+    @ObservationIgnored private let timeZone: TimeZone
+    /// The copies `saleNotice` counts.
+    @ObservationIgnored private var copiesOffSale = 0
     /// The serial path: every write and every read of a game file runs after the one queued before it.
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var queued = 0
@@ -58,10 +68,12 @@ final class UserLibrary {
     /// Goes up at every `load()` and every folder switch: a load that a later one overtook never sets `isLoaded`.
     @ObservationIgnored private var loadGeneration = 0
 
-    init(folder: URL?, watcher: (any UserFileWatching)?, now: @escaping () -> Date = { Date() }) {
+    init(folder: URL?, watcher: (any UserFileWatching)?, now: @escaping () -> Date = { Date() },
+         timeZone: TimeZone = .autoupdatingCurrent) {
         self.folder = folder
         self.watcher = watcher
         self.now = now
+        self.timeZone = timeZone
     }
 
     // MARK: Reading
@@ -82,13 +94,33 @@ final class UserLibrary {
     /// True while a write or a read is queued or running.
     var hasPendingWork: Bool { finished != queued }
 
-    func rows(game: String) -> [CollectionRow] {
-        refused[game] == nil ? files[game]?.collection ?? [] : []
-    }
+    func rows(game: String) -> [CollectionRow] { shown(game).collection }
 
     func count(game: String, key: PrintingKey) -> Int {
         CollectionRules.count(rows(game: game), for: key)
     }
+
+    func wanted(game: String) -> [WantedEntry] { shown(game).wanted }
+
+    func forSale(game: String) -> [SaleEntry] { shown(game).forSale }
+
+    func sold(game: String) -> [SoldRecord] { shown(game).sold }
+
+    func wantedCount(game: String, cardKey: String) -> Int {
+        wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
+    }
+
+    func forSaleCount(game: String, key: PrintingKey) -> Int {
+        forSale(game: game).first { $0.key == key }?.count ?? 0
+    }
+
+    /// The game's file as the screens see it: empty when there is none, or when it is refused.
+    private func shown(_ game: String) -> GameUserFile {
+        refused[game] == nil ? files[game] ?? Self.noFile : Self.noFile
+    }
+
+    /// What `shown` gives for a game with no file in memory.
+    private static let noFile = GameUserFile()
 
     /// False where a change of the game is refused: before the folder is loaded, with no folder or a missing one, for a
     /// game whose file is refused, and for an unknown game id. Controls that change the collection disable themselves on
@@ -113,32 +145,88 @@ final class UserLibrary {
 
     func clearNotice() { notice = nil }
 
+    func clearSaleNotice() {
+        saleNotice = nil
+        copiesOffSale = 0
+    }
+
     // MARK: Changing
 
     /// Refused (nothing changes, nothing is written) while `isLoaded` is false, for a game whose file is refused, and for
-    /// an unknown game id.
+    /// an unknown game id. Like every change, it lowers a for-sale count over the new owned count.
     func setCount(_ count: Int, game: String, key: PrintingKey, name: String) {
-        change(game) { CollectionRules.setting($0, count: count, for: key, name: name) }
+        change(game) { $0.collection = CollectionRules.setting($0.collection, count: count, for: key, name: name) }
     }
 
-    /// Refused as `setCount` is.
+    /// Refused as `setCount` is. The CSV import's write: a printing it removes or lowers leaves the For Sale list too.
     func replace(game: String, rows: [CollectionRow]) {
-        change(game) { _ in rows }
+        change(game) { $0.collection = rows }
+    }
+
+    /// Refused as `setCount` is. 0 removes the card from the list.
+    func setWanted(_ count: Int, game: String, cardKey: String, name: String) {
+        change(game) { $0.wanted = ListRules.settingWanted($0.wanted, count: count, cardKey: cardKey, name: name) }
+    }
+
+    /// Refused as `setCount` is. `nil` takes the pin away; a card not on the list changes nothing.
+    func setPin(_ pin: PrintingKey?, game: String, cardKey: String) {
+        change(game) { $0.wanted = ListRules.pinning($0.wanted, cardKey: cardKey, to: pin) }
+    }
+
+    /// Refused as `setCount` is. The count is clamped to the owned count of the printing; 0 removes it from the list.
+    func setForSale(_ count: Int, game: String, key: PrintingKey, name: String) {
+        change(game) { file in
+            file.forSale = ListRules.settingForSale(file.forSale, count: count, key: key, name: name,
+                                                    owned: CollectionRules.count(file.collection, for: key))
+        }
+    }
+
+    /// C7: sells `count` copies of a printing on the For Sale list: the owned and for-sale counts go down and one record
+    /// with today's day (`now`, in `timeZone`) and `price` is added, in one change. False (nothing changes) when refused
+    /// as `setCount` is, or when `count` is under 1 or more than are for sale or owned: a second click on "Sold all"
+    /// finds nothing left.
+    @discardableResult
+    func sell(_ count: Int, game: String, key: PrintingKey, price: ShownPrice?) -> Bool {
+        let day = Self.day(of: now(), in: timeZone)
+        return change(game) { file in
+            guard let sold = ListRules.selling(file, key: key, count: count, day: day, price: price) else { return }
+            file = sold
+        }
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.
-    private func change(_ game: String, _ edit: ([CollectionRow]) -> [CollectionRow]) {
+    /// `edit` changes the game's file in place; a for-sale count it leaves over its owned count is lowered in the same
+    /// change (C8). False when refused, or when the edit left every list as it was (nothing is written then).
+    @discardableResult
+    private func change(_ game: String, _ edit: (inout GameUserFile) -> Void) -> Bool {
         // Only a known game (`canChange`): its id becomes a file name.
-        guard canChange(game: game), let folder else { return }
-        var file = files[game] ?? GameUserFile()
-        let rows = edit(file.collection)
-        guard rows != file.collection else { return }
-        file.collection = rows
+        guard canChange(game: game), let folder else { return false }
+        let current = files[game] ?? GameUserFile()
+        var file = current
+        edit(&file)
+        guard !file.hasSameLists(as: current) else { return false }
+        let (forSale, lost) = ListRules.clamped(file.forSale, to: file.collection)
+        file.forSale = forSale
         files[game] = file
+        if lost > 0 {
+            copiesOffSale += lost
+            saleNotice = copiesOffSale == 1 ? "1 copy is no longer for sale." : "\(copiesOffSale) copies are no longer for sale."
+        }
         version += 1
         let number = changes[game, default: 0] + 1
         changes[game] = number
         enqueue { await self.write(game, change: number, to: folder) }
+        return true
+    }
+
+    /// `yyyy-MM-dd` of `date` in `timeZone`, in the Gregorian calendar.
+    private nonisolated static func day(of date: Date, in timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 
     /// Writes the game's state of change `number` into `target`, the folder of the change, unless a later change is
@@ -163,11 +251,11 @@ final class UserLibrary {
         }
         if let refusal = error as? UserFilesError {
             // The file on disk must not be replaced (item 5): the game is read-only for this run, as a refused file at load.
-            let shown = rows(game: game)
+            let shownBefore = shown(game)
             files[game] = nil
             refused[game] = Self.refusedText("\(game).json", refusal)
             writeFailures[game] = nil
-            if rows(game: game) != shown { version += 1 }
+            if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
             return
         }
         var isDirectory: ObjCBool = false
@@ -283,13 +371,14 @@ final class UserLibrary {
         let folderThere = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue
         if folderIsMissing == folderThere { folderIsMissing = !folderThere }
         guard folderThere else { return }
-        let shown = rows(game: game)
+        let shownBefore = shown(game)
         apply(result, to: game)
-        if rows(game: game) != shown { version += 1 }
+        if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
     }
 
-    /// Takes a read into memory. The whole file replaces memory, also when its rows are the same: keys another device
-    /// added then survive the next write.
+    /// Takes a read into memory. The whole file replaces memory, also when its lists are the same: keys another device
+    /// added then survive the next write. A for-sale count over its owned count is kept as read (Review Focus 2): a read
+    /// writes nothing, and the next change of the game lowers it.
     private func apply(_ result: GameRead, to game: String) {
         switch result.content {
         case .file(let file):

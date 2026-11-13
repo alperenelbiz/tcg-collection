@@ -150,12 +150,15 @@ final class AppModel {
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
     var importing: ImportModel?
-    /// Said once after an import: the status line shows it in place of `status` until the status changes (the next sync
-    /// line replaces it) or `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
+    /// Said once after an import, or when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8): the
+    /// status line shows it in place of `status` until the status changes (the next sync line replaces it) or
+    /// `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
     private(set) var statusNotice: String?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     /// Each `importApplied` takes the next number; only the latest one sets the notice after its wait.
     @ObservationIgnored private var appliedImports = 0
+    /// The `importApplied` calls still waiting for their writes: the for-sale notice of an import is said with its result.
+    @ObservationIgnored private var importsBeingSaid = 0
     /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
     private(set) var readsImport = false
     /// Tests only: runs on the main actor before a picked file is read, so a test can act while the read is in progress.
@@ -452,7 +455,11 @@ final class AppModel {
     /// After Import: the sheet closes and the Collection shows the first imported game at once. Once the import's writes
     /// have run, the status line says the summary once (`statusNotice`); when an imported game then has a problem (its
     /// write failed, its file was refused), it says that game's problem instead, never "Imported: …".
+    /// An import that took copies off sale (C8) says so after its summary: "Imported: …. 2 copies are no longer for sale.".
+    /// After a problem sentence the for-sale notice waits until that sentence is gone.
     func importApplied(_ applied: ImportModel.Applied) async {
+        importsBeingSaid += 1
+        defer { importsBeingSaid -= 1 }
         importing = nil
         gameID = applied.gameID
         screen = .collection
@@ -464,12 +471,43 @@ final class AppModel {
         await library.flush()
         // A later import (its own wait) says its own result.
         guard number == appliedImports else { return }
-        let text = applied.games.lazy.compactMap { self.library.problem(game: $0) }.first ?? "Imported: \(applied.summary)"
+        if let problem = applied.games.lazy.compactMap({ self.library.problem(game: $0) }).first {
+            say(problem)
+            return
+        }
+        let sale = library.saleNotice
+        library.clearSaleNotice()
+        say("Imported: \(applied.summary)" + (sale.map { ". \($0)" } ?? ""))
+    }
+
+    /// Shows `text` in the status line for `noticeDuration`, unless something else is said or the status changes first.
+    private func say(_ text: String) {
+        noticeTask?.cancel()
         statusNotice = text
         noticeTask = Task { [weak self] in
             try? await Task.sleep(for: Self.noticeDuration)
             guard !Task.isCancelled, let self, self.statusNotice == text else { return }
             self.statusNotice = nil
+        }
+    }
+
+    /// C8: says the library's for-sale notice once, then clears it. It waits while an import sheet is open or an import's
+    /// result is to come (the import says it with its summary), and while the status line shows a problem sentence (it
+    /// never hides one); each of those ending calls this again (`watchSaleNotices`).
+    private func sayPendingSaleNotice() {
+        guard let sale = library.saleNotice, importing == nil, importsBeingSaid == 0 else { return }
+        if let shown = statusNotice, library.problems.contains(shown) { return }
+        library.clearSaleNotice()
+        say(sale)
+    }
+
+    /// Calls `sayPendingSaleNotice` whenever the library's notice, the import sheet or the status line's notice changes,
+    /// for as long as the model lives.
+    private func watchSaleNotices() {
+        let library = library
+        let changes = Observations { [weak self] in (library.saleNotice, self?.importing == nil, self?.statusNotice) }
+        Task { [weak self] in
+            for await _ in changes { self?.sayPendingSaleNotice() }
         }
     }
 
@@ -483,6 +521,7 @@ final class AppModel {
     }
 
     private func launch() async {
+        watchSaleNotices()
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read.
         if let file = options.launchImport(isDebugBuild: Self.isDebugBuild) { await importCSV(from: file) }
