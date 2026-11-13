@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// One cell of a list's PDF before its picture is read: the texts and the address of the small picture (nil: none, the
+/// One cell of a list's PDF before its picture is read: the texts and the address of the picture (nil: none, the
 /// grey block).
 nonisolated struct PDFSource: Sendable, Equatable {
     let name: String
@@ -12,23 +12,23 @@ nonisolated struct PDFSource: Sendable, Equatable {
 
     /// For Sale's whole list (C3, C10): per printing the product name, with ` · <finish>` for a finish other than Normal
     /// (as the cell's `×3 · Foil` tells two finishes apart), the for-sale count, the printing's own price and the product's
-    /// small picture. A printing the catalog lacks has its saved name and no picture.
+    /// picture. A printing the catalog lacks has its saved name and no picture.
     static func forSale(_ entries: [CollectionEntry], game: GameDefinition, ygo: YGOPictureIndex?) -> [PDFSource] {
         entries.map { entry in
             let finish = entry.row.finish
             let name = finish.caseInsensitiveCompare("Normal") == .orderedSame ? entry.name : "\(entry.name) · \(finish)"
             return PDFSource(name: name, count: entry.row.count, price: entry.price,
-                             picture: entry.product.flatMap { PictureSource.url(for: $0, game: game, size: .small, ygo: ygo) })
+                             picture: entry.product.flatMap { PictureSource.url(for: $0, game: game, ygo: ygo) })
         }
     }
 
     /// Wanted's whole list (C2, C12): per card its name, the wanted count, its price as the screen shows it (the pinned
-    /// printing's, else the cheapest) and the small picture of the shown printing. A card without a printing has its saved
+    /// printing's, else the cheapest) and the picture of the shown printing. A card without a printing has its saved
     /// name and no picture.
     static func wanted(_ cards: [WantedCard], game: GameDefinition, ygo: YGOPictureIndex?) -> [PDFSource] {
         cards.map { card in
             PDFSource(name: card.name, count: card.entry.count, price: card.price,
-                      picture: card.shown.flatMap { PictureSource.url(for: $0, game: game, size: .small, ygo: ygo) })
+                      picture: card.shown.flatMap { PictureSource.url(for: $0, game: game, ygo: ygo) })
         }
     }
 }

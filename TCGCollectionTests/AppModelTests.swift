@@ -188,6 +188,28 @@ struct AppModelTests {
         if case .failed(let text) = model.status { #expect(text.hasPrefix("Prices:")) } else { Issue.record("no failure shown") }
     }
 
+    /// Feedback 1: the launch cleans the picture cache once, in the background, in the folder of the run's root
+    /// (`<root>/caches/pictures`): here the old small pictures go, a full-size one and the price archives stay.
+    @MainActor @Test func theLaunchCleansThePictureCacheOfItsRoot() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let fm = FileManager.default
+        try fm.createDirectory(at: paths.pictures, withIntermediateDirectories: true)
+        try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+        let small = paths.pictures.appending(path: "tcgplayer-cdn.tcgplayer.com-product-1_200w.jpg")
+        let full = paths.pictures.appending(path: "tcgplayer-cdn.tcgplayer.com-product-1_in_1000x1000.jpg")
+        let archive = paths.archives.appending(path: "prices-2026-01-02.ppmd.7z")
+        for file in [small, full, archive] { try Data(repeating: 1, count: 2000).write(to: file) }
+        #expect(paths.pictures == root.appending(path: "caches/pictures", directoryHint: .isDirectory))
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.pictureCleaning == nil)                                        // not before the launch
+        await model.start()
+        let deleted = await model.pictureCleaning?.value
+        #expect(deleted == ["tcgplayer-cdn.tcgplayer.com-product-1_200w.jpg"])
+        #expect(!fm.fileExists(atPath: small.path))
+        #expect(fm.fileExists(atPath: full.path) && fm.fileExists(atPath: archive.path))
+    }
+
     /// I6: a store file that cannot be read is moved aside into `unreadable-<date>`; a fresh store at the normal path
     /// is filled by the sync.
     @MainActor @Test func anUnreadableStoreIsMovedAsideAndDownloadedAgain() async throws {

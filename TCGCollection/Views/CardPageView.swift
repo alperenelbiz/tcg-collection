@@ -66,12 +66,12 @@ struct CardPageView: View {
     @ViewBuilder private func layout(shown: ProductRecord, game: GameDefinition, printings: [ProductRecord]) -> some View {
         #if os(macOS)
         HStack(alignment: .top, spacing: 28) {
-            CardImage(product: shown, size: .large).frame(width: 280)
+            CardImage(product: shown, size: .page).frame(width: 280)
             details(shown: shown, game: game, printings: printings)
         }
         #else
         VStack(alignment: .leading, spacing: 20) {
-            CardImage(product: shown, size: .large).frame(maxWidth: 280).frame(maxWidth: .infinity)
+            CardImage(product: shown, size: .page).frame(maxWidth: 280).frame(maxWidth: .infinity)
             details(shown: shown, game: game, printings: printings)
         }
         #endif

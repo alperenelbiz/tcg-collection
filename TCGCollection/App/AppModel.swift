@@ -231,6 +231,9 @@ final class AppModel {
     /// The launch steps and the first sync, made by the first `start()`. The model owns it, not a window: a window
     /// that closes cancels its own `.task`, not this one.
     @ObservationIgnored private var launchTask: Task<Void, Never>?
+    /// The launch's one cleaning of the picture cache (`PictureStore.clean`, the 3 GB limit): the names it deleted. Nil
+    /// before the launch.
+    @ObservationIgnored private(set) var pictureCleaning: Task<[String], Never>?
 
     init(options: LaunchOptions, catalogClient: any TCGCSVFetching, archiveClient: any ArchiveFetching,
          fetcher: any DataFetching, now: @escaping () -> Date = { Date() },
@@ -607,6 +610,10 @@ final class AppModel {
 
     private func launch() async {
         watchSaleNotices()
+        // Once per launch, with the window on screen: at background priority, off the main thread and off the picture
+        // store's actor, so neither the window nor a picture load waits for it. Only the run's own picture folder.
+        let pictures = pictures
+        pictureCleaning = Task.detached(priority: .background) { pictures.clean() }
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
         // `-importCSVDelay` it opens that long after the launch, so a UI test can open a page first; it holds nothing.

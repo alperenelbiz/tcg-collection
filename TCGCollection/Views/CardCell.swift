@@ -25,7 +25,7 @@ struct CardCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CardImage(product: content.product, size: .small)
+            CardImage(product: content.product, size: .cell)
             Text(content.name)
                 .font(Theme.bodyFont)
                 .foregroundStyle(Theme.text)

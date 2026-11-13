@@ -16,8 +16,17 @@ nonisolated struct URLSessionFetcher: DataFetching {
     }
 }
 
+/// One picture file of the cache as the cleaning sees it: its name, its size and when it was last used (its modification
+/// date: `PictureStore` sets it when it reads the file for a caller, once per run).
+nonisolated struct CachedPicture: Sendable, Equatable {
+    let name: String
+    let bytes: Int
+    let used: Date
+}
+
 /// Downloads each picture once and reads it from disk after that. At most `downloadsAtOnce` downloads run at a time over
 /// every caller (the galleries' cells, the card pages, a PDF export); a picture on disk never waits for one.
+/// The folder holds at most `cacheLimit` bytes of pictures after a cleaning (`clean`, once per launch).
 actor PictureStore {
     nonisolated let directory: URL
     private let fetcher: any DataFetching
@@ -33,6 +42,9 @@ actor PictureStore {
     /// The callers waiting for a slot, first come first served.
     private var queue: [(id: Int, resume: CheckedContinuation<Bool, Never>)] = []
     private var nextWaiter = 0
+
+    /// The files read from disk for a caller in this run, whose modification date is set already (`markUsed`).
+    private var usedThisRun: Set<String> = []
 
     #if DEBUG
     /// Test seam: the download slots taken now.
@@ -50,7 +62,10 @@ actor PictureStore {
     /// answer (not asked again in this run), no network, or a caller cancelled while it waited for a download slot.
     func data(for url: URL) async -> Data? {
         let file = fileURL(for: url)
-        if let cached = try? Data(contentsOf: file) { return cached }
+        if let cached = try? Data(contentsOf: file) {
+            markUsed(file)
+            return cached
+        }
         if failed.contains(url) { return nil }
         if let running = inFlight[url] { return try? await running.value }
         guard await takeSlot() else { return nil }
@@ -78,7 +93,7 @@ actor PictureStore {
         freeSlot()
         switch result {
         case .success(let body):
-            if body == nil { failed.insert(url) }
+            if body == nil { failed.insert(url) } else { usedThisRun.insert(file.lastPathComponent) }  // written now
             return body
         case .failure:
             return nil
@@ -124,10 +139,78 @@ actor PictureStore {
         return data
     }
 
-    /// `<host>-<last two path components>`, so `cards_small/1.jpg` and `cards/1.jpg` differ.
+    /// A picture read from disk for a caller was used now: its modification date says so, for the cleaning of a later
+    /// launch. Once per file per run, so scrolling a gallery does not write dates over and over.
+    private func markUsed(_ file: URL) {
+        guard usedThisRun.insert(file.lastPathComponent).inserted else { return }
+        try? FileManager.default.setAttributes([.modificationDate: Date.now], ofItemAtPath: file.path)
+    }
+
     private func fileURL(for url: URL) -> URL {
+        directory.appending(path: fileName(for: url))
+    }
+
+    /// `<host>-<last two path components>`, so `cards_small/1.jpg` and `cards/1.jpg` differ.
+    nonisolated func fileName(for url: URL) -> String {
         let tail = url.pathComponents.filter { $0 != "/" }.suffix(2).joined(separator: "-")
-        return directory.appending(path: "\(url.host() ?? "unknown")-\(tail)")
+        return "\(url.host() ?? "unknown")-\(tail)"
+    }
+
+    // MARK: The cache limit
+
+    /// At most this many bytes of pictures stay in the folder after a cleaning: 3 GB.
+    static let cacheLimit = 3 * 1024 * 1024 * 1024
+    /// A cleaning over the limit deletes until the pictures take at most this share of it.
+    static let cleanedShare = 0.9
+
+    /// A picture file of this store: a `.jpg` (every picture address ends so) that is not hidden. Anything else in the
+    /// folder (a temporary file of an atomic write, a file put there by hand) is never listed, so never deleted.
+    static func isPicture(_ name: String) -> Bool {
+        !name.hasPrefix(".") && name.lowercased().hasSuffix(".jpg")
+    }
+
+    /// A small picture of a build before feedback 1 (TCGplayer `<id>_200w.jpg`, YGOPRODeck `cards_small/<id>.jpg`, named
+    /// as `fileName(for:)` names them). No build asks for them any more.
+    static func isOldSmallPicture(_ name: String) -> Bool {
+        (name.hasPrefix("tcgplayer-cdn.tcgplayer.com-product-") && name.hasSuffix("_200w.jpg"))
+            || (name.hasPrefix("images.ygoprodeck.com-cards_small-") && name.hasSuffix(".jpg"))
+    }
+
+    /// What a cleaning deletes, in this order: every old small picture (by name), whatever the folder's size; then, when
+    /// the other pictures take more than `limit` bytes, the least recently used of them (equal dates by name) until they
+    /// take at most 90 % of it.
+    static func filesToDelete(_ files: [CachedPicture], limit: Int) -> [String] {
+        let old = files.filter { isOldSmallPicture($0.name) }.map(\.name).sorted()
+        let kept = files.filter { !isOldSmallPicture($0.name) }
+        var total = kept.reduce(0) { $0 + $1.bytes }
+        guard total > limit else { return old }
+        let target = Int(Double(limit) * cleanedShare)
+        var deleted: [String] = []
+        for file in kept.sorted(by: { ($0.used, $0.name) < ($1.used, $1.name) }) where total > target {
+            deleted.append(file.name)
+            total -= file.bytes
+        }
+        return old + deleted
+    }
+
+    /// Lists the picture files of this store's folder (`isPicture`; not its subfolders, nothing outside it), deletes what
+    /// `filesToDelete` names, and returns those names. Synchronous file work: the caller runs it off the main thread and
+    /// off this actor, so no picture load waits for it. A picture deleted here is downloaded again when a cell asks for it.
+    nonisolated func clean(limit: Int = PictureStore.cacheLimit) -> [String] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let urls = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
+                                                     options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])
+        else { return [] }
+        let files = urls.compactMap { url -> CachedPicture? in
+            let name = url.lastPathComponent
+            guard Self.isPicture(name), let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true else { return nil }
+            return CachedPicture(name: name, bytes: values.fileSize ?? 0, used: values.contentModificationDate ?? .distantPast)
+        }
+        return Self.filesToDelete(files, limit: limit).filter { name in
+            (try? fm.removeItem(at: directory.appending(path: name))) != nil
+        }
     }
 }
 

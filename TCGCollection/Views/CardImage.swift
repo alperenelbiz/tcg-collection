@@ -1,6 +1,21 @@
 import ImageIO
 import SwiftUI
 
+/// How large a picture is decoded: the source is always the full size (`PictureSource`), and the decode caps its long
+/// side, so a cell's memory does not grow with the source.
+nonisolated enum PictureSize: Sendable {
+    case cell, page
+
+    /// The long side of the decoded picture. A cell: 960 px, enough for the widest gallery cell (316 pt, a picture 461 pt
+    /// tall, 922 px at 2×; `CardImageTests`). A page: 1200 px (280 pt wide, 817 px at 2×).
+    var maxPixels: Int {
+        switch self {
+        case .cell: 960
+        case .page: 1200
+        }
+    }
+}
+
 /// The picture of one printing. Downloaded once by `PictureStore`, decoded off the main actor, kept in memory.
 /// While it loads: a flat `surface` block of the final size, no shimmer. With no picture: that block with the card name.
 struct CardImage: View {
@@ -25,19 +40,19 @@ struct CardImage: View {
                     Image(decorative: picture, scale: 1).resizable().scaledToFill()
                 } else if missing, let product {
                     Text(product.cardName)
-                        .font(size == .small ? Theme.lineFont : .system(size: 15))
+                        .font(size == .cell ? Theme.lineFont : .system(size: 15))
                         .foregroundStyle(Theme.faint)
                         .multilineTextAlignment(.center)
                         .padding(8)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: size == .small ? Theme.pictureRadius : Theme.largePictureRadius))
+            .clipShape(RoundedRectangle(cornerRadius: size == .cell ? Theme.pictureRadius : Theme.largePictureRadius))
             .task(id: url) { await load() }
     }
 
     private var url: URL? {
         guard let product, let game = Games.game(product.gameID) else { return nil }
-        return PictureSource.url(for: product, game: game, size: size, ygo: model.ygoIndex)
+        return PictureSource.url(for: product, game: game, ygo: model.ygoIndex)
     }
 
     private func load() async {
@@ -47,7 +62,7 @@ struct CardImage: View {
             missing = true
             return
         }
-        let pixels = size == .small ? 480 : 1200
+        let pixels = size.maxPixels
         let key = "\(url.absoluteString)@\(pixels)" as NSString
         if let hit = Self.cache.object(forKey: key) {
             picture = hit.image

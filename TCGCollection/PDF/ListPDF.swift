@@ -65,7 +65,7 @@ nonisolated enum ListPDF {
     /// The block of a missing picture: #E6E6E6.
     static let missingPicture: CGFloat = 0xE6 / 255.0
     /// A picture larger than its cell needs at this resolution is drawn at this size (a JPEG again); a smaller one goes in
-    /// as its own bytes. The pictures of the lists are the small ones (200 pixels wide), so they go in as they are.
+    /// as its own bytes. The pictures of the lists are the full-size ones (716 × 1000 px from TCGplayer), so they are made smaller.
     static let pictureDPI: CGFloat = 300
     static let jpegQuality: CGFloat = 0.8
 

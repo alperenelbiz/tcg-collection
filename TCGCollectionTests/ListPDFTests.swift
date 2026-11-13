@@ -208,6 +208,16 @@ struct ListPDFTests {
         #expect(size < large.count / 3, "\(size) bytes for a picture of \(large.count) bytes")
     }
 
+    /// Feedback 1: the lists' pictures are now the full size (TCGplayer 716 × 1000, YGOPRODeck 813 × 1185). Both are over
+    /// the cell's 709 px at 300 dpi, so both take the smaller path: drawn at 709 px on the long side.
+    @Test func theFullSizePicturesAreMadeSmaller() throws {
+        #expect(Int((ListPDF.pictureHeight * ListPDF.pictureDPI / 72).rounded(.up)) == 709)
+        for (width, height) in [(716, 1000), (813, 1185)] {
+            let image = try #require(ListPDF.image(from: Self.noisyJPEG(width: width, height: height, seed: 3)))
+            #expect(max(image.width, image.height) == 709, "\(width) × \(height) -> \(image.width) × \(image.height)")
+        }
+    }
+
     /// Bytes that are not a picture give the grey block, as no picture does.
     @Test func bytesThatAreNoPictureGiveTheGreyBlock() throws {
         let data = try pdf([PDFItem(name: "Odd", count: 1, price: nil, picture: Data("no".utf8))])

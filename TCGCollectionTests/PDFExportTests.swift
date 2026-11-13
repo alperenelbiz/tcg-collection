@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct PDFExportTests {
     private static func urls(_ count: Int) -> [URL] {
-        (1...count).map { URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\($0)_200w.jpg")! }
+        (1...count).map { URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\($0)_in_1000x1000.jpg")! }
     }
 
     private static func job(_ pictures: [URL?]) -> PDFJob {
@@ -205,7 +205,7 @@ struct PDFExportTests {
     // MARK: What the lists give the PDF
 
     /// For Sale: the printing's product name, ` · <finish>` for a finish other than Normal, the for-sale count, the
-    /// printing's own price, the small picture of the product. A printing the catalog lacks: its saved name, no picture.
+    /// printing's own price, the picture of the product. A printing the catalog lacks: its saved name, no picture.
     @Test func forSaleItemsAreThePrintings() throws {
         let game = try #require(Games.game("riftbound"))
         let dockside = product(id: 721334, name: "Dockside Lock-Up")
@@ -218,7 +218,7 @@ struct PDFExportTests {
                                        entry(721334, finish: "Foil", count: 1, name: "Dockside Lock-Up", product: dockside, price: nil),
                                        entry(9, finish: "normal", count: 1, name: "Gone Card", product: nil, price: nil)],
                                       game: game, ygo: nil)
-        let picture = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/721334_200w.jpg")
+        let picture = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/721334_in_1000x1000.jpg")
         #expect(items == [PDFSource(name: "Dockside Lock-Up", count: 2, price: price, picture: picture),
                           PDFSource(name: "Dockside Lock-Up · Foil", count: 1, price: nil, picture: picture),
                           PDFSource(name: "Gone Card", count: 1, price: nil, picture: nil)])
@@ -235,7 +235,7 @@ struct PDFExportTests {
                      WantedCard(entry: WantedEntry(cardKey: "gone", name: "Gone Card", count: 1), shown: nil, price: nil, owned: 0)]
         #expect(PDFSource.wanted(cards, game: game, ygo: nil)
                 == [PDFSource(name: "Dockside Lock-Up", count: 3, price: price,
-                              picture: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/721334_200w.jpg")),
+                              picture: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/721334_in_1000x1000.jpg")),
                     PDFSource(name: "Gone Card", count: 1, price: nil, picture: nil)])
     }
 

@@ -5,7 +5,7 @@ import Testing
 struct PictureStoreTests {
     @Test func aPictureIsDownloadedOnce() async throws {                // the YGOPRODeck rule
         let fake = FakeFetcher(body: Data(repeating: 7, count: 5000)); let store = PictureStore(directory: tempDir(), fetcher: fake)
-        let url = URL(string: "https://images.ygoprodeck.com/images/cards_small/80181649.jpg")!
+        let url = URL(string: "https://images.ygoprodeck.com/images/cards/80181649.jpg")!
         async let a = store.data(for: url); async let b = store.data(for: url)
         #expect(await a?.count == 5000); #expect(await b?.count == 5000)
         #expect(await store.data(for: url) != nil); #expect(await fake.calls == 1)
@@ -15,7 +15,7 @@ struct PictureStoreTests {
 
     @Test func aBadAnswerIsNotCachedAndNotRetriedInTheSameRun() async {
         let fake = FakeFetcher(body: Data("nope".utf8), status: 404); let store = PictureStore(directory: tempDir(), fetcher: fake)
-        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/1_200w.jpg")!
+        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/1_in_1000x1000.jpg")!
         #expect(await store.data(for: url) == nil); #expect(await store.data(for: url) == nil); #expect(await fake.calls == 1)
     }
 
@@ -23,7 +23,7 @@ struct PictureStoreTests {
     @Test func aNetworkErrorIsNotRemembered() async {
         let fake = FakeFetcher(body: Data(repeating: 7, count: 5000), networkErrors: 1)
         let store = PictureStore(directory: tempDir(), fetcher: fake)
-        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/3_200w.jpg")!
+        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/3_in_1000x1000.jpg")!
         #expect(await store.data(for: url) == nil)
         #expect(await store.data(for: url)?.count == 5000)
         #expect(await fake.calls == 2)
@@ -31,13 +31,13 @@ struct PictureStoreTests {
 
     @Test func aTinyBodyIsRejected() async {
         let fake = FakeFetcher(body: Data(repeating: 1, count: 500)); let store = PictureStore(directory: tempDir(), fetcher: fake)
-        #expect(await store.data(for: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/2_200w.jpg")!) == nil)
+        #expect(await store.data(for: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/2_in_1000x1000.jpg")!) == nil)
     }
 
     // MARK: At most 4 downloads at a time (constraints), over every caller: the gallery's cells and a PDF export
 
     private static func urls(_ range: ClosedRange<Int>) -> [URL] {
-        range.map { URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\($0)_200w.jpg")! }
+        range.map { URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/\($0)_in_1000x1000.jpg")! }
     }
 
     private func until(_ condition: () async -> Bool) async throws {
@@ -133,5 +133,130 @@ struct PictureStoreTests {
         #expect(await store.data(for: small)?.count == 2000)
         #expect(await store.data(for: large)?.count == 3000)
         #expect(await fake.calls == 2)
+    }
+
+    // MARK: The cache limit (feedback 1): 3 GB, cleaned once per launch, the least recently used first
+
+    private static let day: TimeInterval = 86_400
+    private static func at(_ days: Double) -> Date { Date(timeIntervalSince1970: 1_800_000_000 + days * day) }
+    private static func file(_ name: String, _ bytes: Int, _ days: Double) -> CachedPicture {
+        CachedPicture(name: name, bytes: bytes, used: at(days))
+    }
+
+    @Test func theLimitIsThreeGigabytes() {
+        #expect(PictureStore.cacheLimit == 3 * 1024 * 1024 * 1024)
+        #expect(PictureStore.cacheLimit == 3_221_225_472)
+    }
+
+    @Test func underTheLimitNothingIsDeleted() {
+        #expect(PictureStore.filesToDelete([], limit: 1000).isEmpty)
+        let files = [Self.file("a.jpg", 400, 1), Self.file("b.jpg", 600, 2)]       // 1000: at the limit, not over it
+        #expect(PictureStore.filesToDelete(files, limit: 1000).isEmpty)
+    }
+
+    /// Over the limit: the least recently used first, until the rest is at most 90 % of the limit.
+    @Test func overTheLimitTheOldestGoFirstUntilNinetyPercent() {
+        let files = [Self.file("e.jpg", 250, 5), Self.file("a.jpg", 250, 3), Self.file("c.jpg", 250, 1),
+                     Self.file("b.jpg", 250, 4), Self.file("d.jpg", 250, 2)]            // 1250 of 1000
+        // c (day 1): 1000 left, still over 900; d (day 2): 750.
+        #expect(PictureStore.filesToDelete(files, limit: 1000) == ["c.jpg", "d.jpg"])
+        // One file is enough when it brings the rest to exactly 90 %.
+        let two = [Self.file("new.jpg", 900, 9), Self.file("old.jpg", 200, 1)]
+        #expect(PictureStore.filesToDelete(two, limit: 1000) == ["old.jpg"])
+    }
+
+    @Test func equalDatesGoInNameOrder() {
+        let files = [Self.file("z.jpg", 300, 1), Self.file("m.jpg", 300, 1), Self.file("a.jpg", 300, 1), Self.file("k.jpg", 300, 1)]
+        #expect(PictureStore.filesToDelete(files, limit: 1000) == ["a.jpg"])            // 1200 -> 900
+        #expect(PictureStore.filesToDelete(files, limit: 600) == ["a.jpg", "k.jpg", "m.jpg"])  // 1200 -> 300, at most 540
+    }
+
+    /// The small pictures of earlier builds are never asked for again: deleted at the first cleaning, whatever the size.
+    @Test func theOldSmallPicturesAreAlwaysDeleted() {
+        let files = [Self.file("tcgplayer-cdn.tcgplayer.com-product-721334_in_1000x1000.jpg", 100, 1),
+                     Self.file("tcgplayer-cdn.tcgplayer.com-product-721334_200w.jpg", 10, 9),
+                     Self.file("images.ygoprodeck.com-cards-80181649.jpg", 100, 1),
+                     Self.file("images.ygoprodeck.com-cards_small-80181649.jpg", 10, 9)]
+        #expect(PictureStore.filesToDelete(files, limit: 1_000_000)
+                == ["images.ygoprodeck.com-cards_small-80181649.jpg", "tcgplayer-cdn.tcgplayer.com-product-721334_200w.jpg"])
+        // They do not count towards the limit: the full-size pictures alone are under it here.
+        #expect(PictureStore.filesToDelete(files, limit: 200)
+                == ["images.ygoprodeck.com-cards_small-80181649.jpg", "tcgplayer-cdn.tcgplayer.com-product-721334_200w.jpg"])
+    }
+
+    /// The name rule of the old small pictures, on the names `PictureStore` gives its files (`<host>-<two components>`).
+    @Test func theOldSmallNameRule() {
+        #expect(PictureStore.isOldSmallPicture("tcgplayer-cdn.tcgplayer.com-product-1_200w.jpg"))
+        #expect(PictureStore.isOldSmallPicture("images.ygoprodeck.com-cards_small-1.jpg"))
+        #expect(!PictureStore.isOldSmallPicture("tcgplayer-cdn.tcgplayer.com-product-1_in_1000x1000.jpg"))
+        #expect(!PictureStore.isOldSmallPicture("images.ygoprodeck.com-cards-1.jpg"))
+        #expect(!PictureStore.isOldSmallPicture("notes_200w.txt"))
+        // The store names a new download that way: the old small address and the full one are different files.
+        let store = PictureStore(directory: URL(fileURLWithPath: "/nowhere"), fetcher: FakeFetcher(body: Data()))
+        #expect(store.fileName(for: URL(string: "https://images.ygoprodeck.com/images/cards_small/1.jpg")!)
+                == "images.ygoprodeck.com-cards_small-1.jpg")
+        #expect(store.fileName(for: URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/1_200w.jpg")!)
+                == "tcgplayer-cdn.tcgplayer.com-product-1_200w.jpg")
+    }
+
+    /// The file step: it lists only the picture files (`*.jpg`, not hidden, not in a subfolder) of the store's own folder
+    /// and deletes what `filesToDelete` names. Anything else in or next to the folder survives.
+    @Test func cleaningDeletesOnlyPictureFilesOfItsFolder() throws {
+        let fm = FileManager.default
+        let caches = tempDir()
+        let pictures = caches.appending(path: "pictures", directoryHint: .isDirectory)
+        let archives = caches.appending(path: "archives", directoryHint: .isDirectory)
+        try fm.createDirectory(at: pictures.appending(path: "sub"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: archives, withIntermediateDirectories: true)
+        func put(_ url: URL, _ bytes: Int, _ days: Double) throws {
+            try Data(repeating: 1, count: bytes).write(to: url)
+            try fm.setAttributes([.modificationDate: Self.at(days)], ofItemAtPath: url.path)
+        }
+        try put(pictures.appending(path: "tcgplayer-cdn.tcgplayer.com-product-1_in_1000x1000.jpg"), 3000, 1)   // oldest
+        try put(pictures.appending(path: "tcgplayer-cdn.tcgplayer.com-product-2_in_1000x1000.jpg"), 3000, 3)
+        try put(pictures.appending(path: "images.ygoprodeck.com-cards-3.jpg"), 3000, 2)
+        try put(pictures.appending(path: "tcgplayer-cdn.tcgplayer.com-product-4_200w.jpg"), 100, 9)
+        try put(pictures.appending(path: "notes.txt"), 50_000, 0)                        // not a picture
+        try put(pictures.appending(path: ".hidden.jpg"), 50_000, 0)                       // hidden
+        try put(pictures.appending(path: "sub/deep.jpg"), 50_000, 0)                      // in a subfolder
+        try put(archives.appending(path: "prices-2026-11-13.ppmd.7z"), 50_000, 0)        // next to the folder
+        let store = PictureStore(directory: pictures, fetcher: FakeFetcher(body: Data()))
+        // 9000 bytes of full-size pictures over a limit of 8000: the oldest goes (6000 ≤ 7200), and the old small one.
+        let deleted = store.clean(limit: 8000)
+        #expect(deleted == ["tcgplayer-cdn.tcgplayer.com-product-4_200w.jpg",
+                            "tcgplayer-cdn.tcgplayer.com-product-1_in_1000x1000.jpg"])
+        let left = try fm.contentsOfDirectory(atPath: pictures.path).sorted()
+        #expect(left == [".hidden.jpg", "images.ygoprodeck.com-cards-3.jpg", "notes.txt", "sub",
+                         "tcgplayer-cdn.tcgplayer.com-product-2_in_1000x1000.jpg"])
+        #expect(fm.fileExists(atPath: pictures.appending(path: "sub/deep.jpg").path))
+        #expect(fm.fileExists(atPath: archives.appending(path: "prices-2026-11-13.ppmd.7z").path))
+        // A second cleaning finds nothing to do; a folder that is not there is no error.
+        #expect(store.clean(limit: 8000).isEmpty)
+        #expect(PictureStore(directory: caches.appending(path: "missing"), fetcher: FakeFetcher(body: Data())).clean(limit: 1).isEmpty)
+    }
+
+    /// "Used" is the file's modification date: a picture read from disk for a caller gets now, once per file per run, so
+    /// scrolling does not write dates over and over. A new run (a new store) sets it again.
+    @Test func aReadMarksThePictureUsedOncePerRun() async throws {
+        let fm = FileManager.default
+        let directory = tempDir()
+        let url = URL(string: "https://tcgplayer-cdn.tcgplayer.com/product/7_in_1000x1000.jpg")!
+        let first = PictureStore(directory: directory, fetcher: FakeFetcher(body: Data(repeating: 7, count: 5000)))
+        #expect(await first.data(for: url) != nil)                                       // downloaded: now already
+        let file = directory.appending(path: first.fileName(for: url))
+        let old = Self.at(-1000)
+        func used() throws -> Date { try #require(fm.attributesOfItem(atPath: file.path)[.modificationDate] as? Date) }
+        func age() throws { try fm.setAttributes([.modificationDate: old], ofItemAtPath: file.path) }
+
+        try age()
+        #expect(await first.data(for: url) != nil)                                       // downloaded in this run: not set again
+        #expect(try used() == old)
+
+        let second = PictureStore(directory: directory, fetcher: FakeFetcher(body: Data()))   // the next launch
+        #expect(await second.data(for: url) != nil)
+        #expect(try abs(used().timeIntervalSinceNow) < 60)
+        try age()
+        #expect(await second.data(for: url) != nil)                                      // once per file per run
+        #expect(try used() == old)
     }
 }
