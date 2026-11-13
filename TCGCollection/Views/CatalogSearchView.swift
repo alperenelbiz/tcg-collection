@@ -19,6 +19,14 @@ final class CatalogScreenState {
         self.gameID = gameID
         text = search
     }
+
+    /// How many of the three menus (Set, Rarity, Type) have a choice. The search text is not a filter.
+    var filtersOn: Int { [filter.groupID != nil, filter.rarity != nil, filter.typeFacet != nil].filter { $0 }.count }
+
+    /// Sets the three menus back to "All"; the search text stays.
+    func clearFilters() {
+        filter = CardFilter()
+    }
 }
 
 /// The window's All cards state: the current game's only; another game starts afresh with the `-search` text, as before.
@@ -64,6 +72,9 @@ struct CatalogSearchView: View {
                     FilterMenu(title: "Set", selection: $state.filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
                     FilterMenu(title: "Rarity", selection: $state.filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
                     FilterMenu(title: "Type", selection: $state.filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
+                    if state.filtersOn > 0 {
+                        ClearFiltersButton(identifier: "catalog-clear-filters") { state.clearFilters() }
+                    }
                 }
             }
             .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion)) { await search() }
@@ -197,6 +208,19 @@ private nonisolated struct SearchKey: Equatable {
     let text: String
     let filter: CardFilter
     let catalogVersion: Int
+}
+
+/// "Clear" in a toolbar, right of the filter menus, only while a filter is on (the caller leaves it out otherwise, not
+/// disabled): a plain text button as the system draws it, no icon, no accent.
+struct ClearFiltersButton: View {
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button("Clear", action: action)
+            .help("Clear filters")
+            .accessibilityIdentifier(identifier)
+    }
 }
 
 /// A toolbar menu that holds a picker with "All" and the choices. Its label is the title, or the choice made.

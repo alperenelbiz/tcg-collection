@@ -52,6 +52,60 @@ final class CatalogFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { cells.count == all })
     }
 
+    /// Feedback 1: "Clear" stands right of the Type menu only while one of Set, Rarity and Type is chosen; it sets the
+    /// three back to "All" and leaves the search text. A search text alone shows no button.
+    func testClearInTheToolbarWhileAFilterIsOn() {
+        let app = launch(game: "riftbound")
+        let cells = cardCells(app)
+        let clear = element(app, "catalog-clear-filters")
+        XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        let all = cells.count
+        XCTAssertFalse(clear.exists, "Clear with no filter on")
+        chooseType(app, "Gear")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["card-cell-dockside lock up"] }, "\(identifiers(cells))")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertEqual(clear.label, "Clear")
+        shot("catalog-clear-01-type-gear")
+        clear.click()
+        XCTAssertTrue(waitUntil { cells.count == all }, "\(cells.count) of \(all)")
+        XCTAssertTrue(waitUntil { !clear.exists }, "Clear stays with no filter on")
+
+        // With a filter on and the search field active: Set and Rarity stay in the toolbar; Type was in the overflow (>>)
+        // while searching before Clear came, and Clear joins it there. Clear leaves the text,
+        // and the search text alone is no filter: no button.
+        chooseType(app, "Gear")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        let search = searchField(app)
+        search.click()
+        search.typeText("dock")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["card-cell-dockside lock up"] }, "\(identifiers(cells))")
+        shot("catalog-clear-02-searching-with-a-filter")
+        for item in ["filter-set", "filter-rarity"] {
+            XCTAssertTrue(element(app, item).isHittable, "\(item) is not in the toolbar while searching")
+        }
+        // At 900 pt with the search field active, Clear goes into the overflow with Type: reach it there.
+        let more = app.toolbars.popUpButtons["more toolbar items"].firstMatch
+        XCTAssertTrue(more.isHittable, "no overflow while searching: \(app.toolbars.firstMatch.debugDescription)")
+        more.click()
+        let overflowClear = app.menuItems["Clear"].firstMatch
+        XCTAssertTrue(overflowClear.waitForExistence(timeout: 5), "no Clear in the overflow")
+        shot("catalog-clear-03-overflow-open")
+        overflowClear.click()
+        XCTAssertTrue(waitUntil { !clear.exists }, "Clear stays with no filter on")
+        XCTAssertEqual(text(searchField(app)), "dock")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["card-cell-dockside lock up"] }, "\(identifiers(cells))")
+        shot("catalog-clear-04-search-text-alone")
+        XCTAssertFalse(clear.exists, "Clear with only a search text")
+    }
+
+    private func chooseType(_ app: XCUIApplication, _ item: String) {
+        element(app, "filter-type").click()
+        let choice = app.menuItems[item].firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5), "no \(item) in the Type menu")
+        choice.click()
+    }
+
     func testGamePicker() {
         let app = launch(game: "riftbound")
         XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 20))

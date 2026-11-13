@@ -262,6 +262,50 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertEqual(text(searchField(app)), "rune")
     }
 
+    /// Feedback 1: "Clear" stands right of "Filter (n)" only while a filter is on; it turns every filter off. A search
+    /// text alone shows no button.
+    func testClearInTheToolbarWhileAFilterIsOn() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
+            try self.writeCollection([StoredRow(productID: 721334, finish: "Normal", count: 1, name: "Dockside Lock-Up"),
+                                      StoredRow(productID: 721337, finish: "Normal", count: 1, name: "Kai'Sa, Rebel"),
+                                      StoredRow(productID: 722282, finish: "Normal", count: 3, name: "Calm Rune (R02a)")],
+                                     game: "riftbound", in: root)
+        }
+        let cells = collectionCells(app)
+        let clear = element(app, "collection-clear-filters")
+        XCTAssertTrue(waitUntil(timeout: 20) { cells.count == 3 }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertFalse(clear.exists, "Clear with no filter on")
+        filter(app, "collection-filter-rarity", "Showcase")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["collection-cell-722282-Normal"] }, "\(identifiers(cells))")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        XCTAssertEqual(clear.label, "Clear")
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("3 of 5 copies · 1 of 3 printings") }, app.windows.firstMatch.title)
+        shot("collection-18-clear-in-the-toolbar")
+        clear.click()
+        XCTAssertTrue(waitUntil { cells.count == 3 }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntil { !clear.exists }, "Clear stays with no filter on")
+        XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("– 5 copies · 3 printings"), app.windows.firstMatch.title)
+
+        // The search text alone is no filter. With the search field active and a filter on, Import CSV…, Filter, Clear
+        // and Sort are in the toolbar (no overflow).
+        let search = searchField(app)
+        search.click()
+        search.typeText("rune")
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == ["collection-cell-722282-Normal"] }, "\(identifiers(cells))")
+        XCTAssertFalse(clear.exists, "Clear with only a search text")
+        filter(app, "collection-filter-rarity", "Showcase")
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        search.click()
+        shot("collection-19-searching-with-a-filter")
+        for item in ["collection-import", "collection-filter", "collection-clear-filters", "collection-sort"] {
+            XCTAssertTrue(element(app, item).isHittable, "\(item) is not in the toolbar while searching")
+        }
+        clear.click()
+        XCTAssertTrue(waitUntil { !clear.exists })
+        XCTAssertEqual(text(searchField(app)), "rune")
+    }
+
     /// B5 and a finish with a space: Yu-Gi-Oh! has no prices in the fixture, so the card page offers `Normal`; the owned
     /// `1st Edition` (a CSV's `Printing` the price table does not list) gets a line of its own after it, and its
     /// identifiers keep the space.

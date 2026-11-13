@@ -93,6 +93,9 @@ struct CollectionView: View {
                 ToolbarItemGroup {
                     importButton
                     filterMenu
+                    if state.filtersOn > 0 {
+                        ClearFiltersButton(identifier: "collection-clear-filters") { state.clearFilters() }
+                    }
                     SortMenu(sort: $state.sort, identifier: "collection-sort")
                 }
             }

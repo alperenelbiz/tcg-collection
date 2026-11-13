@@ -35,4 +35,21 @@ struct CollectionViewTests {
         state.join.entries = entries
         #expect(state.content(rows: rows)?.link(for: entries[1]) == .unknownPrinting)
     }
+
+    /// Feedback 1: "Clear" stands in the Collection's toolbar while `filtersOn` is over 0. The search text is not a filter.
+    @Test func filtersOnCountsTheFourMenusAndClearResetsThem() {
+        let state = CollectionScreenState(gameID: "riftbound")
+        state.text = "rune"
+        #expect(state.filtersOn == 0)
+        state.rarity = "Showcase"
+        #expect(state.filtersOn == 1)
+        state.groupID = 24344
+        state.price = .from5
+        state.playset = .moreThanAPlayset
+        #expect(state.filtersOn == 4)
+        state.clearFilters()
+        #expect(state.filtersOn == 0)
+        #expect(state.groupID == nil && state.rarity == nil && state.price == .any && state.playset == .any)
+        #expect(state.text == "rune")
+    }
 }
