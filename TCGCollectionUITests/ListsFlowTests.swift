@@ -140,9 +140,10 @@ final class ListsFlowTests: UITestCase {
     }
 
     /// Fix round 1, D4: a double click on "Sold 1" sells one copy once: one record, one copy less owned and for sale.
+    /// Final fix C2: Return on the dialog is "Sold 1" (the default button), not "Sold all": it sells exactly one copy.
     func testADoubleClickOnSoldOneSellsOne() throws {
         let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
-            try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 3, forSale: 2))
+            try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 4, forSale: 3))
         }
         let sold = element(app, "for-sale-sold-721334-Normal")
         XCTAssertTrue(sold.waitForExistence(timeout: 20))
@@ -151,13 +152,27 @@ final class ListsFlowTests: UITestCase {
         let one = app.sheets.buttons["Sold 1"].firstMatch
         XCTAssertTrue(one.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
         one.doubleClick()
-        XCTAssertTrue(waitUntil { self.text(self.element(app, "for-sale-value-721334-Normal")) == "1" },
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "for-sale-value-721334-Normal")) == "2" },
                       text(element(app, "for-sale-value-721334-Normal")))
         XCTAssertTrue(waitUntil { (try? self.storedSold(game: "riftbound"))?.map(\.count) == [1] },
                       "\(String(describing: try? storedSold(game: "riftbound")))")
+        XCTAssertEqual(try storedCollection(game: "riftbound"), [StoredRow(productID: 721334, finish: "Normal", count: 3, name: "Dockside Lock-Up")])
+        XCTAssertEqual(try storedForSale(game: "riftbound"), [StoredSale(productID: 721334, finish: "Normal", count: 2, name: "Dockside Lock-Up")])
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+
+        // Return: the dialog offers "Sold 1" and "Sold all 2"; the default button sells one copy.
+        XCTAssertTrue(waitUntil { sold.isEnabled }, "Sold stayed off after the double click")
+        sold.click()
+        XCTAssertTrue(app.sheets.buttons["Sold all 2"].firstMatch.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.buttons["Sold 1"].firstMatch.exists)
+        shot("lists-05b-sold-dialog-before-return")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "Return did not close the dialog")
+        XCTAssertTrue(waitUntil { (try? self.storedSold(game: "riftbound"))?.map(\.count) == [1, 1] },
+                      "\(String(describing: try? storedSold(game: "riftbound")))")
+        XCTAssertEqual(text(element(app, "for-sale-value-721334-Normal")), "1")
         XCTAssertEqual(try storedCollection(game: "riftbound"), [StoredRow(productID: 721334, finish: "Normal", count: 2, name: "Dockside Lock-Up")])
         XCTAssertEqual(try storedForSale(game: "riftbound"), [StoredSale(productID: 721334, finish: "Normal", count: 1, name: "Dockside Lock-Up")])
-        XCTAssertFalse(app.sheets.firstMatch.exists)
     }
 
     /// Fix round 1, item B: the dialog follows the live for-sale count. Another device lowers it from 2 to 1 while the
@@ -892,15 +907,6 @@ final class ListsFlowTests: UITestCase {
         }
     }
 
-    /// Every cell of Wanted's gallery (`wanted-cell-<card key>`), not the controls under them (`wanted-cell-minus-…`).
-    /// A card key has no hyphen (`CardName.searchKey`).
-    private func wantedCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: """
-            identifier BEGINSWITH 'wanted-cell-' AND NOT (identifier BEGINSWITH 'wanted-cell-minus-' \
-            OR identifier BEGINSWITH 'wanted-cell-value-' OR identifier BEGINSWITH 'wanted-cell-plus-')
-            """))
-    }
-
     /// Writes this test's own price files into `<root>/support` before the launch, for every game, with a day far ahead:
     /// the price step then has that day and downloads nothing, so the fixture archive (which has no Yu-Gi-Oh! price) does
     /// not replace them. Yu-Gi-Oh!: Swiftwind Panther Warrior 719834 (Super Rare) 1st Edition $14.50, Unlimited $9.00;
@@ -971,16 +977,6 @@ final class ListsFlowTests: UITestCase {
         }
     }
 
-    /// The device's calendar day, as the app writes it in a sold record.
-    private static func today() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
-    }
-
     /// Keeps a PDF the app made in the result bundle (`<name>.pdf`), and a picture of its first page (`<name>-pdf-page-1`).
     private func keep(_ data: Data, name: String, page: PDFPage) {
         let file = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
@@ -1020,11 +1016,6 @@ final class ListsFlowTests: UITestCase {
     /// A static text that shows `text` (macOS keeps it in `value` or `label`).
     private static func showing(_ text: String) -> NSPredicate {
         NSPredicate(format: "label == %@ OR value == %@", text, text)
-    }
-
-    /// Every cell of For Sale's gallery (`for-sale-cell-<productID>-<finish>`).
-    private func forSaleCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'for-sale-cell-'"))
     }
 
     /// The back button of a page pushed on a list screen.

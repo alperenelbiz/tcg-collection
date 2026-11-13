@@ -149,7 +149,8 @@ final class AppModel {
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
     /// Set by `-exportPDF` where it is allowed (`LaunchOptions.launchPDF`): the list screen it names writes its PDF once
-    /// its first join has ended, and takes it (`takeLaunchPDF`).
+    /// its list is read by a join made on a settled catalog that had the game's prices (offline: without waiting for
+    /// prices; `PDFExport.launchReady`), and takes it (`takeLaunchPDF`).
     @ObservationIgnored private var launchPDF: LaunchPDF?
 
     /// What the user owns. Every screen that shows or changes the collection talks to it.
@@ -165,15 +166,21 @@ final class AppModel {
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
     var importing: ImportModel?
-    /// Said once after an import, or when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8): the
-    /// status line shows it in place of `status` until the status changes (the next sync line replaces it) or
-    /// `noticeDuration` has passed. `status` itself is never replaced, so the sync's line comes back.
+    /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet): a
+    /// dialog asked for meanwhile would not show (For Sale's Sold dialog does not open again then).
+    var showsSheet: Bool { needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil }
+    /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
+    /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
+    /// until the status changes (the next sync line replaces it) or `noticeDuration` has passed. `status` itself is never
+    /// replaced, so the sync's line comes back.
     private(set) var statusNotice: String?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     /// Each `importApplied` takes the next number; only the latest one sets the notice after its wait.
     @ObservationIgnored private var appliedImports = 0
     /// The `importApplied` calls still waiting for their writes: the for-sale notice of an import is said with its result.
     @ObservationIgnored private var importsBeingSaid = 0
+    /// The last "The sale was not saved: …" said: the for-sale notice does not hide it.
+    @ObservationIgnored private var unsavedSaleSaid: String?
     /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
     private(set) var readsImport = false
     /// Tests only: runs on the main actor before a picked file is read, so a test can act while the read is in progress.
@@ -523,16 +530,23 @@ final class AppModel {
     }
 
     /// C7: sells `count` copies of a printing on the For Sale list, at the price of this moment (the price table's, for
-    /// the printing's finish; none when it has none). When the library refuses (more than are for sale or owned by now:
-    /// the copies for sale changed while the dialog was open), nothing is sold and the status line says so. True when it
-    /// sold.
+    /// the printing's finish; none when it has none). When the library refuses, nothing is sold and the status line says
+    /// why: the card page's sentence when the game cannot change (the folder is missing or switched, the file refused:
+    /// `countsLocked`, A2); else "Nothing was sold: the copies for sale changed." (more than are for sale or owned by
+    /// now: they changed while the dialog was open). True when it sold.
     @discardableResult
     func sell(_ count: Int, game: String, key: PrintingKey) -> Bool {
         guard library.sell(count, game: game, key: key, price: prices.shown(game: game, key: key)) else {
-            say(StatusText.nothingSold)
+            say(library.countsLocked(game: game) ?? StatusText.nothingSold)
             return false
         }
         return true
+    }
+
+    /// A list's PDF export ended without a PDF to save (`PDFExport`: none could be drawn, or the list was left before its
+    /// save panel opened): the status line says so.
+    func pdfEnded(_ notice: String) {
+        say(notice)
     }
 
     /// The save panel of a list's PDF ended (`fileExporter`): a failure that is not a cancel is said in the status line
@@ -553,21 +567,30 @@ final class AppModel {
         }
     }
 
-    /// C8: says the library's for-sale notice once, then clears it. It waits while an import sheet is open or an import's
-    /// result is to come (the import says it with its summary), and while the status line shows a problem sentence (it
-    /// never hides one); each of those ending calls this again (`watchSaleNotices`).
+    /// A3: says a sale the library's write dropped ("The sale was not saved: …") at once, then clears it. C8: says the
+    /// library's for-sale notice once, then clears it. That one waits while an import sheet is open or an import's result
+    /// is to come (the import says it with its summary), and while the status line shows a problem sentence or a sale
+    /// that was not saved (it never hides one); each of those ending calls this again (`watchSaleNotices`).
     private func sayPendingSaleNotice() {
+        if let unsaved = library.unsavedSaleNotice {
+            library.clearUnsavedSaleNotice()
+            unsavedSaleSaid = unsaved
+            say(unsaved)
+            return
+        }
         guard let sale = library.saleNotice, importing == nil, importsBeingSaid == 0 else { return }
-        if let shown = statusNotice, library.problems.contains(shown) { return }
+        if let shown = statusNotice, library.problems.contains(shown) || shown == unsavedSaleSaid { return }
         library.clearSaleNotice()
         say(sale)
     }
 
-    /// Calls `sayPendingSaleNotice` whenever the library's notice, the import sheet or the status line's notice changes,
+    /// Calls `sayPendingSaleNotice` whenever the library's notices, the import sheet or the status line's notice change,
     /// for as long as the model lives.
     private func watchSaleNotices() {
         let library = library
-        let changes = Observations { [weak self] in (library.saleNotice, self?.importing == nil, self?.statusNotice) }
+        let changes = Observations { [weak self] in
+            (library.saleNotice, library.unsavedSaleNotice, self?.importing == nil, self?.statusNotice)
+        }
         Task { [weak self] in
             for await _ in changes { self?.sayPendingSaleNotice() }
         }

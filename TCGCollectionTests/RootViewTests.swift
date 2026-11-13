@@ -48,11 +48,19 @@ struct RootViewTests {
         #expect(path.wrappedValue.count == 1)
     }
 
-    /// The import shows the imported game's Collection at its root (fix round 2), not a page kept on it.
+    /// The import shows the imported game's Collection at its root (fix round 2), not a page kept on it: a page opened on
+    /// the Collection and kept across a sidebar switch is not what the import shows.
     @Test func anImportShowsTheCollectionsRoot() async {
-        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "all-cards"])
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "collection"])
+        let stored = Stored()
+        let path = Binding(get: { stored.path }, set: { stored.path = $0 }).kept(on: .collection, in: model)
+        path.wrappedValue.append(page("dockside lock up"))       // a page opened on the Collection
+        model.screen = .allCards                                 // the sidebar: the page is kept
+        path.wrappedValue = NavigationPath()                     // the stack leaving: not taken
+        #expect(stored.path.count == 1)
         model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
-        await model.importApplied(.init(gameID: "yu-gi-oh", games: ["yu-gi-oh"], summary: "2 new"))
-        #expect(model.screen == .collection && model.showsRoot(.collection) && model.gameID == "yu-gi-oh")
+        await model.importApplied(.init(gameID: model.gameID, games: [model.gameID], summary: "2 new"))
+        #expect(model.screen == .collection && model.showsRoot(.collection))
+        #expect(path.wrappedValue.isEmpty)                       // the root: the kept page is dropped
     }
 }

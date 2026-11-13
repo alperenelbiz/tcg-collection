@@ -245,9 +245,10 @@ struct PrintingCell: View {
 }
 
 /// "Make PDF…" in a list's toolbar, left of Sort (`doc.richtext`; the name is its label and help text): makes the PDF of
-/// the screen's whole list (`job`), then the system's save panel opens (`listPDF`). While the export runs, its label is the
-/// progress ("Making PDF… 12 / 40") and a click cancels it; a second export cannot start meanwhile. Off until the screen
-/// has read its list (`enabled`).
+/// the screen's whole list (`job`), then the system's save panel opens (`pdfSaving`); when no PDF could be drawn the
+/// status line says "The PDF could not be made.". While the export runs, its label is the progress ("Making PDF… 12 /
+/// 40") and a click cancels it; a second export cannot start meanwhile. Off until the screen has read its list
+/// (`enabled`).
 struct PDFButton: View {
     let export: PDFExport
     let identifier: String
@@ -264,7 +265,7 @@ struct PDFButton: View {
             .accessibilityIdentifier(identifier)
         } else {
             Button {
-                if let job = job() { export.start(job, pictures: model.pictures) }
+                if let job = job() { export.start(job, pictures: model.pictures) { model.pdfEnded($0) } }
             } label: {
                 Label("Make PDF…", systemImage: "doc.richtext")
             }
@@ -281,7 +282,7 @@ extension View {
     func launchPDF(_ export: PDFExport, screen: Screen, ready: Bool, model: AppModel, job: @escaping () -> PDFJob?) -> some View {
         onChange(of: ready, initial: true) { _, ready in
             guard ready, let file = model.takeLaunchPDF(for: screen), let job = job() else { return }
-            export.start(job, pictures: model.pictures, writingTo: file)
+            export.start(job, pictures: model.pictures, writingTo: file) { model.pdfEnded($0) }
         }
     }
 
@@ -290,7 +291,8 @@ extension View {
     /// while a card page is open opens when the list is on show again (macOS 27 does not present it over a pushed page). A
     /// failed save is said in the status line (`AppModel.pdfSaveEnded`). The stack going away (another screen, another
     /// game, the window closing) cancels a running export, which then writes nothing and drops a PDF not yet saved; a card
-    /// page pushed on the stack does not.
+    /// page pushed on the stack does not. A made PDF dropped that way is said once: "The PDF was not saved: you left the
+    /// list." (`PDFExport.leave`).
     func pdfSaving(_ export: PDFExport, model: AppModel) -> some View {
         fileExporter(isPresented: Binding(get: { export.made != nil }, set: { if !$0 { export.made = nil } }),
                      document: export.made.map { PDFFile(data: $0.data) }, contentType: .pdf,
@@ -298,7 +300,9 @@ extension View {
             export.made = nil
             model.pdfSaveEnded(result)
         }
-        .onDisappear { export.cancel() }
+        .onDisappear {
+            if let notice = export.leave() { model.pdfEnded(notice) }
+        }
     }
 }
 

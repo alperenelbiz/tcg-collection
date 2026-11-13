@@ -22,8 +22,12 @@ final class UserLibrary {
     /// Goes up on every change of a list (here or from another device), so views read them again.
     private(set) var version = 0
     /// "<n> copies are no longer for sale.": a change made here lowered for-sale counts to the owned ones (C8). The copies
-    /// of every such change are summed until `clearSaleNotice()`.
+    /// of every such change are summed until `clearSaleNotice()`; a load starts the count afresh.
     private(set) var saleNotice: String?
+    /// "The sale was not saved: <the game's problem>": the write of a change that held a sale was refused (the file
+    /// became one this app must not rewrite between the read and the write), so the sale was dropped with it. Until
+    /// `clearUnsavedSaleNotice()`.
+    private(set) var unsavedSaleNotice: String?
     /// True when `load` found no folder at `folder`, or a reload found it gone: changes are refused until another folder
     /// is used, or (gone after the load) until a reload finds it back.
     private(set) var folderIsMissing = false
@@ -56,6 +60,8 @@ final class UserLibrary {
     @ObservationIgnored private let timeZone: TimeZone
     /// The copies `saleNotice` counts.
     @ObservationIgnored private var copiesOffSale = 0
+    /// Games whose memory holds a sale that no write has saved yet: a refused write of such a game drops a sale.
+    @ObservationIgnored private var unsavedSales: Set<String> = []
     /// The serial path: every write and every read of a game file runs after the one queued before it.
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var queued = 0
@@ -150,6 +156,8 @@ final class UserLibrary {
         copiesOffSale = 0
     }
 
+    func clearUnsavedSaleNotice() { unsavedSaleNotice = nil }
+
     // MARK: Changing
 
     /// Refused (nothing changes, nothing is written) while `isLoaded` is false, for a game whose file is refused, and for
@@ -168,9 +176,10 @@ final class UserLibrary {
         change(game) { $0.wanted = ListRules.settingWanted($0.wanted, count: count, cardKey: cardKey, name: name) }
     }
 
-    /// Refused as `setCount` is. `nil` takes the pin away; a card not on the list changes nothing.
+    /// Refused as `setCount` is. `nil` takes the pin away, also a pin this build cannot read (its keys are not written any
+    /// more); a card not on the list changes nothing.
     func setPin(_ pin: PrintingKey?, game: String, cardKey: String) {
-        change(game) { $0.wanted = ListRules.pinning($0.wanted, cardKey: cardKey, to: pin) }
+        change(game) { $0.setPin(pin, cardKey: cardKey) }
     }
 
     /// Refused as `setCount` is. The count is clamped to the owned count of the printing; 0 removes it from the list.
@@ -184,19 +193,21 @@ final class UserLibrary {
     /// C7: sells `count` copies of a printing on the For Sale list: the owned and for-sale counts go down and one record
     /// with today's day (`now`, in `timeZone`) and `price` is added, in one change. False (nothing changes) when refused
     /// as `setCount` is, or when `count` is under 1 or more than are for sale or owned: a second click on "Sold all"
-    /// finds nothing left.
+    /// finds nothing left. A sale whose write is refused is said (`unsavedSaleNotice`).
     @discardableResult
     func sell(_ count: Int, game: String, key: PrintingKey, price: ShownPrice?) -> Bool {
         let day = Self.day(of: now(), in: timeZone)
-        return change(game) { file in
+        let sold = change(game) { file in
             guard let sold = ListRules.selling(file, key: key, count: count, day: day, price: price) else { return }
             file = sold
         }
+        if sold { unsavedSales.insert(game) }
+        return sold
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.
     /// `edit` changes the game's file in place; a for-sale count it leaves over its owned count is lowered in the same
-    /// change (C8). False when refused, or when the edit left every list as it was (nothing is written then).
+    /// change (C8). False when refused, or when the edit changed nothing the file holds (nothing is written then).
     @discardableResult
     private func change(_ game: String, _ edit: (inout GameUserFile) -> Void) -> Bool {
         // Only a known game (`canChange`): its id becomes a file name.
@@ -204,7 +215,8 @@ final class UserLibrary {
         let current = files[game] ?? GameUserFile()
         var file = current
         edit(&file)
-        guard !file.hasSameLists(as: current) else { return false }
+        // Not only the lists: a pin this build cannot read, cleared, changes what is written (B3).
+        guard file != current else { return false }
         addToSaleNotice(clampForSale(&file))
         files[game] = file
         version += 1
@@ -257,6 +269,8 @@ final class UserLibrary {
         }
         guard let error else {
             writeFailures[game] = nil
+            // The whole state is on disk, every sale in it too.
+            unsavedSales.remove(game)
             return
         }
         if let refusal = error as? UserFilesError {
@@ -266,6 +280,10 @@ final class UserLibrary {
             refused[game] = Self.refusedText("\(game).json", refusal)
             writeFailures[game] = nil
             if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
+            // The dropped state held a sale (A3): say so once. Other dropped changes are said by the problem line only.
+            if unsavedSales.remove(game) != nil, let problem = problem(game: game) {
+                unsavedSaleNotice = "The sale was not saved: \(problem)"
+            }
             return
         }
         var isDirectory: ObjCBool = false
@@ -291,6 +309,10 @@ final class UserLibrary {
         refused = [:]
         writeFailures = [:]
         conflictFailures = [:]
+        unsavedSales = []
+        // The reads of this load say what they take off sale; a notice not yet said about the memory just dropped would
+        // count the same copies twice (B2).
+        clearSaleNotice()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
@@ -327,6 +349,7 @@ final class UserLibrary {
         refused = [:]
         writeFailures = [:]
         conflictFailures = [:]
+        unsavedSales = []
         notice = nil
         folderIsMissing = false
         watcher?.stop()
@@ -394,8 +417,10 @@ final class UserLibrary {
         switch result.content {
         case .file(var file):
             let lost = clampForSale(&file)
-            // A read that changes nothing on screen (the same file read again) says nothing again.
-            if !file.hasSameLists(as: shown(game)) { addToSaleNotice(lost) }
+            // A read that changes nothing on screen (the same file read again) says nothing again. With no file of the game
+            // in memory (a load, a file that was missing or refused) what it takes off is new, also when the clamp leaves
+            // every list empty (B1).
+            if files[game].map({ !file.hasSameLists(as: $0) }) ?? true { addToSaleNotice(lost) }
             files[game] = file
             refused[game] = nil
         case .missing:

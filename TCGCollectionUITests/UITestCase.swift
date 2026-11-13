@@ -123,6 +123,30 @@ class UITestCase: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'collection-cell-'"))
     }
 
+    /// Every cell of For Sale's gallery (`for-sale-cell-<productID>-<finish>`).
+    func forSaleCells(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'for-sale-cell-'"))
+    }
+
+    /// Every cell of Wanted's gallery (`wanted-cell-<card key>`), not the controls under them (`wanted-cell-minus-…`).
+    /// A card key has no hyphen (`CardName.searchKey`).
+    func wantedCells(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(NSPredicate(format: """
+            identifier BEGINSWITH 'wanted-cell-' AND NOT (identifier BEGINSWITH 'wanted-cell-minus-' \
+            OR identifier BEGINSWITH 'wanted-cell-value-' OR identifier BEGINSWITH 'wanted-cell-plus-')
+            """))
+    }
+
+    /// The device's calendar day, as the app writes it in a sold record.
+    static func today() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
     /// The identifiers of the elements of `query`, sorted.
     func identifiers(_ query: XCUIElementQuery) -> [String] {
         query.allElementsBoundByIndex.map(\.identifier).sorted()

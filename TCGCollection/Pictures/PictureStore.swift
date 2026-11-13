@@ -29,13 +29,17 @@ actor PictureStore {
     /// Constraints: at most 4 picture downloads at a time.
     static let downloadsAtOnce = 4
     /// The download slots taken now.
-    private(set) var downloadsRunning = 0
+    private var slotsTaken = 0
     /// The callers waiting for a slot, first come first served.
     private var queue: [(id: Int, resume: CheckedContinuation<Bool, Never>)] = []
     private var nextWaiter = 0
 
-    /// The callers waiting for a download slot.
+    #if DEBUG
+    /// Test seam: the download slots taken now.
+    var downloadsRunning: Int { slotsTaken }
+    /// Test seam: the callers waiting for a download slot.
     var downloadsWaiting: Int { queue.count }
+    #endif
 
     init(directory: URL, fetcher: any DataFetching) {
         self.directory = directory
@@ -85,8 +89,8 @@ actor PictureStore {
     /// it got one: it leaves the line and holds no slot.
     private func takeSlot() async -> Bool {
         guard !Task.isCancelled else { return false }
-        if downloadsRunning < Self.downloadsAtOnce {
-            downloadsRunning += 1
+        if slotsTaken < Self.downloadsAtOnce {
+            slotsTaken += 1
             return true
         }
         let id = nextWaiter
@@ -109,7 +113,7 @@ actor PictureStore {
     /// The slot goes to the first caller in line, or back to the free ones.
     private func freeSlot() {
         if queue.isEmpty {
-            downloadsRunning -= 1
+            slotsTaken -= 1
         } else {
             queue.removeFirst().resume.resume(returning: true)
         }

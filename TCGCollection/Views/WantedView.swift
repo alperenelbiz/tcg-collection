@@ -2,10 +2,14 @@ import SwiftUI
 
 extension WantedList {
     /// C12, the price of a wanted card from the price table, for `WantedList.cards`: its pin's price for the pinned finish
-    /// (`PriceTable.shown`), else the cheapest over the printings it is given (`PriceTable.cheapest`).
+    /// (`PriceTable.shown`), and when that finish has none the pinned printing's cheapest finish (B4: the price is that
+    /// printing's; the pin stays as it is); without a pin the cheapest over the printings it is given
+    /// (`PriceTable.cheapest`).
     @MainActor static func price(_ prices: PriceTable, game: String) -> (WantedEntry, [ProductRecord]) -> ShownPrice? {
         { entry, printings in
-            if let pin = entry.pin { return prices.shown(game: game, key: pin) }
+            if let pin = entry.pin {
+                return prices.shown(game: game, key: pin) ?? prices.cheapest(game: game, productIDs: [pin.productID])
+            }
             return prices.cheapest(game: game, productIDs: printings.map(\.productID))
         }
     }

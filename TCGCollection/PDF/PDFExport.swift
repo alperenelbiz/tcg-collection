@@ -87,7 +87,21 @@ final class PDFExport {
     /// pictures a gallery asks for meanwhile.
     nonisolated static let picturesAtOnce = 4
 
+    #if DEBUG
+    /// Test seam: an export runs.
     var isRunning: Bool { task != nil }
+    #endif
+
+    /// What the status line says when an export ends with no PDF drawn: `ListPDF.data` gave none (no PDF context).
+    nonisolated static let notMade = "The PDF could not be made."
+    /// What the status line says when the list was left before the save panel of its made PDF opened.
+    nonisolated static let leftTheList = "The PDF was not saved: you left the list."
+
+    /// The status line's sentence when an export's drawing ended: "The PDF could not be made." when no PDF was drawn;
+    /// nothing when one was, or when the export was cancelled (it changes nothing more, and says nothing).
+    nonisolated static func endNotice(drawn: Data?, cancelled: Bool) -> String? {
+        drawn == nil && !cancelled ? notMade : nil
+    }
 
     /// `-exportPDF` writes once the screen's list is read (`listRead`) by a join made on a settled catalog
     /// (`catalogSettled`) that had the game's prices (`priceDay`): then the PDF has the pictures and prices a person sees.
@@ -107,14 +121,17 @@ final class PDFExport {
     }
 
     /// Starts an export of `job` and returns its task, or nil while another export runs. Its PDF is written to `file` when
-    /// one is given (`-exportPDF`), else kept in `made` for the save panel. After `cancel()` the task changes nothing.
+    /// one is given (`-exportPDF`), else kept in `made` for the save panel. No PDF drawn is said through `notice`
+    /// (`endNotice`). After `cancel()` the task changes nothing and says nothing.
     @discardableResult
-    func start(_ job: PDFJob, pictures: PictureStore, writingTo file: URL? = nil) -> Task<Void, Never>? {
+    func start(_ job: PDFJob, pictures: PictureStore, writingTo file: URL? = nil,
+               notice: @escaping @MainActor (String) -> Void = { _ in }) -> Task<Void, Never>? {
         guard task == nil else { return nil }
         made = nil
         progress = PDFProgress(done: 0, total: job.items.count)
         let task = Task {
             let data = await make(job, pictures: pictures)
+            if let text = Self.endNotice(drawn: data, cancelled: Task.isCancelled) { notice(text) }
             guard !Task.isCancelled else { return }
             self.task = nil
             guard let data else { return }
@@ -135,6 +152,15 @@ final class PDFExport {
         task = nil
         progress = nil
         made = nil
+    }
+
+    /// The list's stack went away (another screen, another game, the window closing): `cancel()`. Returns "The PDF was
+    /// not saved: you left the list." when that dropped a made PDF whose save panel had not opened yet (it waited for
+    /// Back from a card page); nil otherwise (a running export, as a click on "Making PDF…", says nothing).
+    func leave() -> String? {
+        let dropped = made != nil
+        cancel()
+        return dropped ? Self.leftTheList : nil
     }
 
     /// Collects the pictures of `job` and draws its PDF; nil when the task was cancelled or no PDF could be drawn. Every

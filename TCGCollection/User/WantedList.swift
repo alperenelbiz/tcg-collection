@@ -4,8 +4,8 @@ import Foundation
 /// the card's price and the copies the user owns of it.
 /// - `shown`: the pinned printing when it is in the catalog, else the card's cheapest printing (the newest one when none
 ///   has a price), else nil (Review Focus 4: the card is not in the catalog, or not yet).
-/// - `price`: the pinned printing's price for the pinned finish; without a pin in the catalog, the cheapest over the
-///   card's printings (`PriceTable.cheapest`).
+/// - `price`: the pinned printing's price for the pinned finish, else (that finish has no price) the pinned printing's
+///   cheapest finish; without a pin in the catalog, the cheapest over the card's printings (`PriceTable.cheapest`).
 /// - `owned`: the card's copies over all its collection rows. C5: it never lowers the wanted count, and the cell does not
 ///   show it; it is for the card page and later phases.
 nonisolated struct WantedCard: Sendable, Identifiable, Equatable {

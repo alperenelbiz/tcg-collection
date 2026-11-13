@@ -677,8 +677,6 @@ struct AppModelTests {
         }
     }
 
-    /// A for-sale count that follows an owned count down is said once in the status line, as an import's summary is;
-    /// the library's notice is cleared.
     /// C7: a sale writes the price of that moment (the price table's, for the printing's finish) and says nothing.
     @MainActor @Test(.timeLimit(.minutes(1))) func aSaleWritesThePriceOfTheMoment() async throws {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
@@ -708,6 +706,64 @@ struct AppModelTests {
         #expect(model.library.forSaleCount(game: "riftbound", key: key) == 1)
     }
 
+    /// Final fix A2: a sale refused because the game cannot change (here its file is refused now: a newer version came
+    /// from another device) says why, with the card page's sentence, not "the copies for sale changed".
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleTheGameCannotTakeSaysWhy() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let folder = try #require(model.library.folder), key = PrintingKey(productID: 721334, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        await model.library.flush()
+        let file = folder.appending(path: "riftbound.json")
+        try UserFiles.write(Data(#"{"version":2,"collection":[]}"#.utf8), to: file)
+        await model.library.fileChanged(file)?.value
+        #expect(!model.library.canChange(game: "riftbound"))
+        #expect(!model.sell(1, game: "riftbound", key: key))
+        #expect(model.statusNotice == "The counts cannot change: riftbound.json was written by a newer version of the app.")
+        #expect(try Data(contentsOf: file) == Data(#"{"version":2,"collection":[]}"#.utf8))
+    }
+
+    /// Final fix A3: a sale whose write is refused at write time (a newer file came between the read and the write, and
+    /// the change is dropped) is said once: "The sale was not saved: <the game's problem>".
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleDroppedAtItsWriteIsSaid() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        let folder = try #require(model.library.folder), key = PrintingKey(productID: 721334, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        await model.library.flush()
+        let newer = Data(#"{"version":2,"collection":[]}"#.utf8), file = folder.appending(path: "riftbound.json")
+        #expect(model.sell(1, game: "riftbound", key: key))                     // its write is queued
+        try newer.write(to: file)                                                // before the write runs
+        await model.library.flush()
+        try await until { model.statusNotice != nil }
+        #expect(model.statusNotice == "The sale was not saved: riftbound.json was written by a newer version of the app.")
+        #expect(try Data(contentsOf: file) == newer)
+        #expect(model.library.sold(game: "riftbound").isEmpty)
+        // Said once: its own time ends it, and nothing says it again.
+        try await until { model.statusNotice == nil }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.statusNotice == nil)
+    }
+
+    /// Final fix A3: a change that is not a sale and is dropped at its write keeps today's behaviour: the problem line
+    /// says why, the status line says nothing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anotherChangeDroppedAtItsWriteIsNotSaidAsASale() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        let folder = try #require(model.library.folder), key = PrintingKey(productID: 721334, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
+        try Data(#"{"version":2,"collection":[]}"#.utf8).write(to: folder.appending(path: "riftbound.json"))
+        await model.library.flush()
+        #expect(model.library.problem(game: "riftbound") == "riftbound.json was written by a newer version of the app.")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == nil)
+    }
+
+    /// A for-sale count that follows an owned count down is said once in the status line, as an import's summary is;
+    /// the library's notice is cleared.
     @MainActor @Test(.timeLimit(.minutes(1))) func aSaleNoticeIsSaidInTheStatusLine() async throws {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

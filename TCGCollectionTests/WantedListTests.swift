@@ -50,9 +50,23 @@ struct WantedListTests {
         #expect(first.shown?.productID == 1 && first.price == ShownPrice(amount: 4, isLow: false))
         let low = try #require(try cards([entry(pin: PrintingKey(productID: 3, finish: "Normal"))]).first)
         #expect(low.shown?.productID == 3 && low.price == ShownPrice(amount: 0.5, isLow: true))
-        // A pinned finish without a price: no price, though the printing and the card have one.
-        let none = try #require(try cards([entry(pin: PrintingKey(productID: 3, finish: "Foil"))]).first)
-        #expect(none.shown?.productID == 3 && none.price == nil && none.showsPin)
+    }
+
+    /// Final fix B4 (C12: the price is that printing's): a pinned finish without a price, on a printing with prices in
+    /// other finishes, takes that printing's cheapest finish, not the card's cheapest; the pin stays as it is. A pinned
+    /// printing without any price has none.
+    @Test func aPinnedFinishWithoutAPriceTakesThatPrintingsCheapestFinish() throws {
+        let foil = PrintingKey(productID: 1, finish: "Foil")              // Twin 1 has only Normal $4.00
+        let card = try #require(try cards([entry(pin: foil)]).first)
+        #expect(card.shown?.productID == 1 && card.showsPin)
+        #expect(card.price == ShownPrice(amount: 4, isLow: false))       // not the card's cheapest, $1.50
+        #expect(card.entry.pin == foil)
+        let lowOnly = try #require(try cards([entry(pin: PrintingKey(productID: 3, finish: "Foil"))]).first)
+        #expect(lowOnly.price == ShownPrice(amount: 0.5, isLow: true))
+        let unpriced = [product(id: 4, groupID: 13, name: "Twin")]
+        let none = WantedList.cards([entry(pin: PrintingKey(productID: 4, finish: "Foil"))], printings: ["twin": twin + unpriced],
+                                    price: WantedList.price(try table(), game: "riftbound"), ownedByCard: [:])
+        #expect(none.map(\.shown?.productID) == [4] && none.map(\.price) == [nil])
     }
 
     /// A pin whose product left the catalog: the card falls back to its cheapest printing and price; the entry keeps its

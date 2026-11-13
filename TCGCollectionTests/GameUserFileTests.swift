@@ -346,6 +346,18 @@ struct GameUserFileTests {
         #expect(entries[3]["pinProductID"] == nil); #expect(entries[3]["pinFinish"] == nil)
     }
 
+    /// Final fix B3: a `null` pin key is no pin key. An entry with `null` pin keys reads as unpinned and is not a half pin:
+    /// the next write of the entry leaves no pin key. A half pin with one `null` key keeps its other key.
+    @Test func aNullPinKeyIsNoPinKey() throws {
+        let json = #"{"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":null,"pinFinish":null},{"cardKey":"b","name":"B","count":1,"pinProductID":null,"pinFinish":"Foil"}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.wanted.map(\.pin) == [nil, nil])
+        for i in file.wanted.indices { file.wanted[i].count = 2 }
+        let entries = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["wanted"] as! [[String: Any]]
+        #expect(Set(entries[0].keys) == ["cardKey", "name", "count"])
+        #expect(entries[1]["pinFinish"] as? String == "Foil")
+    }
+
     /// The sold log is never merged: two equal records stay two, each with its own unknown keys.
     @Test func soldRecordsAreNeverMerged() throws {
         let json = #"{"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","priceIsLow":false,"n":1},{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","priceIsLow":false,"n":2}]}"#

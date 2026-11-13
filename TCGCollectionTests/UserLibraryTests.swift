@@ -762,6 +762,81 @@ struct UserLibraryTests {
         #expect(try storedFile(dir, "riftbound").forSale.map(\.count) == [2])
     }
 
+    /// Final fix A3: a change that held a sale is dropped at its write (the file became one this app must not rewrite:
+    /// here not downloaded, between the read and the write), and `unsavedSaleNotice` says so with the game's problem. A
+    /// sale already written is not said when a later change of its game is dropped.
+    @MainActor @Test func aSaleDroppedAtItsWriteIsSaidOnce() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        lib.setCount(3, game: "riftbound", key: riftFoil, name: "A")
+        lib.setForSale(2, game: "riftbound", key: riftFoil, name: "A")
+        #expect(lib.sell(1, game: "riftbound", key: riftFoil, price: nil))
+        await lib.flush()                                                        // the sale is on disk
+        lib.setWanted(1, game: "riftbound", cardKey: "x", name: "X")             // not a sale; its write is dropped
+        try Data(#"{"version":2,"collection":[]}"#.utf8).write(to: file)
+        await lib.flush()
+        #expect(lib.problem(game: "riftbound") == "riftbound.json was written by a newer version of the app.")
+        #expect(lib.unsavedSaleNotice == nil)
+
+        let cyber = PrintingKey(productID: 5, finish: "Normal")
+        lib.setCount(2, game: "cyberpunk", key: cyber, name: "C")
+        lib.setForSale(1, game: "cyberpunk", key: cyber, name: "C")
+        await lib.flush()
+        #expect(lib.sell(1, game: "cyberpunk", key: cyber, price: nil))
+        try Data().write(to: dir.appending(path: ".cyberpunk.json.icloud"))
+        try FileManager.default.removeItem(at: dir.appending(path: "cyberpunk.json"))
+        await lib.flush()
+        #expect(lib.unsavedSaleNotice == "The sale was not saved: cyberpunk.json is not downloaded from iCloud yet.")
+        #expect(lib.sold(game: "cyberpunk").isEmpty)
+        lib.clearUnsavedSaleNotice()
+        #expect(lib.unsavedSaleNotice == nil)
+    }
+
+    /// Final fix B1: a clamp that leaves every list empty (no copy owned, 3 for sale) is said at load too: the game had
+    /// no file in memory, so what the read takes off is new, although its lists now equal "no file".
+    @MainActor @Test func aClampThatLeavesEveryListEmptyIsSaid() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let onDisk = Data(#"{"version":1,"collection":[],"forSale":[{"productID":721334,"finish":"Foil","count":3}]}"#.utf8)
+        try onDisk.write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.forSale(game: "riftbound").isEmpty)
+        #expect(lib.saleNotice == "3 copies are no longer for sale.")
+        #expect(try Data(contentsOf: file) == onDisk)
+    }
+
+    /// Final fix B2: a second load of the same file before the notice is said counts its copies once, not twice.
+    @MainActor @Test func twoLoadsCountTheCopiesOnce() async throws {
+        let dir = tempDir()
+        try Data(#"{"collection":[{"productID":721334,"finish":"Foil","count":2}],"forSale":[{"productID":721334,"finish":"Foil","count":5}],"version":1}"#.utf8)
+            .write(to: dir.appending(path: "riftbound.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.saleNotice == "3 copies are no longer for sale.")
+        await lib.load()
+        #expect(lib.saleNotice == "3 copies are no longer for sale.")
+        #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 2)
+    }
+
+    /// Final fix B3: "Any printing" (`setPin(nil)`) on a card whose pin this build cannot read (a half pin) writes the
+    /// file without its pin keys, and a `null` pin key is no pin key: no pin key is left in the file.
+    @MainActor @Test func anyPrintingLeavesNoPinKeyInTheFile() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        try Data(#"{"version":1,"collection":[],"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":3},{"cardKey":"b","name":"B","count":1,"pinProductID":null,"pinFinish":null}]}"#.utf8)
+            .write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.wanted(game: "riftbound").map(\.pin) == [nil, nil])
+        let before = lib.version
+        lib.setPin(nil, game: "riftbound", cardKey: "a")
+        #expect(lib.version > before)
+        await lib.flush()
+        let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        #expect(!text.contains("pinProductID") && !text.contains("pinFinish"), "\(text)")
+        #expect(try storedFile(dir, "riftbound").wanted.map(\.cardKey) == ["a", "b"])
+        // Cleared once: a second "Any printing" changes nothing.
+        let after = lib.version
+        lib.setPin(nil, game: "riftbound", cardKey: "a")
+        #expect(lib.version == after)
+    }
+
     /// Fix round 1: a reload of a file with more for sale than owned (a phase 2B device lowered the owned count) clamps
     /// for sale in memory, says so and bumps `version`, and writes nothing. The next change of another card writes the
     /// clamped list, with no second notice. A refused file is not clamped (it is not shown).

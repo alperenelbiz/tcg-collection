@@ -50,15 +50,8 @@ typealias ForSaleMemory = ScreenMemory<ForSaleScreenState>
 struct ForSaleView: View {
     @Environment(AppModel.self) private var model
     @Bindable var state: ForSaleScreenState
-    /// The printing "Sold" asks about (C7); nil while no dialog is open.
-    @State private var selling: Sale?
-
-    /// What "Sold" asks about: the printing, its name, and the for-sale count the open dialog was made for.
-    private struct Sale: Equatable {
-        let key: PrintingKey
-        let name: String
-        let count: Int
-    }
+    /// The Sold dialog (C7, A1): the one on show, and the generation its choices and reopens are checked against.
+    @State private var sold = SoldDialogState()
 
     var body: some View {
         let library = model.library
@@ -76,8 +69,8 @@ struct ForSaleView: View {
         let join = RowsJoin.key(game: state.gameID, model: model)
         // The dialog follows the live for-sale count of its printing (a reload, another window): it opens again with the
         // new numbers, and closes when nothing is for sale any more (`follow`).
-        let dialog = selling.flatMap { SaleList.soldDialog(name: $0.name, forSale: $0.count) }
-        let live = selling.map { library.forSaleCount(game: state.gameID, key: $0.key) }
+        let dialog = sold.dialog
+        let live = dialog.map { library.forSaleCount(game: state.gameID, key: $0.key) }
         content(phase, shown: shown, listed: listed)
             .listScreen("for-sale", note: phase == .list ? listed?.note : nil)
             .navigationTitle("For Sale")
@@ -92,12 +85,12 @@ struct ForSaleView: View {
             .launchPDF(state.export, screen: .forSale, ready: launchReady, model: model) { pdfJob(all) }
             // Plain buttons: selling is what the dialog is for, not a mistake to warn about (the system's destructive red
             // on its dark fill reads badly).
-            .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { selling = nil } }),
+            .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { sold.isOpen }, set: { if !$0 { sold.dismissed() } }),
                                 titleVisibility: .visible, presenting: dialog) { dialog in
                 ForEach(dialog.choices, id: \.self) { choice in
-                    Button(choice.label) { sell(choice.count) }
+                    Button(choice.label) { sell(choice) }
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) { sold.cancel() }
             }
             .onChange(of: live) { _, live in follow(live) }
             .task(id: join) { await state.join.run(join, model: model) }
@@ -144,9 +137,9 @@ struct ForSaleView: View {
                 CountControl(count: entry.row.count, label: "\(entry.name), \(entry.row.finish), for sale", maximum: owned,
                              prefix: "for-sale", key: suffix) { step(by: $0 - entry.row.count, entry: entry) }
                 Spacer(minLength: 0)
-                Button("Sold") { selling = Sale(key: entry.id, name: entry.name, count: entry.row.count) }
+                Button("Sold") { sold.ask(key: entry.id, name: entry.name, forSale: entry.row.count) }
                     .buttonStyle(FieldButtonStyle())
-                    .disabled(selling != nil)
+                    .disabled(sold.isOpen)
                     .accessibilityLabel("Sold \(entry.name), \(entry.row.finish)")
                     .accessibilityIdentifier("for-sale-sold-\(suffix)")
             }
@@ -170,35 +163,26 @@ struct ForSaleView: View {
 
     /// How long a closed dialog is given to go before it opens again. Measured on macOS 27: a dialog closed and opened
     /// again at once stays open with its first numbers (SwiftUI keeps it presented); after this pause it opens anew. Too
-    /// short on some Mac, the old numbers stay, and a choice the count no longer allows is refused and said.
+    /// short on some Mac, the old numbers stay; a choice clicked there sells what it shows, or is refused and said.
     private static let reopenPause = Duration.milliseconds(400)
 
-    /// The open dialog's printing has a new for-sale count (`live`): the dialog closes, and opens again with the new numbers
-    /// after `reopenPause`; at 0 it only closes (`SaleList.follow`).
+    /// The open dialog's printing has a new for-sale count (`live`): the dialog closes, and opens again with the count of
+    /// that moment after `reopenPause`; at 0 it only closes. A cancel, a choice or another dialog during the pause, or a
+    /// sheet open at its end, means no reopen (`SoldDialogState.reopen`).
     private func follow(_ live: Int?) {
-        guard let sale = selling, let live else { return }
-        switch SaleList.follow(shown: sale.count, live: live) {
-        case .keep:
-            return
-        case .close:
-            selling = nil
-        case .reopen(let count):
-            selling = nil
-            Task { @MainActor in
-                try? await Task.sleep(for: Self.reopenPause)
-                // Not when another dialog was opened during the pause.
-                guard selling == nil else { return }
-                selling = Sale(key: sale.key, name: sale.name, count: count)
-            }
+        guard let live, let token = sold.follow(live: live) else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.reopenPause)
+            let sheetOpen = model.showsSheet || state.export.made != nil
+            _ = sold.reopen(token, sheetOpen: sheetOpen) { model.library.forSaleCount(game: state.gameID, key: $0) }
         }
     }
 
-    /// C7, a choice of the dialog: `count` copies leave the collection and the list, and one sold record is written at the
-    /// price of this moment (`AppModel.sell`, which says so when the library refuses). The dialog's printing is taken
-    /// first: a second activation before the dialog has closed (a double click) finds none and sells nothing.
-    private func sell(_ count: Int) {
-        guard let sale = selling else { return }
-        selling = nil
-        model.sell(count, game: state.gameID, key: sale.key)
+    /// C7, a choice of the dialog: its copies of its printing leave the collection and the list, and one sold record is
+    /// written at the price of this moment (`AppModel.sell`, which says why when the library refuses). One value carries
+    /// both (A1); a second activation of the same dialog (a double click) sells nothing.
+    private func sell(_ choice: SoldChoice) {
+        guard let sale = sold.choose(choice) else { return }
+        model.sell(sale.count, game: state.gameID, key: sale.key)
     }
 }

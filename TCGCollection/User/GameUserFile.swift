@@ -51,7 +51,8 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 /// - Each entry keeps the keys this app does not know; entries that cannot be parsed are kept, in their order, after
 ///   the parsed ones. Wanted and for-sale entries of one key are merged on read, as collection rows are; sold records
 ///   never are, and a sold record with any key of its own this build cannot read is kept whole, unparsed (never edited).
-/// - A wanted entry's pin this build cannot read reads as no pin and is written back until the pin is set or cleared.
+/// - A wanted entry's pin this build cannot read reads as no pin and is written back until the pin is set or cleared
+///   (`setPin`, also with `nil` on that entry). A `null` pin key is no pin key.
 /// - A for-sale count over the owned count is read as it is (Review Focus 2); `UserLibrary` clamps it at the next change.
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
@@ -107,7 +108,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         self.sold = sold.parsed.map { $0.0 }
         let unreadablePins = Set(cleanWanted.compactMap { entry -> String? in
             let object = wantedObjects[entry.cardKey] ?? [:]
-            let hasPinKey = object["pinProductID"] != nil || object["pinFinish"] != nil
+            // A `null` pin key is no pin key (B3): such an entry has no pin, and its next write leaves no pin key.
+            let hasPinKey = ["pinProductID", "pinFinish"].contains { key in object[key].map { !($0 is NSNull) } ?? false }
             return hasPinKey && entry.pin == nil ? entry.cardKey : nil
         })
         raw = JSONObjectBox(object,
@@ -151,6 +153,16 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         var out = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         out.append(0x0A)
         return out
+    }
+
+    /// Pins a wanted card to one printing, or takes its pin away (`nil`; `ListRules.pinning`). A pin this build cannot
+    /// read counts as set or cleared too: its keys are not written any more, so "Any printing" leaves no pin key (B3). A
+    /// card not on the list changes nothing.
+    mutating func setPin(_ pin: PrintingKey?, cardKey: String) {
+        wanted = ListRules.pinning(wanted, cardKey: cardKey, to: pin)
+        if raw.unreadablePins.contains(cardKey), wanted.contains(where: { $0.cardKey == cardKey }) {
+            pinsChanged.insert(cardKey)
+        }
     }
 
     /// The four lists are equal (what the app reads and changes); keys it does not know are not compared.

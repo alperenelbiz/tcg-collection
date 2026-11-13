@@ -420,19 +420,6 @@ final class RealCollectionTests: UITestCase {
         return (data.count, pdf.pageCount)
     }
 
-    /// Every cell of For Sale's gallery (`for-sale-cell-<productID>-<finish>`).
-    private func forSaleCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'for-sale-cell-'"))
-    }
-
-    /// Every cell of Wanted's gallery (`wanted-cell-<card key>`), not the controls under them (`wanted-cell-minus-…`).
-    private func wantedCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: """
-            identifier BEGINSWITH 'wanted-cell-' AND NOT (identifier BEGINSWITH 'wanted-cell-minus-' \
-            OR identifier BEGINSWITH 'wanted-cell-value-' OR identifier BEGINSWITH 'wanted-cell-plus-')
-            """))
-    }
-
     /// The list `key` (`wanted`, `forSale`, `sold`) of the running root's Riftbound file as the app wrote it; [] without.
     private func storedList(_ key: String) throws -> [[String: Any]] {
         try storedUserFile(game: "riftbound")?[key] as? [[String: Any]] ?? []
@@ -447,15 +434,5 @@ final class RealCollectionTests: UITestCase {
     private func printing(_ key: String) throws -> (productID: Int, finish: String) {
         let dash = try XCTUnwrap(key.firstIndex(of: "-"), key)
         return (try XCTUnwrap(Int(key[..<dash]), key), String(key[key.index(after: dash)...]))
-    }
-
-    /// The device's calendar day, as the app writes it in a sold record.
-    private static func today() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
     }
 }

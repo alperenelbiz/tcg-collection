@@ -56,17 +56,40 @@ final class RealCatalogTests: UITestCase {
 }
 
 extension UITestCase {
-    /// `TCG_REAL_STORE`, or a skip when it is not set. A root with no catalog store fails before the app starts: the
-    /// app would make an empty store there. Also used by `RealCollectionTests`.
+    /// `TCG_REAL_STORE`, or a skip when it is not set. A root under `~/Library` (the app's own folders, iCloud Drive in
+    /// `~/Library/Mobile Documents`) fails before the app starts: the app writes into its root, and a test must have a
+    /// scratch copy. So does a root with no catalog store: the app would make an empty store there. Also used by
+    /// `RealCollectionTests`.
     func realStoreRoot() throws -> URL {
         guard let path = ProcessInfo.processInfo.environment["TCG_REAL_STORE"], !path.isEmpty else {
             throw XCTSkip("TCG_REAL_STORE is not set: this test runs only on a copy of a real store")
         }
         let root = URL(fileURLWithPath: path, isDirectory: true)
+        let library = Self.realHome.appending(path: "Library", directoryHint: .isDirectory)
+        guard !Self.isInside(root, library) else {
+            return try XCTUnwrap(nil, "TCG_REAL_STORE is under ~/Library or ~/Library/Mobile Documents (\(root.path)): "
+                                 + "give a scratch copy of a store root, never the app's own folder or iCloud Drive")
+        }
         let store = root.appending(path: "support/catalog.store")
         guard FileManager.default.fileExists(atPath: store.path) else {
             return try XCTUnwrap(nil, "TCG_REAL_STORE has no catalog store: \(store.path)")
         }
         return root
+    }
+
+    /// The user's own home folder. The test runner is sandboxed: its `NSHomeDirectory()` is its container, not the home
+    /// whose `Library` holds the app's folders and iCloud Drive.
+    private static var realHome: URL {
+        guard let entry = getpwuid(getuid()), let directory = entry.pointee.pw_dir else {
+            return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        }
+        return URL(fileURLWithPath: String(cString: directory), isDirectory: true)
+    }
+
+    /// `url` is `folder` or inside it, after symbolic links are resolved; letter case does not count (APFS ignores it).
+    private static func isInside(_ url: URL, _ folder: URL) -> Bool {
+        let parts = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents.map { $0.lowercased() }
+        let base = folder.standardizedFileURL.resolvingSymlinksInPath().pathComponents.map { $0.lowercased() }
+        return parts.starts(with: base)
     }
 }

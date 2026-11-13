@@ -78,16 +78,112 @@ struct SaleListTests {
         #expect(SaleList.totals([], of: []) == "")
     }
 
+    private let dockside = PrintingKey(productID: 721334, finish: "Normal")
+
     /// C7, fix round 1: the Sold dialog follows the live for-sale count of its printing. Two or more: "Sold 1" and
-    /// "Sold all <n>"; one: "Sold 1" only; none: no dialog (it closes).
+    /// "Sold all <n>"; one: "Sold 1" only; none: no dialog (it closes). Final fix A1: each choice carries the printing,
+    /// the copies it sells and its dialog's generation, so one value says what a click sells.
     @Test func theSoldDialogFollowsTheLiveCount() {
-        #expect(SaleList.soldDialog(name: "Dockside Lock-Up", forSale: 2)
-                == SoldDialog(title: "Sold 2 of Dockside Lock-Up?",
-                              choices: [SoldChoice(label: "Sold 1", count: 1), SoldChoice(label: "Sold all 2", count: 2)]))
-        #expect(SaleList.soldDialog(name: "Dockside Lock-Up", forSale: 1)
-                == SoldDialog(title: "Sold 1 of Dockside Lock-Up?", choices: [SoldChoice(label: "Sold 1", count: 1)]))
-        #expect(SaleList.soldDialog(name: "Dockside Lock-Up", forSale: 0) == nil)
-        #expect(SaleList.soldDialog(name: "Dockside Lock-Up", forSale: -1) == nil)
+        let two = SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: 2, generation: 7)
+        #expect(two?.title == "Sold 2 of Dockside Lock-Up?")
+        #expect(two?.choices == [SoldChoice(label: "Sold 1", count: 1, key: dockside, generation: 7),
+                                 SoldChoice(label: "Sold all 2", count: 2, key: dockside, generation: 7)])
+        #expect(two?.key == dockside && two?.count == 2 && two?.generation == 7)
+        let one = SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: 1, generation: 1)
+        #expect(one?.title == "Sold 1 of Dockside Lock-Up?")
+        #expect(one?.choices == [SoldChoice(label: "Sold 1", count: 1, key: dockside, generation: 1)])
+        #expect(SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: 0, generation: 1) == nil)
+        #expect(SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: -1, generation: 1) == nil)
+    }
+
+    /// Final fix A1: "Sold" opens a dialog; a choice gives what it sells (its own printing and copies) and closes the
+    /// dialog; a second activation of the same dialog (a double click) gives nothing.
+    @Test func aChoiceSellsWhatItShowsOnce() throws {
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let dialog = try #require(state.dialog)
+        let all = try #require(dialog.choices.last)
+        #expect(state.choose(all) == all && all.key == dockside && all.count == 2)
+        #expect(state.dialog == nil)
+        #expect(state.choose(all) == nil)                                          // the double click
+        #expect(state.choose(dialog.choices[0]) == nil)                            // any choice of that dialog
+    }
+
+    /// Final fix A1 (b): a choice of generation n clicked while the live generation is n+1 (a reload closed its dialog to
+    /// open it again with new numbers) sells exactly what it shows: `AppModel.sell` sells those copies, or refuses and
+    /// says "Nothing was sold: …" when they are no longer there; never nothing. The dialog does not come back after it.
+    @Test func aChoiceOnAClosingDialogSellsWhatItShows() throws {
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let shown = try #require(state.dialog?.choices.last)                     // "Sold all 2", generation n
+        let tokenStep = state.follow(live: 1)                                     // a reload: closed, to open again
+        let token = try #require(tokenStep)
+        #expect(state.dialog == nil && state.generation == shown.generation + 1)
+        #expect(state.choose(shown) == shown)                                     // sells 2 of that printing, as shown
+        #expect(!state.reopen(token, sheetOpen: false) { _ in 1 })
+        #expect(state.dialog == nil)
+        #expect(state.choose(shown) == nil)
+    }
+
+    /// Final fix A1 (a): a dialog the user cancelled does not come back after a reload, in either order: cancelled, then
+    /// the count changes (nothing to follow), or the count changes (closed, to open again) and the user cancels during
+    /// the pause.
+    @Test func aCancelledDialogNeverComesBack() {
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        state.cancel()
+        #expect(state.follow(live: 1) == nil)
+        #expect(state.dialog == nil)
+
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let token = state.follow(live: 1)
+        #expect(token != nil)
+        state.cancel()                                                             // Cancel on the closing dialog
+        #expect(!state.reopen(token ?? -1, sheetOpen: false) { _ in 1 })
+        #expect(state.dialog == nil)
+    }
+
+    /// Without a cancel, a choice or another dialog meanwhile, the dialog opens again after the pause with the live count
+    /// of that moment; at 0 it stays closed. The system closing a dialog the app closed itself (its binding set to false
+    /// after a follow) does not stop the reopen; the user dismissing an open one closes it for good.
+    @Test func theDialogOpensAgainWithTheLiveCount() throws {
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        #expect(state.follow(live: 2) == nil && state.dialog != nil)               // the same count: it stays
+        let tokenStep = state.follow(live: 3)
+        let token = try #require(tokenStep)
+        state.dismissed()                                                          // the app closed it, not the user
+        #expect(state.reopen(token, sheetOpen: false) { $0 == self.dockside ? 3 : 0 })
+        #expect(state.dialog?.title == "Sold 3 of Dockside Lock-Up?")
+        #expect(state.dialog?.generation == state.generation)
+        state.dismissed()                                                          // the user closed it
+        #expect(state.dialog == nil)
+
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let lateStep = state.follow(live: 1)
+        let late = try #require(lateStep)
+        #expect(!state.reopen(late, sheetOpen: false) { _ in 0 })                  // nothing for sale any more
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        #expect(state.follow(live: 0) == nil && state.dialog == nil)               // at 0 it only closes
+
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let otherStep = state.follow(live: 1)
+        let other = try #require(otherStep)
+        state.ask(key: PrintingKey(productID: 1, finish: "Foil"), name: "Other", forSale: 1)   // "Sold" on another cell
+        #expect(!state.reopen(other, sheetOpen: false) { _ in 1 })
+        #expect(state.dialog?.name == "Other")
+    }
+
+    /// Final fix A1 (c): a sheet (Import CSV…, Collection Folder…, a save panel) that opened during the pause stops the
+    /// reopen: the window would not show the dialog, and "Sold" (off while a dialog is open) would stay off.
+    @Test func noReopenWhileASheetIsOpen() throws {
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2)
+        let tokenStep = state.follow(live: 1)
+        let token = try #require(tokenStep)
+        #expect(!state.reopen(token, sheetOpen: true) { _ in 1 })
+        #expect(state.dialog == nil && !state.isOpen)
+        #expect(!state.reopen(token, sheetOpen: false) { _ in 1 })                 // it is over, also after the sheet
     }
 
     /// The system's dialog does not redraw while it is open (an alert sheet on the Mac): an open dialog that says `shown`

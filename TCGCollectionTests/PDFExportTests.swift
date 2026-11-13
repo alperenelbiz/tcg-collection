@@ -132,6 +132,36 @@ struct PDFExportTests {
         #expect(PDFExport.saveNotice(.failure(other)) == "The PDF could not be saved: \(other.localizedDescription)")
     }
 
+    /// Final fix B5: an export that ends with no PDF drawn (`ListPDF.data` gave none: no PDF context) says "The PDF could
+    /// not be made."; one that drew its PDF, and a cancelled one, say nothing.
+    @Test func anExportWithNoPDFSaysSo() {
+        #expect(PDFExport.endNotice(drawn: nil, cancelled: false) == "The PDF could not be made.")
+        #expect(PDFExport.endNotice(drawn: Data("%PDF".utf8), cancelled: false) == nil)
+        #expect(PDFExport.endNotice(drawn: nil, cancelled: true) == nil)
+        #expect(PDFExport.endNotice(drawn: Data("%PDF".utf8), cancelled: true) == nil)
+    }
+
+    /// Final fix B5: leaving the list (its stack goes away) with a made PDF whose save panel has not opened yet (it waited
+    /// for Back from a card page) drops it and says "The PDF was not saved: you left the list.", once. Leaving while an
+    /// export runs cancels it and says nothing (as a click on "Making PDF…"); so does leaving with no export.
+    @Test func leavingTheListWithAMadePDFSaysSoOnce() async throws {
+        let export = PDFExport()
+        #expect(export.leave() == nil)
+        export.made = PDFMade(data: Data("%PDF".utf8), fileName: "riftbound-for-sale-2026-11-13.pdf")
+        #expect(export.leave() == "The PDF was not saved: you left the list.")
+        #expect(export.made == nil)
+        #expect(export.leave() == nil)
+
+        let fetcher = PictureFetcher(body: try fixture("picture.jpg"), gated: true)
+        let pictures = try await store(fetcher: fetcher, cached: [])
+        let task = try #require(export.start(Self.job(Self.urls(2)), pictures: pictures))
+        #expect(export.leave() == nil)
+        #expect(export.progress == nil && export.made == nil)
+        await fetcher.open()
+        await task.value
+        #expect(export.made == nil)
+    }
+
     /// `-exportPDF` writes once the list is read by a join made on a settled catalog with the game's prices.
     @Test func theLaunchExportWaitsForASettledCatalogAndPrices() {
         func joined(settled: Bool, day: String?) -> CollectionJoin {
