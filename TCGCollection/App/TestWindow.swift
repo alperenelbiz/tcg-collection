@@ -10,6 +10,14 @@ import SwiftUI
 enum TestWindow {
     static let size = CGSize(width: 900, height: 450)
 
+    /// From the app's init, before AppKit restores windows: a `-store` run ignores the windows an earlier run saved. In
+    /// memory only (the registration domain); no preference is written. Observed 2026-11-13: saved state whose window group
+    /// no longer existed restored no window, and SwiftUI then opened none, in every later launch.
+    static func ignoreSavedWindows(_ options: LaunchOptions) {
+        guard options.storeRoot != nil else { return }
+        UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true])
+    }
+
     /// The frame on the primary display, centered in its visible part.
     static func frame(on screen: NSScreen) -> CGRect {
         let visible = screen.visibleFrame
@@ -26,8 +34,10 @@ extension View {
 }
 
 /// Places its window once, on the next turn of the main loop after it joined the window: after SwiftUI has applied the
-/// saved frame.
-private struct WindowPlacer: NSViewRepresentable {
+/// saved frame. Not `private`: the window group's identity is made from its content's type name, and a private type's
+/// name holds an address that changes at every launch ("unknown context at $…"), which gave the window a new identity
+/// (and a new saved-frame key) at every launch.
+struct WindowPlacer: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { PlacingView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
@@ -41,6 +51,8 @@ private final class PlacingView: NSView {
         placed = true
         DispatchQueue.main.async {
             window.setFrameAutosaveName("")
+            // A test run saves no window for a later launch to restore.
+            window.isRestorable = false
             guard let primary = NSScreen.screens.first else { return }
             window.setFrame(TestWindow.frame(on: primary), display: true)
         }

@@ -12,7 +12,11 @@ struct TCGCollectionApp: App {
         // The unit tests run inside the app. There the app makes no model: no store is opened and
         // nothing is downloaded; the tests make their own models with fakes.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        _model = State(initialValue: Self.makeModel(LaunchOptions(arguments: CommandLine.arguments)))
+        let options = LaunchOptions(arguments: CommandLine.arguments)
+        #if DEBUG && os(macOS)
+        TestWindow.ignoreSavedWindows(options)
+        #endif
+        _model = State(initialValue: Self.makeModel(options))
     }
 
     /// The model on the network `LaunchNetwork.choose` picks. The real clients are made only when no `-fixtures` was
