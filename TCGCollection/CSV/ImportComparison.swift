@@ -21,7 +21,6 @@ nonisolated struct ImportComparison: Sendable, Equatable {
     /// In the collection, not in the file. Nothing removes them unless the user chooses.
     let missing: [Change]
     let notRecognised: [SkippedLine]
-    let ignoredBasics: [SkippedLine]
 }
 
 nonisolated enum CollectionImport {
@@ -72,19 +71,14 @@ nonisolated enum CollectionImport {
             return chosen
         }
 
-        var listed: Set<PrintingKey> = []           // every printing the file names, imported or not
+        var listed: Set<PrintingKey> = []           // every printing the file names, imported or not (a line not in the catalog is listed, not imported)
         var notRecognised: [SkippedLine] = []
-        var ignoredBasics: [SkippedLine] = []
         var printings: [PrintingKey: Printing] = [:]
         for line in lines {
             let key = PrintingKey(productID: line.productID, finish: finish(line))
             listed.insert(key)
             guard let product = known(line.productID), product.gameID == game.id else {
                 notRecognised.append(SkippedLine(line: line.line, name: line.name, reason: "not in the catalog"))
-                continue
-            }
-            if game.altArtBasicsAreNormal, game.isBasicPrinting(product) {
-                ignoredBasics.append(SkippedLine(line: line.line, name: line.name, reason: "basic rune"))
                 continue
             }
             var entry = printings[key] ?? Printing(name: product.name)
@@ -110,7 +104,7 @@ nonisolated enum CollectionImport {
             .map { ImportComparison.Change(key: $0.key, name: $0.name, old: $0.count, new: 0, condition: $0.condition) }
 
         return ImportComparison(gameID: game.id, new: sorted(new), changed: sorted(changed), missing: sorted(missing),
-                                notRecognised: notRecognised, ignoredBasics: ignoredBasics)
+                                notRecognised: notRecognised)
     }
 
     /// By name (any case), then finish, then product id.

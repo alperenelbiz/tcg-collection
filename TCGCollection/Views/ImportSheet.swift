@@ -262,7 +262,7 @@ struct ImportSheet: View {
 
     // MARK: Not imported
 
-    /// Every skipped, not-recognised and ignored line with its line number and reason; collapsed until clicked.
+    /// Every skipped and not-recognised line with its line number and reason; collapsed until clicked.
     @ViewBuilder private var notImported: some View {
         let lines = importModel.notImported
         if !lines.isEmpty {

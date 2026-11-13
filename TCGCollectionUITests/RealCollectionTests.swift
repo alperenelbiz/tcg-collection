@@ -89,7 +89,7 @@ final class RealCollectionTests: UITestCase {
             scrollView.scroll(byDeltaX: 0, deltaY: -2000)
             notImported.lines = lines.allElementsBoundByIndex.map { text($0) }
             for line in notImported.lines {
-                XCTAssertTrue(line.hasSuffix("basic rune") || line.hasSuffix("not in the catalog"), "unexpected reason: \(line)")
+                XCTAssertTrue(line.hasSuffix("not in the catalog"), "unexpected reason: \(line)")
             }
         }
         shot("real-collection-\(game)-2-sheet-end", of: sheet)

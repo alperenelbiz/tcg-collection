@@ -19,7 +19,7 @@ private func shown(_ rows: [CollectionRow]) -> [String] { rows.map { "\($0.produ
 @MainActor
 struct ImportModelTests {
     /// The fixture catalog (`filledStore`) plus the plain basic rune of the Task 6 test, in a set of its own, so the
-    /// comparison has Task 6's numbers: one line not in the catalog (999999), one ignored basic rune (900001).
+    /// comparison has Task 6's numbers: one line not in the catalog (999999), the plain basic rune (900001), which is imported like any card (A9).
     private func catalog() async throws -> CatalogStore {
         let store = try await filledStore()
         let rune = product(id: 900001, game: "riftbound", groupID: 99, name: "Calm Rune", number: "R02", rarity: "Common", cardType: "Rune")
@@ -52,15 +52,15 @@ struct ImportModelTests {
         #expect(model.state == .ready)
         let c = try #require(model.comparisons.first)
         #expect(model.comparisons.count == 1 && c.gameID == "riftbound")
-        #expect(c.new.map { "\($0.key.productID) \($0.name) \($0.old)->\($0.new)" } == ["722282 Calm Rune (R02a) 0->4", "721337 Kai'Sa, Rebel 0->3"])
+        #expect(c.new.map { "\($0.key.productID) \($0.name) \($0.old)->\($0.new)" } == ["900001 Calm Rune 0->5", "722282 Calm Rune (R02a) 0->4", "721337 Kai'Sa, Rebel 0->3"])
         #expect(c.changed.map { "\($0.key.productID) \($0.old)->\($0.new) \($0.condition)" } == ["721334 1->3 Near Mint, Lightly Played"])
         #expect(c.missing.map(\.key) == [onlyHere])
-        #expect(c.notRecognised.map(\.line) == [6] && c.ignoredBasics.map(\.line) == [5])
+        #expect(c.notRecognised.map(\.line) == [6])
         #expect(model.skipped.isEmpty && model.remove.isEmpty && model.notice == nil)
-        #expect(model.summary == "2 new, 1 changed, 1 not in the file (kept)")
+        #expect(model.summary == "3 new, 1 changed, 1 not in the file (kept)")
         #expect(model.block(game: "riftbound") == nil && model.canApply)
-        // "Not imported": the parse's skips, other games, not-recognised and ignored lines, by line.
-        #expect(model.notImported.map { "\($0.line) \($0.reason)" } == ["5 basic rune", "6 not in the catalog"])
+        // "Not imported": the parse's skips, other games, not-recognised lines, by line.
+        #expect(model.notImported.map { "\($0.line) \($0.reason)" } == ["6 not in the catalog"])
         #expect(model.setName(of: PrintingKey(productID: 721337, finish: "Normal")) == "Radiance")
         #expect(model.setName(of: onlyHere) == nil)                             // not in the catalog
     }
@@ -69,8 +69,8 @@ struct ImportModelTests {
         let (library, folder) = try await library()
         let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
         await model.prepare()
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "2 new, 1 changed, 1 not in the file (kept)"))
-        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "722282 Normal 4", "721337 Normal 3"])
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "3 new, 1 changed, 1 not in the file (kept)"))
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
         // The import's own write is not "a change made while the sheet was open" (the sheet sees the version move).
         #expect(!model.refreshComparison() && model.notice == nil)
         await library.flush()
@@ -85,14 +85,14 @@ struct ImportModelTests {
         await model.prepare()
         model.setAllMissing(remove: true, game: "riftbound")
         #expect(model.remove == [onlyHere] && model.allMissingRemoved(game: "riftbound"))
-        #expect(model.summary == "2 new, 1 changed, 1 not in the file (removed)")
+        #expect(model.summary == "3 new, 1 changed, 1 not in the file (removed)")
         model.setAllMissing(remove: false, game: "riftbound")
         #expect(model.remove.isEmpty && !model.allMissingRemoved(game: "riftbound"))
         model.setAllMissing(remove: true, game: "yu-gi-oh")                     // a game the file does not have: nothing
         #expect(model.remove.isEmpty)
         model.setAllMissing(remove: true, game: "riftbound")
-        #expect(model.apply()?.summary == "2 new, 1 changed, 1 not in the file (removed)")
-        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "722282 Normal 4", "721337 Normal 3"])
+        #expect(model.apply()?.summary == "3 new, 1 changed, 1 not in the file (removed)")
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
     }
 
     /// The same file a second time: nothing would change, only Close is offered, and `apply` writes nothing. (The first
@@ -137,7 +137,7 @@ struct ImportModelTests {
         second.setAllMissing(remove: true, game: "riftbound")                   // Remove makes Import available again
         #expect(second.writes && second.canApply && second.summary == "1 not in the file (removed)")
         #expect(second.apply()?.summary == "1 not in the file (removed)")
-        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "722282 Normal 4", "721337 Normal 3"])
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
     }
 
     @Test func dataThatIsNotAnExportFails() async throws {
@@ -263,7 +263,7 @@ struct ImportModelTests {
         await model.prepare()                                                  // the sheet does it when the step ends
         #expect(model.block(game: "riftbound") == nil && model.canApply)
         #expect(model.remove == [onlyHere])
-        #expect(model.apply()?.summary == "2 new, 1 changed, 1 not in the file (removed)")
+        #expect(model.apply()?.summary == "3 new, 1 changed, 1 not in the file (removed)")
     }
 
     /// Fix round 1, item 1: while a `prepare` runs again (a catalog step ended), the comparison on screen stays, and
@@ -374,9 +374,9 @@ struct ImportModelTests {
         #expect(model.notice == "Your collection changed while this sheet was open. Check the comparison again.")
         #expect(model.comparisons.first?.changed.isEmpty == true)
         #expect(model.remove == [onlyHere])                                     // still in group 3: the choice stays
-        #expect(model.summary == "2 new, 1 not in the file (removed)")
-        #expect(model.apply()?.summary == "2 new, 1 not in the file (removed)")
-        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "722282 Normal 4", "721337 Normal 3"])
+        #expect(model.summary == "3 new, 1 not in the file (removed)")
+        #expect(model.apply()?.summary == "3 new, 1 not in the file (removed)")
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
     }
 
     /// A change that leaves the comparison as it is (another game's row) does not hold the import up.
@@ -386,7 +386,7 @@ struct ImportModelTests {
         await model.prepare()
         library.setCount(1, game: "yu-gi-oh", key: PrintingKey(productID: 7, finish: "Normal"), name: "Other")
         #expect(model.apply() != nil && model.notice == nil)
-        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "722282 Normal 4", "721337 Normal 3"])
+        #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
     }
 
     /// A file of two games where one game's file is refused: only the other game is imported, the summary counts only it,

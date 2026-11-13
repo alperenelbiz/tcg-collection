@@ -36,27 +36,30 @@ struct ImportComparisonTests {
         let (comparisons, other) = CollectionImport.compare(lines: lines, current: current, known: knownFixtureProducts, games: Games.all)
         let c = try #require(comparisons.first); #expect(comparisons.count == 1 && other.isEmpty && c.gameID == "riftbound")
         #expect(c.changed.map { "\($0.key.productID) \($0.old)->\($0.new) \($0.condition)" } == ["721334 1->3 Near Mint, Lightly Played"])
-        #expect(c.missing.map(\.key.productID) == [555]); #expect(c.notRecognised.map(\.reason) == ["not in the catalog"]); #expect(c.ignoredBasics.count == 1)
-        #expect(c.new.map { "\($0.key.productID) \($0.name) \($0.old)->\($0.new)" } == ["722282 Calm Rune (R02a) 0->4", "721337 Kai'Sa, Rebel 0->3"])
+        #expect(c.missing.map(\.key.productID) == [555]); #expect(c.notRecognised.map(\.reason) == ["not in the catalog"])
+        #expect(c.new.map { "\($0.key.productID) \($0.name) \($0.old)->\($0.new)" } == ["900001 Calm Rune 0->5", "722282 Calm Rune (R02a) 0->4", "721337 Kai'Sa, Rebel 0->3"])
         #expect(c.missing[0].name == "Only Here" && c.missing[0].old == 2 && c.missing[0].new == 0 && c.missing[0].condition == "Mint")
-        #expect(c.notRecognised[0].line == 6 && c.ignoredBasics[0].reason == "basic rune" && c.ignoredBasics[0].line == 5)
+        #expect(c.notRecognised[0].line == 6)
     }
 
     @Test func applyingKeepsWhatTheUserKeeps() throws {                       // the anti-goal
         let c = try riftboundComparison()
         let rows = try #require(current["riftbound"])
         let kept = CollectionImport.apply(c, to: rows, remove: [])
-        #expect(kept.map { "\($0.productID) \($0.finish) \($0.count)" } == ["721334 Foil 3", "555 Normal 2", "722282 Normal 4", "721337 Normal 3"])
+        #expect(kept.map { "\($0.productID) \($0.finish) \($0.count)" } == ["721334 Foil 3", "555 Normal 2", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
         #expect(kept[1] == rows[1])                                           // a kept row is untouched
         #expect(kept[0].condition == "Near Mint, Lightly Played" && kept[0].name == "Dockside Lock-Up")
-        #expect(kept[2] == CollectionRow(productID: 722282, finish: "Normal", count: 4, condition: "Near Mint", name: "Calm Rune (R02a)"))
+        #expect(kept[3] == CollectionRow(productID: 722282, finish: "Normal", count: 4, condition: "Near Mint", name: "Calm Rune (R02a)"))
         let removed = CollectionImport.apply(c, to: rows, remove: [PrintingKey(productID: 555, finish: "Normal")])
-        #expect(removed.map(\.productID) == [721334, 722282, 721337] && removed.map(\.count) == [3, 4, 3])
+        #expect(removed.map(\.productID) == [721334, 900001, 722282, 721337] && removed.map(\.count) == [3, 5, 4, 3])
         // a key in `remove` that is not in group 3 removes nothing
         let notMissing = CollectionImport.apply(c, to: rows, remove: [PrintingKey(productID: 721334, finish: "Foil")])
-        #expect(notMissing.count == 4)
-        // no row of a not-recognised or an ignored basic line
-        for result in [kept, removed] { #expect(!result.contains { $0.productID == 999999 || $0.productID == 900001 }) }
+        #expect(notMissing.count == 5)
+        // no row of a not-recognised line
+        for result in [kept, removed] { #expect(!result.contains { $0.productID == 999999 }) }
+        // a second import of the same file changes nothing
+        let again = CollectionImport.compare(lines: try CollectionCSV.parse(fixture("collection-riftbound.csv")).lines, current: ["riftbound": kept], known: knownFixtureProducts, games: Games.all).comparisons[0]
+        #expect(again.new.isEmpty && again.changed.isEmpty)
     }
 
     @Test func aMixedFileSplitsByGame() throws {
@@ -70,7 +73,7 @@ struct ImportComparisonTests {
         let magic = "Magic: The Gathering"
         let (comparisons, _) = CollectionImport.compare(lines: [line(id: 900100, productLine: magic, name: "Forest - Full Art", quantity: 3)],
                                                         current: [:], known: knownFixtureProducts, games: Games.all)
-        #expect(comparisons.first?.new.map(\.key.productID) == [900100] && comparisons.first?.ignoredBasics.isEmpty == true)
+        #expect(comparisons.first?.new.map(\.key.productID) == [900100])
         #expect(Games.game("magic-the-gathering")!.isBasicPrinting(knownProducts[900100]!))
     }
 
@@ -110,21 +113,26 @@ struct ImportComparisonTests {
         CollectionImport.compare(lines: lines, current: ["riftbound": rows], known: knownFixtureProducts, games: Games.all).comparisons[0]
     }
 
+    @Test func aBasicRuneRowIsImportedLikeAnyOther() {                        // A9
+        let c = compared([line(id: 900001, quantity: 3)], rows: [])
+        #expect(c.new.map { "\($0.key.productID) \($0.old)->\($0.new)" } == ["900001 0->3"] && c.notRecognised.isEmpty)
+    }
+
     @Test func aRowTheFileListsButDoesNotImportIsNotMissing() {
         let basic = CollectionRow(productID: 900001, finish: "Normal", count: 2, condition: "", name: "Calm Rune")
         let unknown = CollectionRow(productID: 999999, finish: "Normal", count: 1, condition: "", name: "Unknown")
         let gone = CollectionRow(productID: 555, finish: "Normal", count: 1, condition: "", name: "Gone")
         let c = compared([line(id: 721337), line(id: 900001), line(id: 999999)], rows: [basic, unknown, gone])
         #expect(c.missing.map(\.key.productID) == [555])
-        #expect(c.ignoredBasics.count == 1 && c.notRecognised.count == 1)
+        #expect(c.changed.map(\.key.productID) == [900001] && c.notRecognised.count == 1)
     }
 
     @Test func aFileTheCatalogCannotReadNeverOffersToRemoveAnything() {
         let rows = [CollectionRow(productID: 721334, finish: "Foil", count: 1, condition: "", name: "Dockside Lock-Up"),
                     CollectionRow(productID: 555, finish: "Normal", count: 2, condition: "", name: "Only Here")]
-        let c = compared([line(id: 999998), line(id: 999999), line(id: 900001)], rows: rows)
+        let c = compared([line(id: 999998), line(id: 999999)], rows: rows)
         #expect(c.new.isEmpty && c.changed.isEmpty && c.missing.isEmpty)
-        #expect(c.notRecognised.count == 2 && c.ignoredBasics.count == 1)
+        #expect(c.notRecognised.count == 2)
     }
 
     @Test func hugeQuantitiesDoNotOverflow() {

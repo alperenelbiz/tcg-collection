@@ -293,11 +293,11 @@ final class ImportModel: Identifiable {
         return writes ? parts.joined(separator: ", ") : Self.nothingToImport
     }
 
-    /// "Not imported": what the parse skipped, other games, and every line not recognised or ignored, by line. The lines
+    /// "Not imported": what the parse skipped, other games, and every line not recognised, by line. The lines
     /// of a game whose catalog is not ready are left out: they are not known to be missing from it.
     var notImported: [SkippedLine] {
         let lines = comparisons.filter { block(game: $0.gameID)?.hidesComparison != true }
-            .flatMap { $0.notRecognised + $0.ignoredBasics }
+            .flatMap { $0.notRecognised }
         return (skipped + lines).sorted { $0.line < $1.line }
     }
 
