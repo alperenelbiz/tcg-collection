@@ -60,6 +60,15 @@ class UITestCase: XCTestCase {
         return start(root: root, game: game, extra: extra, fixtures: fixtures)
     }
 
+    /// As `launch(prepare:)`, with launch arguments that name a file in the fresh root (`-exportPDF <root>/out.pdf`).
+    func launch(game: String? = nil, extra: (URL) -> [String], fixtures: Bool = true,
+                prepare: (URL) throws -> Void) throws -> XCUIApplication {
+        let root = newRoot()
+        self.root = root                                         // tearDown removes it, also when `prepare` fails
+        try prepare(root)
+        return start(root: root, game: game, extra: extra(root), fixtures: fixtures)
+    }
+
     /// Launches the app on a store root that exists already, such as a copy of a real store: `-store <storeRoot>
     /// -offline YES`, no fixtures, and `-game`. `-offline YES` comes before `extra`, so `extra` cannot turn it off (the
     /// first value of a flag wins). tearDown leaves the root.

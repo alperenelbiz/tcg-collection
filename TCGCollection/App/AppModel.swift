@@ -144,6 +144,9 @@ final class AppModel {
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
+    /// Set by `-exportPDF` where it is allowed (`LaunchOptions.launchPDF`): the list screen it names writes its PDF once
+    /// its first join has ended, and takes it (`takeLaunchPDF`).
+    @ObservationIgnored private var launchPDF: LaunchPDF?
 
     /// What the user owns. Every screen that shows or changes the collection talks to it.
     let library: UserLibrary
@@ -262,6 +265,9 @@ final class AppModel {
         }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
         screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(rawValue:)) ?? .collection
+        #if DEBUG
+        launchPDF = options.launchPDF(isDebugBuild: Self.isDebugBuild)
+        #endif
         if let notice = opened.notice {
             // A notice means the store was set aside and a fresh, empty one opened. On the day of the last fetch that is
             // enough to know the sync waits (`catalogHeld`), before any store read.
@@ -280,6 +286,14 @@ final class AppModel {
     /// True when no catalog step of this run is running or still to come for the game (`catalogPending`): the catalog
     /// then holds every product of the game it is going to hold in this run.
     func catalogSettled(game: String) -> Bool { !catalogPending.contains(game) }
+
+    /// `-exportPDF`: the file the list screen `screen` writes its PDF to, once; nil for any other screen, and after the
+    /// first take.
+    func takeLaunchPDF(for screen: Screen) -> URL? {
+        guard let launchPDF, launchPDF.screen == screen else { return nil }
+        self.launchPDF = nil
+        return launchPDF.file
+    }
 
     /// The filter menu values of a game. Nil until a file exists or a sync wrote one. Views read it again when
     /// `filtersVersion` changes.

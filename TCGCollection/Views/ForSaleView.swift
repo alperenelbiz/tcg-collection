@@ -49,6 +49,8 @@ struct ForSaleView: View {
     @Bindable var state: ForSaleScreenState
     /// The printing "Sold" asks about (C7); nil while no dialog is open.
     @State private var selling: Sale?
+    /// "Make PDF…" (C10, C11): its pictures, progress and the made PDF; it ends with this screen.
+    @State private var export = PDFExport()
 
     /// What "Sold" asks about: the printing, its name, and the for-sale count the open dialog was made for.
     private struct Sale: Equatable {
@@ -67,6 +69,8 @@ struct ForSaleView: View {
                                  playsetSize: model.game.playset, sort: state.sort)
         } ?? []
         let phase = ListPhase.of(listed, game: state.gameID, library: library)
+        // The list is read (also an empty one): its PDF can be made.
+        let pdfReady = phase == .list || phase == .empty
         let join = RowsJoin.key(game: state.gameID, model: model)
         // The dialog follows the live for-sale count of its printing (a reload, another window): it opens again with the
         // new numbers, and closes when nothing is for sale any more (`follow`).
@@ -79,9 +83,11 @@ struct ForSaleView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
+                    PDFButton(export: export, identifier: "for-sale-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "for-sale-sort")
                 }
             }
+            .listPDF(export, screen: .forSale, ready: pdfReady, model: model) { pdfJob(all) }
             // Plain buttons: selling is what the dialog is for, not a mistake to warn about (the system's destructive red
             // on its dark fill reads badly).
             .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { selling = nil } }),
@@ -144,6 +150,13 @@ struct ForSaleView: View {
             }
             .disabled(!canChange)
         }
+    }
+
+    /// The PDF of the whole list, whatever the search text and the sort (it orders by price itself, C10).
+    private func pdfJob(_ all: [CollectionEntry]) -> PDFJob? {
+        guard let game = Games.game(state.gameID) else { return nil }
+        return PDFJob(list: .forSale, game: game, items: PDFSource.forSale(all, game: game, ygo: model.ygoIndex),
+                      date: Date(), timeZone: .current)
     }
 
     /// As on the card page: the step goes onto the library's current count, so two clicks before the next render both

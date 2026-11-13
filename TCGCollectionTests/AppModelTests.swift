@@ -144,6 +144,19 @@ struct AppModelTests {
         #expect(offline.catalogSettled(game: "riftbound"))                          // no step in this run
     }
 
+    /// `-exportPDF`: the screen it names takes the file once; another screen gets nothing.
+    @MainActor @Test func theLaunchPDFIsTakenOnceByItsScreen() {
+        let root = tempRoot()
+        let file = root.appending(path: "out.pdf")
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-screen", "for-sale", "-exportPDF", file.path])
+        #expect(model.takeLaunchPDF(for: .wanted) == nil)
+        #expect(model.takeLaunchPDF(for: .forSale)?.path == file.path)
+        #expect(model.takeLaunchPDF(for: .forSale) == nil)
+        let outside = self.model(["app", "-store", root.path, "-offline", "YES", "-screen", "for-sale", "-exportPDF",
+                                  tempRoot().appending(path: "out.pdf").path])
+        #expect(outside.takeLaunchPDF(for: .forSale) == nil)
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

@@ -1,3 +1,4 @@
+import PDFKit
 import XCTest
 
 /// The click paths of the lists of phase 2C (For Sale, Wanted), on the fixture catalog. The fixture prices give Dockside
@@ -492,6 +493,77 @@ final class ListsFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "riftbound"))
                 == [StoredWanted(cardKey: "calm rune", name: "Calm Rune", count: 1)] },
                       "\(String(describing: try? storedWanted(game: "riftbound")))")
+    }
+
+    // MARK: The PDF
+
+    /// C10, C11: `-exportPDF` writes For Sale's PDF once the screen has read its list: a PDF of one page with the title
+    /// and the printing with its for-sale count; the test keeps it, and a picture of its page. Then "Make PDF…" (left of
+    /// Sort) makes the PDF again and the system's save panel opens; it is cancelled, so nothing is saved (the panel itself
+    /// is not driven further).
+    func testMakeAPDFOfForSale() throws {
+        let app = try launch(game: "riftbound", extra: { ["-screen", "for-sale", "-exportPDF", $0.appending(path: "out.pdf").path] }) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 3, forSale: 2))
+        }
+        let out = try XCTUnwrap(root).appending(path: "out.pdf")
+        XCTAssertTrue(waitUntil(timeout: 20) { FileManager.default.fileExists(atPath: out.path) }, "no PDF at \(out.path)")
+        let data = try Data(contentsOf: out)
+        XCTAssertEqual(data.prefix(4), Data("%PDF".utf8))
+        let pdf = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertEqual(pdf.pageCount, 1)
+        let page = try XCTUnwrap(pdf.page(at: 0))
+        let pageText = page.string ?? ""
+        XCTAssertTrue(pageText.contains("Riftbound — For Sale — "), pageText)
+        XCTAssertTrue(pageText.contains("Dockside Lock-Up") && pageText.contains("×2") && pageText.contains("2 copies"), pageText)
+        XCTAssertTrue(pageText.contains("1 / 1"), pageText)
+        let file = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+        file.name = "lists-29-for-sale.pdf"
+        file.lifetime = .keepAlways
+        add(file)
+        let picture = XCTAttachment(image: page.thumbnail(of: NSSize(width: 1190, height: 1684), for: .mediaBox))
+        picture.name = "lists-30-for-sale-pdf-page-1"
+        picture.lifetime = .keepAlways
+        add(picture)
+
+        let button = element(app, "for-sale-pdf")
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil { button.isEnabled }, "Make PDF… is off on a read list")
+        XCTAssertTrue(element(app, "for-sale-sort").exists)
+        XCTAssertLessThan(button.frame.minX, element(app, "for-sale-sort").frame.minX, "Make PDF… is not left of Sort")
+        shot("lists-31-for-sale-make-pdf-button")
+        button.click()
+        // The system's panel (identifiers of AppKit's save panel): "Export As:" with the suggested name, "Export", "Cancel".
+        let cancel = app.sheets.buttons["CancelButton"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), "no save panel: \(app.sheets.firstMatch.debugDescription)")
+        XCTAssertTrue(app.sheets.buttons["OKButton"].firstMatch.exists, app.sheets.firstMatch.debugDescription)
+        let name = app.sheets.textFields["saveAsNameTextField"].firstMatch.value as? String ?? ""
+        XCTAssertTrue(name.hasPrefix("riftbound-for-sale-\(Self.today())"), name)
+        XCTAssertFalse(name.hasSuffix(".pdf.pdf"), name)
+        shot("lists-32-for-sale-save-panel")
+        cancel.click()
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "the save panel stayed open")
+        XCTAssertTrue(waitUntil { button.isEnabled }, "Make PDF… stayed off after the panel")
+    }
+
+    /// `-exportPDF` on Wanted: one page with the title and the two cards with their wanted counts.
+    func testMakeAPDFOfWanted() throws {
+        let app = try launch(game: "riftbound", extra: { ["-screen", "wanted", "-exportPDF", $0.appending(path: "pdf/wanted.pdf").path] }) { root in
+            try FileManager.default.createDirectory(at: root.appending(path: "pdf"), withIntermediateDirectories: true)
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1, "collection": [],
+             "wanted": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "count": 3},
+                        {"cardKey": "calm rune", "name": "Calm Rune", "count": 2}]}
+            """)
+        }
+        let out = try XCTUnwrap(root).appending(path: "pdf/wanted.pdf")
+        XCTAssertTrue(waitUntil(timeout: 20) { FileManager.default.fileExists(atPath: out.path) }, "no PDF at \(out.path)")
+        let pdf = try XCTUnwrap(PDFDocument(data: try Data(contentsOf: out)))
+        XCTAssertEqual(pdf.pageCount, 1)
+        let pageText = pdf.page(at: 0)?.string ?? ""
+        for shown in ["Riftbound — Wanted — ", "Dockside Lock-Up", "×3", "Calm Rune", "×2", "5 copies"] {
+            XCTAssertTrue(pageText.contains(shown), "\(shown) is not on the page: \(pageText)")
+        }
+        XCTAssertTrue(element(app, "wanted-pdf").waitForExistence(timeout: 10))
     }
 
     // MARK: Helpers

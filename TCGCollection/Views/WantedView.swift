@@ -112,6 +112,8 @@ nonisolated struct UnknownCard: Hashable, Sendable {
 struct WantedView: View {
     @Environment(AppModel.self) private var model
     @Bindable var state: WantedScreenState
+    /// "Make PDF…" (C10, C11): its pictures, progress and the made PDF; it ends with this screen.
+    @State private var export = PDFExport()
 
     var body: some View {
         let library = model.library, game = state.gameID
@@ -121,6 +123,8 @@ struct WantedView: View {
         let all = listed?.cards ?? []
         let shown = WantedList.sorted(WantedList.filtered(all, text: state.text), by: state.sort)
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
+        // The list is read (also an empty one): its PDF can be made.
+        let pdfReady = phase == .list || phase == .empty
         let join = RowsJoin.key(game: game, model: model)
         content(phase, shown: shown, listed: listed)
             .listScreen("wanted", note: phase == .list ? listed?.note : nil)
@@ -133,10 +137,19 @@ struct WantedView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
+                    PDFButton(export: export, identifier: "wanted-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "wanted-sort")
                 }
             }
+            .listPDF(export, screen: .wanted, ready: pdfReady, model: model) { pdfJob(all) }
             .task(id: join) { await state.join.run(join, model: model) }
+    }
+
+    /// The PDF of the whole list, whatever the search text and the sort (it orders by price itself, C10).
+    private func pdfJob(_ all: [WantedCard]) -> PDFJob? {
+        guard let game = Games.game(state.gameID) else { return nil }
+        return PDFJob(list: .wanted, game: game, items: PDFSource.wanted(all, game: game, ygo: model.ygoIndex),
+                      date: Date(), timeZone: .current)
     }
 
     @ViewBuilder private func content(_ phase: ListPhase, shown: [WantedCard], listed: WantedContent?) -> some View {

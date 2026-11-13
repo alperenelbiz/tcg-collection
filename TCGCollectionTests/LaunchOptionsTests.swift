@@ -74,6 +74,29 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]).launchImport(isDebugBuild: true) == nil)
     }
 
+    /// `-exportPDF <path>` is honoured only in a Debug build with `-store`, with `-screen wanted` or `for-sale`, and with a
+    /// path inside the store root (not the root itself); in every other case it is ignored (fails closed).
+    @Test func theExportFlagNeedsADebugBuildAStoreAListScreenAndAPathInTheRoot() {
+        func pdf(_ arguments: [String], debug: Bool = true) -> LaunchPDF? {
+            LaunchOptions(arguments: ["app"] + arguments).launchPDF(isDebugBuild: debug)
+        }
+        let forSale = ["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s/out.pdf"]
+        #expect(LaunchOptions(arguments: ["app"] + forSale).exportPDF?.path == "/tmp/s/out.pdf")
+        #expect(pdf(forSale) == LaunchPDF(screen: .forSale, file: URL(fileURLWithPath: "/tmp/s/out.pdf")))
+        #expect(pdf(["-store", "/tmp/s", "-screen", "wanted", "-exportPDF", "/tmp/s/pdf/w.pdf"])
+                == LaunchPDF(screen: .wanted, file: URL(fileURLWithPath: "/tmp/s/pdf/w.pdf")))
+        #expect(pdf(forSale, debug: false) == nil)                                                  // a Release build
+        #expect(pdf(["-screen", "for-sale", "-exportPDF", "/tmp/s/out.pdf"]) == nil)                // no -store
+        #expect(pdf(["-store", "/tmp/s", "-exportPDF", "/tmp/s/out.pdf"]) == nil)                   // no -screen
+        #expect(pdf(["-store", "/tmp/s", "-screen", "collection", "-exportPDF", "/tmp/s/out.pdf"]) == nil)
+        #expect(pdf(["-store", "/tmp/s", "-screen", "all-cards", "-exportPDF", "/tmp/s/out.pdf"]) == nil)
+        #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/other/out.pdf"]) == nil)   // outside
+        #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s/../out.pdf"]) == nil)    // outside
+        #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s2/out.pdf"]) == nil)      // a sibling
+        #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s"]) == nil)               // the root
+        #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale"]) == nil)
+    }
+
     #if DEBUG
     /// A Debug run without `-store` uses its own folders, never the installed app's store. (A Release build uses the
     /// installed app's folders: this test runs only in Debug.)

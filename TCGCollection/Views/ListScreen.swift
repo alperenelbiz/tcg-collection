@@ -215,6 +215,54 @@ struct PrintingCell: View {
     }
 }
 
+/// "Make PDF…" in a list's toolbar, left of Sort (`doc.richtext`; the name is its label and help text): makes the PDF of
+/// the screen's whole list (`job`), then the system's save panel opens (`listPDF`). While the export runs, its label is the
+/// progress ("Making PDF… 12 / 40") and a click cancels it; a second export cannot start meanwhile. Off until the screen
+/// has read its list (`enabled`).
+struct PDFButton: View {
+    let export: PDFExport
+    let identifier: String
+    let enabled: Bool
+    let job: () -> PDFJob?
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let progress = export.progress {
+            Button { export.cancel() } label: {
+                Text(progress.label).monospacedDigit()
+            }
+            .help("Cancel the PDF")
+            .accessibilityIdentifier(identifier)
+        } else {
+            Button {
+                if let job = job() { export.start(job, pictures: model.pictures) }
+            } label: {
+                Label("Make PDF…", systemImage: "doc.richtext")
+            }
+            .help("Make PDF…")
+            .disabled(!enabled)
+            .accessibilityIdentifier(identifier)
+        }
+    }
+}
+
+extension View {
+    /// The save step of a list's PDF and its lifetime. A made PDF opens the system's save panel (`fileExporter`, with the
+    /// job's file name). The screen going away (another screen or game: `RootView` makes a new one; the window closing)
+    /// cancels a running export, which then writes nothing. `-exportPDF`: once `ready` (the screen's first join has ended),
+    /// the PDF of `job` is written to the launch's file instead, once.
+    func listPDF(_ export: PDFExport, screen: Screen, ready: Bool, model: AppModel, job: @escaping () -> PDFJob?) -> some View {
+        fileExporter(isPresented: Binding(get: { export.made != nil }, set: { if !$0 { export.made = nil } }),
+                     document: export.made.map { PDFFile(data: $0.data) }, contentType: .pdf,
+                     defaultFilename: export.made?.fileName) { _ in export.made = nil }
+            .onChange(of: ready, initial: true) { _, ready in
+                guard ready, let file = model.takeLaunchPDF(for: screen), let job = job() else { return }
+                export.start(job, pictures: model.pictures, writingTo: file)
+            }
+            .onDisappear { export.cancel() }
+    }
+}
+
 /// A list screen's Sort menu: Name, Price high to low, Price low to high, Copies.
 struct SortMenu: View {
     @Binding var sort: CollectionSort

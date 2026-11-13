@@ -28,12 +28,25 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
     /// it through `launchImport`, which ignores it where it is not allowed.
     var importCSV: URL?
+    /// `-exportPDF <path>` (DEBUG, with `-store` and `-screen wanted|for-sale`, a path inside the root): that screen writes
+    /// the PDF of its list there once its first join has ended, for the UI tests, which cannot drive the save panel. Read
+    /// it through `launchPDF`, which ignores it where it is not allowed.
+    var exportPDF: URL?
 
     /// The file of `-importCSV` when this run may open it: a Debug build with `-store`. Otherwise nil: the flag is ignored
     /// (fails closed, as `-fixtures` does), so it never imports into the real collection.
     func launchImport(isDebugBuild: Bool) -> URL? {
         guard isDebugBuild, storeRoot != nil else { return nil }
         return importCSV
+    }
+
+    /// The PDF of `-exportPDF` when this run may write it: a Debug build with `-store`, `-screen wanted` or `for-sale`, and
+    /// a file inside the store root (as `-askUserFolder` keeps its folders there). Otherwise nil: the flag is ignored
+    /// (fails closed), so a run never writes a file outside its own root.
+    func launchPDF(isDebugBuild: Bool) -> LaunchPDF? {
+        guard isDebugBuild, let root = storeRoot, let file = exportPDF, let screen, screen == .wanted || screen == .forSale,
+              UserFolder.isInside(file, root), !UserFolder.isInside(root, file) else { return nil }
+        return LaunchPDF(screen: screen, file: file)
     }
 
     init(arguments: [String]) {
@@ -54,7 +67,14 @@ nonisolated struct LaunchOptions: Sendable {
         askUserFolder = value("-askUserFolder") == "YES"
         screen = value("-screen").flatMap(Screen.init(rawValue:))
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
+        exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }
     }
+}
+
+/// `-exportPDF` as a run may honour it (`LaunchOptions.launchPDF`): the list screen that writes its PDF, and the file.
+nonisolated struct LaunchPDF: Equatable, Sendable {
+    let screen: Screen
+    let file: URL
 }
 
 /// The network a launch uses (I3). It fails closed: `-fixtures` never falls back to the real network.
