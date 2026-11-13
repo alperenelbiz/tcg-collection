@@ -21,19 +21,20 @@ struct RootView: View {
         } detail: {
             // One screen at a time: a hidden screen would still fill the toolbar (its menus, search field and title).
             // Each screen keeps what it showed (`collection`, `wanted`, `forSale`, `catalog`), so a visit to another one
-            // loses nothing. Search text, filters and the open pages belong to one game (`.id`).
+            // loses nothing; its open pages too (`kept(on:in:)`). Search text, filters and the open pages belong to one
+            // game (`.id`).
             switch model.screen {
             case .collection:
                 let state = collection.state(game: model.gameID)
-                ListStack(path: Bindable(state).path) { CollectionView(state: state) }
+                ListStack(path: Bindable(state).path.kept(on: .collection, in: model)) { CollectionView(state: state) }
                     .id(model.gameID)
             case .wanted:
                 let state = wanted.state(game: model.gameID)
-                ListStack(path: Bindable(state).path) { WantedView(state: state) }
+                ListStack(path: Bindable(state).path.kept(on: .wanted, in: model)) { WantedView(state: state) }
                     .id(model.gameID)
             case .forSale:
                 let state = forSale.state(game: model.gameID)
-                ListStack(path: Bindable(state).path) { ForSaleView(state: state) }
+                ListStack(path: Bindable(state).path.kept(on: .forSale, in: model)) { ForSaleView(state: state) }
                     .id(model.gameID)
             case .allCards:
                 CatalogStack(gameID: model.gameID, state: catalog.state(game: model.gameID, search: model.options.search),
@@ -78,7 +79,7 @@ private struct CatalogStack: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        NavigationStack(path: $state.path) {
+        NavigationStack(path: $state.path.kept(on: .allCards, in: model)) {
             CatalogSearchView(state: state)
                 .toolbar {
                     ToolbarItem {
@@ -98,6 +99,17 @@ private struct CatalogStack: View {
             model.pendingCard = nil
             state.path.append(card)
         }
+    }
+}
+
+extension Binding where Value == NavigationPath {
+    /// The path of `screen`'s navigation stack, kept in that screen's state, so its open pages are there again after a
+    /// visit to another screen. A stack that leaves the window writes an empty path through its binding (seen on macOS
+    /// 27: the sidebar shows one screen at a time, so a switch removes the stack); that write comes when `model.screen` is
+    /// already another screen, and is not taken. Every write while the screen is on show is taken: a link, Back, a game
+    /// switch (the new game's state is a fresh one anyway).
+    func kept(on screen: Screen, in model: AppModel) -> Binding<NavigationPath> {
+        Binding(get: { wrappedValue }, set: { if model.screen == screen { wrappedValue = $0 } })
     }
 }
 

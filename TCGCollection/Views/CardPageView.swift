@@ -216,7 +216,9 @@ struct OwnedFinishes: View {
                 .foregroundStyle(Theme.muted)
                 .monospacedDigit()
                 .accessibilityIdentifier("card-owned")
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            // 10 pt between the columns: at the 900 pt window the details column is 306 pt wide, and the two count controls
+            // take 152 pt of it, so "1st Edition" and a price fit on one line beside them (with 16 pt they did not).
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                 // The column titles, once, above the first line: none over the finish and the price.
                 GridRow {
                     Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
@@ -231,10 +233,16 @@ struct OwnedFinishes: View {
                     let count = CollectionRules.count(rows, for: key)
                     let forSale = sale.first { $0.key == key }?.count ?? 0
                     GridRow {
+                        // One line, never cut: a finish name is what tells two lines apart.
                         Text(finish)
                             .foregroundStyle(Theme.text)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .accessibilityIdentifier("card-finish-\(finish)")
                         if let prices {
                             price(prices.first { $0.finish == finish }?.price.shown)
+                                .lineLimit(1)
+                                .fixedSize()
                                 .gridColumnAlignment(.trailing)
                         }
                         CountControl(count: locked == nil ? count : nil, label: finish) { step(by: $0 - count, finish: finish) }

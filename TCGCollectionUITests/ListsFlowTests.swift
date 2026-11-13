@@ -1,3 +1,4 @@
+import AppKit
 import PDFKit
 import XCTest
 
@@ -379,6 +380,8 @@ final class ListsFlowTests: UITestCase {
         pin.click()
         XCTAssertTrue(waitUntil { pin.label == "Any printing" }, pin.label)
         XCTAssertEqual(text(element(app, "wanted-value")), "1")
+        // Fix round 1: at 900 pt every finish name of the line reads whole on one line, and the controls fit the window.
+        assertFinishLines(app, ["1st Edition", "Unlimited"])
         shot("lists-21-card-page-pinned")
         XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "yu-gi-oh"))
                 == [StoredWanted(cardKey: "swiftwind panther warrior", name: "Swiftwind Panther Warrior", count: 1,
@@ -566,7 +569,84 @@ final class ListsFlowTests: UITestCase {
         XCTAssertTrue(element(app, "wanted-pdf").waitForExistence(timeout: 10))
     }
 
+    // MARK: Pages kept per screen (phase 2C task 4, fix round 1)
+
+    /// An open card page survives a visit to another screen, on all four screens: open a page, switch the sidebar to the
+    /// next screen and back, and the same page is there; Back then shows the screen's own gallery. (Before this fix a
+    /// stack that left the window emptied its path.)
+    func testAnOpenCardPageSurvivesASwitchOfScreen() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "all-cards"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "collection": [{"productID": 721334, "finish": "Normal", "count": 2, "condition": "", "name": "Dockside Lock-Up"}],
+             "wanted": [{"cardKey": "calm rune", "name": "Calm Rune", "count": 1}],
+             "forSale": [{"productID": 721334, "finish": "Normal", "count": 1, "name": "Dockside Lock-Up"}]}
+            """)
+        }
+        XCTAssertTrue(waitUntilSynced(app))                     // every cell is a link
+        // Each screen's cell is on its root only: it marks the screen's own gallery.
+        let screens: [(sidebar: String, cell: String, title: String)] = [
+            ("sidebar-all-cards", "card-cell-dockside lock up", "Dockside Lock-Up"),
+            ("sidebar-collection", "collection-cell-721334-Normal", "Dockside Lock-Up"),
+            ("sidebar-wanted", "wanted-cell-calm rune", "Calm Rune"),
+            ("sidebar-for-sale", "for-sale-cell-721334-Normal", "Dockside Lock-Up"),
+        ]
+        let page = element(app, "card-page")
+        for (index, screen) in screens.enumerated() {
+            element(app, screen.sidebar).click()
+            let cell = app.buttons[screen.cell]
+            XCTAssertTrue(cell.waitForExistence(timeout: 10), "\(screen.cell) is not a link")
+            cell.click()
+            XCTAssertTrue(page.waitForExistence(timeout: 10), "no page from \(screen.cell)")
+            XCTAssertTrue(waitUntil { self.text(app.staticTexts["card-title"]) == screen.title }, text(app.staticTexts["card-title"]))
+
+            let next = screens[(index + 1) % screens.count]
+            element(app, next.sidebar).click()
+            XCTAssertTrue(app.buttons[next.cell].waitForExistence(timeout: 10), "\(next.sidebar) did not show its gallery")
+            XCTAssertFalse(page.exists)
+            element(app, screen.sidebar).click()
+            XCTAssertTrue(page.waitForExistence(timeout: 10), "the page of \(screen.sidebar) was lost on a visit to \(next.sidebar)")
+            XCTAssertTrue(waitUntil { self.text(app.staticTexts["card-title"]) == screen.title }, text(app.staticTexts["card-title"]))
+            XCTAssertFalse(cell.exists)
+            if screen.sidebar == "sidebar-collection" { shot("lists-29-page-kept-after-a-switch") }
+            goBack(app)
+            XCTAssertTrue(cell.waitForExistence(timeout: 10), "Back did not show the gallery of \(screen.sidebar)")
+            XCTAssertFalse(page.exists)
+        }
+
+        // A game switch still starts afresh: For Sale's open page is gone after Cyberpunk and back.
+        let saleCell = app.buttons["for-sale-cell-721334-Normal"]
+        saleCell.click()
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        for name in ["Cyberpunk TCG", "Riftbound"] {
+            element(app, "game-picker").click()
+            XCTAssertTrue(app.menuItems[name].firstMatch.waitForExistence(timeout: 5))
+            app.menuItems[name].firstMatch.click()
+            XCTAssertTrue(waitUntil { self.element(app, "game-picker").value as? String == name },
+                          "\(String(describing: element(app, "game-picker").value))")
+        }
+        XCTAssertTrue(saleCell.waitForExistence(timeout: 10), "For Sale did not start afresh after a game switch")
+        XCTAssertFalse(page.exists)
+    }
+
     // MARK: Helpers
+
+    /// Each finish name of the card page (`card-finish-<finish>`) is on one line and as wide as its whole text at 13 pt
+    /// (not cut to "Unlimit…"), its price is right of it, and its "For sale" control ends inside the window.
+    private func assertFinishLines(_ app: XCUIApplication, _ finishes: [String], file: StaticString = #filePath,
+                                   line: UInt = #line) {
+        let window = app.windows.firstMatch.frame
+        for finish in finishes {
+            let name = element(app, "card-finish-\(finish)")
+            XCTAssertTrue(name.waitForExistence(timeout: 5), "no finish line \(finish)", file: file, line: line)
+            let whole = (finish as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width
+            XCTAssertLessThan(name.frame.height, 22, "\(finish) is on more than one line: \(name.frame)", file: file, line: line)
+            XCTAssertGreaterThanOrEqual(name.frame.width + 1, whole, "\(finish) is cut: \(name.frame)", file: file, line: line)
+            XCTAssertLessThanOrEqual(name.frame.maxX, element(app, "count-minus-\(finish)").frame.minX, file: file, line: line)
+            XCTAssertLessThanOrEqual(element(app, "sale-plus-\(finish)").frame.maxX, window.maxX, "\(finish): the controls leave the window",
+                                     file: file, line: line)
+        }
+    }
 
     /// One entry of a stored `wanted` list.
     struct StoredWanted: Equatable {
