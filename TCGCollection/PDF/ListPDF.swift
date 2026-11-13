@@ -133,22 +133,16 @@ nonisolated enum ListPDF {
     }
 
     /// `4 copies · $6.00`: the copies and the summed price of the copies (price × count; a low price counts as its
-    /// amount). Items without a price are left out of the sum and counted after it, as on the screens: `… · $3.00 + 1
-    /// without a price`; with no priced item `… · 2 without a price`, never `$0.00`. "" for an empty list.
+    /// amount). Items without a price are left out of the sum and counted after it, as on the screens
+    /// (`CollectionList.priceTail`): `… · $3.00 + 1 without a price`; with no priced item `… · 2 without a price`, never
+    /// `$0.00`. "" for an empty list.
     static func totalLine(_ items: [PDFItem]) -> String {
         guard !items.isEmpty else { return "" }
         let copies = items.reduce(0) { $0 + $1.count }
         let priced = items.filter { $0.price != nil }
-        let unpriced = items.count - priced.count
-        var parts = ["\(copies) \(copies == 1 ? "copy" : "copies")"]
-        if priced.isEmpty {
-            parts.append("\(unpriced) without a price")
-        } else {
-            let sum = priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.count) }
-            parts.append(CardFacts.priceText(ShownPrice(amount: sum, isLow: false))
-                         + (unpriced > 0 ? " + \(unpriced) without a price" : ""))
-        }
-        return parts.joined(separator: " · ")
+        let sum = priced.isEmpty ? nil : priced.reduce(0.0) { $0 + ($1.price?.amount ?? 0) * Double($1.count) }
+        let tail = CollectionList.priceTail(sum: sum, unpriced: items.count - priced.count)
+        return (["\(copies) \(copies == 1 ? "copy" : "copies")"] + [tail].compactMap { $0 }).joined(separator: " · ")
     }
 
     /// "Riftbound — For Sale — 13 November 2026": the day of `date` in `timeZone`, the month in English.
@@ -179,6 +173,11 @@ nonisolated enum ListPDF {
         nameLines(name, font: font(size: cellTextSize))
     }
 
+    /// The width of `text` in a cell's type, in points: a name line fits when it is at most `cellWidth`.
+    static func cellTextWidth(_ text: String) -> CGFloat {
+        lineWidth(text, font: font(size: cellTextSize))
+    }
+
     private static func nameLines(_ name: String, font: CTFont) -> [String] {
         let text = name.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return [] }
@@ -205,13 +204,14 @@ nonisolated enum ListPDF {
 
     // MARK: Drawing
 
-    /// The PDF of `items` (in the order of `ordered`, whatever order they come in) under `title`.
-    static func data(title: String, items: [PDFItem]) -> Data {
+    /// The PDF of `items` (in the order of `ordered`, whatever order they come in) under `title`. Nil when no PDF context
+    /// can be made: nothing is offered then, never an empty file.
+    static func data(title: String, items: [PDFItem]) -> Data? {
         let out = NSMutableData()
         var box = CGRect(origin: .zero, size: pageSize)
         let info = [kCGPDFContextTitle as String: title, kCGPDFContextCreator as String: "TCG Collection 2"] as CFDictionary
         guard let consumer = CGDataConsumer(data: out as CFMutableData),
-              let context = CGContext(consumer: consumer, mediaBox: &box, info) else { return Data() }
+              let context = CGContext(consumer: consumer, mediaBox: &box, info) else { return nil }
         let fonts = Fonts()
         let items = ordered(items)
         let pages = pageCount(items: items.count)

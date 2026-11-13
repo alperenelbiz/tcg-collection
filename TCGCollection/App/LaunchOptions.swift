@@ -28,10 +28,13 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
     /// it through `launchImport`, which ignores it where it is not allowed.
     var importCSV: URL?
-    /// `-exportPDF <path>` (DEBUG, with `-store` and `-screen wanted|for-sale`, a path inside the root): that screen writes
-    /// the PDF of its list there once its first join has ended, for the UI tests, which cannot drive the save panel. Read
-    /// it through `launchPDF`, which ignores it where it is not allowed.
+    /// `-exportPDF <path>` (DEBUG, with `-store` and `-screen wanted|for-sale`, a new `.pdf` file inside the root): that
+    /// screen writes the PDF of its list there once it is read on a settled catalog with prices, for the UI tests, which
+    /// do not drive the save panel. Read it through `launchPDF`, which ignores it where it is not allowed.
     var exportPDF: URL?
+    /// `-pictureDelay <milliseconds>` (DEBUG, with `-fixtures`): every fixture picture answer waits this long, so a UI test
+    /// can act while a PDF export waits for its pictures.
+    var pictureDelay: Int?
 
     /// The file of `-importCSV` when this run may open it: a Debug build with `-store`. Otherwise nil: the flag is ignored
     /// (fails closed, as `-fixtures` does), so it never imports into the real collection.
@@ -41,11 +44,13 @@ nonisolated struct LaunchOptions: Sendable {
     }
 
     /// The PDF of `-exportPDF` when this run may write it: a Debug build with `-store`, `-screen wanted` or `for-sale`, and
-    /// a file inside the store root (as `-askUserFolder` keeps its folders there). Otherwise nil: the flag is ignored
-    /// (fails closed), so a run never writes a file outside its own root.
+    /// a `.pdf` file inside the store root (as `-askUserFolder` keeps its folders there) that does not exist yet. Otherwise
+    /// nil: the flag is ignored (fails closed), so a run never writes outside its own root and never replaces a file (such
+    /// as `<root>/user/<game>.json`).
     func launchPDF(isDebugBuild: Bool) -> LaunchPDF? {
         guard isDebugBuild, let root = storeRoot, let file = exportPDF, let screen, screen == .wanted || screen == .forSale,
-              UserFolder.isInside(file, root), !UserFolder.isInside(root, file) else { return nil }
+              file.pathExtension.lowercased() == "pdf", UserFolder.isInside(file, root), !UserFolder.isInside(root, file),
+              !FileManager.default.fileExists(atPath: file.path) else { return nil }
         return LaunchPDF(screen: screen, file: file)
     }
 
@@ -68,6 +73,7 @@ nonisolated struct LaunchOptions: Sendable {
         screen = value("-screen").flatMap(Screen.init(rawValue:))
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
         exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }
+        pictureDelay = value("-pictureDelay").flatMap { Int($0) }
     }
 }
 

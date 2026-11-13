@@ -49,6 +49,9 @@ final class WantedScreenState: GameScreenState {
     /// The card at the top of the gallery.
     var scrolledTo: String?
     let join = WantedJoin()
+    /// "Make PDF…" (C10, C11): kept with the screen, so a card page opened on its stack does not stop it; the stack going
+    /// away cancels it (`pdfSaving`).
+    let export = PDFExport()
 
     init(gameID: String) {
         self.gameID = gameID
@@ -77,8 +80,6 @@ nonisolated struct UnknownCard: Hashable, Sendable {
 struct WantedView: View {
     @Environment(AppModel.self) private var model
     @Bindable var state: WantedScreenState
-    /// "Make PDF…" (C10, C11): its pictures, progress and the made PDF; it ends with this screen.
-    @State private var export = PDFExport()
 
     var body: some View {
         let library = model.library, game = state.gameID
@@ -89,6 +90,7 @@ struct WantedView: View {
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
         // The list is read (also an empty one): its PDF can be made.
         let pdfReady = phase == .list || phase == .empty
+        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined)
         let join = WantedJoin.key(game: game, model: model)
         content(phase, shown: shown, listed: listed)
             .listScreen("wanted", note: phase == .list ? listed?.note : nil)
@@ -101,11 +103,11 @@ struct WantedView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
-                    PDFButton(export: export, identifier: "wanted-pdf", enabled: pdfReady) { pdfJob(all) }
+                    PDFButton(export: state.export, identifier: "wanted-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "wanted-sort")
                 }
             }
-            .listPDF(export, screen: .wanted, ready: pdfReady, model: model) { pdfJob(all) }
+            .launchPDF(state.export, screen: .wanted, ready: launchReady, model: model) { pdfJob(all) }
             .task(id: join) { await state.join.run(join, model: model) }
     }
 

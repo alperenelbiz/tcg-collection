@@ -41,10 +41,13 @@ nonisolated struct FileArchiveClient: ArchiveFetching {
 /// Plain GET requests from files: `cardinfo.php` is `cardinfo-sample.json`; every other URL is `picture.jpg`.
 nonisolated struct FileFetcher: DataFetching {
     let directory: URL
+    /// `-pictureDelay`: each picture answer waits this long first.
+    var picturesDelay: Duration = .zero
 
     func data(from url: URL) async throws -> (Data, Int) {
-        let name = url.lastPathComponent == "cardinfo.php" ? "cardinfo-sample.json" : "picture.jpg"
-        return (try Data(contentsOf: directory.appending(path: name)), 200)
+        let index = url.lastPathComponent == "cardinfo.php"
+        if !index, picturesDelay > .zero { try await Task.sleep(for: picturesDelay) }
+        return (try Data(contentsOf: directory.appending(path: index ? "cardinfo-sample.json" : "picture.jpg")), 200)
     }
 }
 

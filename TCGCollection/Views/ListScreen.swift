@@ -270,19 +270,29 @@ struct PDFButton: View {
 }
 
 extension View {
-    /// The save step of a list's PDF and its lifetime. A made PDF opens the system's save panel (`fileExporter`, with the
-    /// job's file name). The screen going away (another screen or game: `RootView` makes a new one; the window closing)
-    /// cancels a running export, which then writes nothing. `-exportPDF`: once `ready` (the screen's first join has ended),
-    /// the PDF of `job` is written to the launch's file instead, once.
-    func listPDF(_ export: PDFExport, screen: Screen, ready: Bool, model: AppModel, job: @escaping () -> PDFJob?) -> some View {
+    /// `-exportPDF`, on a list screen's root: once `ready` (`PDFExport.launchReady`: the list is read by a join on a settled
+    /// catalog with the game's prices), the PDF of `job` is written to the launch's file, once, instead of the save panel.
+    func launchPDF(_ export: PDFExport, screen: Screen, ready: Bool, model: AppModel, job: @escaping () -> PDFJob?) -> some View {
+        onChange(of: ready, initial: true) { _, ready in
+            guard ready, let file = model.takeLaunchPDF(for: screen), let job = job() else { return }
+            export.start(job, pictures: model.pictures, writingTo: file)
+        }
+    }
+
+    /// The save step and the lifetime of a list's PDF, on the list's navigation stack (`RootView`), which stays while card
+    /// pages are pushed on it. A made PDF opens the system's save panel (`fileExporter`, with the job's file name); one made
+    /// while a card page is open opens when the list is on show again (macOS 27 does not present it over a pushed page). A
+    /// failed save is said in the status line (`AppModel.pdfSaveEnded`). The stack going away (another screen, another
+    /// game, the window closing) cancels a running export, which then writes nothing and drops a PDF not yet saved; a card
+    /// page pushed on the stack does not.
+    func pdfSaving(_ export: PDFExport, model: AppModel) -> some View {
         fileExporter(isPresented: Binding(get: { export.made != nil }, set: { if !$0 { export.made = nil } }),
                      document: export.made.map { PDFFile(data: $0.data) }, contentType: .pdf,
-                     defaultFilename: export.made?.fileName) { _ in export.made = nil }
-            .onChange(of: ready, initial: true) { _, ready in
-                guard ready, let file = model.takeLaunchPDF(for: screen), let job = job() else { return }
-                export.start(job, pictures: model.pictures, writingTo: file)
-            }
-            .onDisappear { export.cancel() }
+                     defaultFilename: export.made?.fileName) { result in
+            export.made = nil
+            model.pdfSaveEnded(result)
+        }
+        .onDisappear { export.cancel() }
     }
 }
 

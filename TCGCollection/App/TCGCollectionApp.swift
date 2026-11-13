@@ -31,8 +31,9 @@ struct TCGCollectionApp: App {
         // `-fixtures <dir>`: the UI tests run the app on files, never on the network.
         if case .fixtures(let fixtures) = network {
             let catalog = FileCatalogClient(directory: fixtures, productsDelay: .milliseconds(options.fixtureDelay ?? 0))
+            let fetcher = FileFetcher(directory: fixtures, picturesDelay: .milliseconds(options.pictureDelay ?? 0))
             return AppModel(options: options, catalogClient: catalog,
-                            archiveClient: FileArchiveClient(directory: fixtures), fetcher: FileFetcher(directory: fixtures))
+                            archiveClient: FileArchiveClient(directory: fixtures), fetcher: fetcher)
         }
         #endif
         // A `-fixtures` that cannot be honoured (and, in a build without the fixture network, any `-fixtures`): offline.

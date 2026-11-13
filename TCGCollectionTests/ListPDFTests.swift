@@ -21,6 +21,9 @@ struct ListPDFTests {
                 PDFItem(name: "Calm Rune (R02a)", count: 1, price: ShownPrice(amount: 3, isLow: true), picture: picture)]
     }
 
+    /// The PDF of `items` under the title of these tests.
+    private func pdf(_ items: [PDFItem]) throws -> Data { try #require(ListPDF.data(title: Self.title, items: items)) }
+
     private func document(_ data: Data) throws -> PDFDocument { try #require(PDFDocument(data: data)) }
 
     private func text(_ data: Data, page: Int = 0) throws -> String { try #require(document(data).page(at: page)?.string) }
@@ -37,8 +40,14 @@ struct ListPDFTests {
         let picture = ListPDF.pictureRect(slot: 0, firstPage: false)
         #expect(abs(picture.height / picture.width - 88.0 / 63.0) < 0.0001)
         #expect(picture.minX == 36 && picture.minY == 36)
-        // The fourth column ends at the right margin; the last row's text ends above the page number.
+        // The fourth column ends at the right margin; the last row's text ends above the page number, on page 1 (under the
+        // title and the total line) and on the others.
         #expect(abs(ListPDF.pictureRect(slot: 3, firstPage: false).maxX - (595 - 36)) < 0.0001)
+        #expect(abs(ListPDF.pictureRect(slot: 0, firstPage: true).minY - 82) < 0.0001)       // 36 + 18 + 14 + 14
+        #expect(ListPDF.textRect(slot: 11, firstPage: true).maxY <= 842 - 36 - 20)
+        #expect(ListPDF.textRect(slot: 11, firstPage: false).maxY <= 842 - 36 - 20)
+        // A fourth row would not fit on either page.
+        #expect(ListPDF.textRect(slot: 12, firstPage: false).maxY > 842 - 36 - 20)
     }
 
     @Test func thePageCountFollowsTheGrid() {
@@ -53,14 +62,14 @@ struct ListPDFTests {
     }
 
     @Test func thePageIsA4() throws {
-        let page = try #require(document(ListPDF.data(title: Self.title, items: smallList())).page(at: 0))
+        let page = try #require(document(pdf(smallList())).page(at: 0))
         #expect(page.bounds(for: .mediaBox).size == CGSize(width: 595, height: 842))
     }
 
     // MARK: The text
 
     @Test func aSmallListHasItsTitleNamesCountsPricesAndTotal() throws {
-        let data = ListPDF.data(title: Self.title, items: try smallList())
+        let data = try pdf(try smallList())
         #expect(try document(data).pageCount == 1)
         let page = try text(data)
         for shown in [Self.title, "Dockside Lock-Up", "Mind Rune", "Calm Rune (R02a)", "×2", "×1", "$1.50", "~$3.00",
@@ -78,13 +87,13 @@ struct ListPDFTests {
                     PDFItem(name: "eta", count: 1, price: nil, picture: nil)]
         #expect(ListPDF.ordered(same).map(\.name) == ["Alpha", "beta", "eta", "Zeta"])
         // The page draws them in that order, whatever order it was given.
-        let page = try text(ListPDF.data(title: Self.title, items: try smallList()))
+        let page = try text(pdf(try smallList()))
         let places = try ["Calm Rune (R02a)", "Dockside Lock-Up", "Mind Rune"].map { try #require(page.range(of: $0)).lowerBound }
         #expect(places == places.sorted())
     }
 
     @Test func anItemWithoutAPictureStillShowsItsName() throws {
-        let page = try text(ListPDF.data(title: Self.title, items: [PDFItem(name: "Mind Rune", count: 3, price: nil, picture: nil)]))
+        let page = try text(pdf([PDFItem(name: "Mind Rune", count: 3, price: nil, picture: nil)]))
         #expect(page.contains("Mind Rune"))
         #expect(page.contains("×3"))
         #expect(page.contains("3 copies · 1 without a price"))
@@ -99,9 +108,15 @@ struct ListPDFTests {
         #expect(lines.last?.hasSuffix("…") == true)
         #expect(lines.first.map { Self.longName.hasPrefix($0) } == true)
         #expect(ListPDF.nameLines("Mind Rune") == ["Mind Rune"])
+        // Every line fits its cell, so it never reaches into the next column (12 pt to the right).
+        for line in lines { #expect(ListPDF.cellTextWidth(line) <= ListPDF.cellWidth, "\(line)") }
+        #expect(ListPDF.textRect(slot: 0, firstPage: true).maxX + ListPDF.columnGap == ListPDF.textRect(slot: 1, firstPage: true).minX)
+        let word = String(repeating: "W", count: 90)                        // one word wider than the cell
+        let cut = ListPDF.nameLines(word)
+        #expect(cut.count == 2 && cut.allSatisfy { ListPDF.cellTextWidth($0) <= ListPDF.cellWidth }, "\(cut)")
         let next = "Sunlit Valley Guardian"
         let price = ShownPrice(amount: 1, isLow: false)
-        let page = try text(ListPDF.data(title: Self.title, items: [PDFItem(name: next, count: 1, price: price, picture: nil),
+        let page = try text(pdf([PDFItem(name: next, count: 1, price: price, picture: nil),
                                                                     PDFItem(name: Self.longName, count: 1, price: price, picture: nil)]))
         #expect(page.contains(String(Self.longName.prefix(20))), "\(page)")
         #expect(page.contains(String(next.prefix(20))), "\(page)")
@@ -110,7 +125,7 @@ struct ListPDFTests {
     }
 
     @Test func anEmptyListIsOnePageWithTheTitle() throws {
-        let data = ListPDF.data(title: Self.title, items: [])
+        let data = try pdf([])
         #expect(try document(data).pageCount == 1)
         let page = try text(data)
         #expect(page.contains(Self.title))
@@ -121,7 +136,7 @@ struct ListPDFTests {
     /// The title and the total line are on page 1 only; every page has its number at the foot.
     @Test func everyPageHasItsNumberAndOnlyTheFirstHasTheTitle() throws {
         let items = (1...13).map { PDFItem(name: "Card \($0)", count: 1, price: nil, picture: nil) }
-        let data = ListPDF.data(title: Self.title, items: items)
+        let data = try pdf(items)
         #expect(try document(data).pageCount == 2)
         let first = try text(data, page: 0), second = try text(data, page: 1)
         #expect(first.contains(Self.title) && first.contains("1 / 2") && first.contains("13 copies · 13 without a price"))
@@ -135,9 +150,10 @@ struct ListPDFTests {
                                             price: $0 % 3 == 0 ? nil : ShownPrice(amount: Double($0) / 7, isLow: $0 % 5 == 0),
                                             picture: nil) }
         let clock = ContinuousClock()
-        var data = Data()
-        let time = clock.measure { data = ListPDF.data(title: Self.title, items: items) }
+        var made: Data?
+        let time = clock.measure { made = ListPDF.data(title: Self.title, items: items) }
         #expect(time < .seconds(5), "\(time)")
+        let data = try #require(made)
         #expect(try document(data).pageCount == ListPDF.pageCount(items: 500))
         #expect(try document(data).pageCount == 42)
     }
@@ -180,7 +196,7 @@ struct ListPDFTests {
     @Test func smallPicturesGoInAsTheyAre() throws {
         let pictures = (0..<40).map { Self.noisyJPEG(width: 200, height: 279, seed: UInt64($0) + 1) }
         let items = pictures.enumerated().map { PDFItem(name: "Card \($0.offset)", count: 1, price: nil, picture: $0.element) }
-        let size = ListPDF.data(title: Self.title, items: items).count
+        let size = try pdf(items).count
         let bytes = pictures.reduce(0) { $0 + $1.count }
         #expect(size < bytes + 150_000, "\(size) bytes for \(bytes) bytes of pictures")
     }
@@ -188,13 +204,13 @@ struct ListPDFTests {
     /// A picture larger than the cell needs is drawn at the cell's size: it is not put into the PDF at full size.
     @Test func aLargePictureIsDrawnAtTheCellsSize() throws {
         let large = Self.noisyJPEG(width: 1000, height: 1400, seed: 7)
-        let size = ListPDF.data(title: Self.title, items: [PDFItem(name: "Big", count: 1, price: nil, picture: large)]).count
+        let size = try pdf([PDFItem(name: "Big", count: 1, price: nil, picture: large)]).count
         #expect(size < large.count / 3, "\(size) bytes for a picture of \(large.count) bytes")
     }
 
     /// Bytes that are not a picture give the grey block, as no picture does.
     @Test func bytesThatAreNoPictureGiveTheGreyBlock() throws {
-        let data = ListPDF.data(title: Self.title, items: [PDFItem(name: "Odd", count: 1, price: nil, picture: Data("no".utf8))])
+        let data = try pdf([PDFItem(name: "Odd", count: 1, price: nil, picture: Data("no".utf8))])
         let page = try PagePicture(data)
         #expect(page.color(at: ListPDF.pictureRect(slot: 0, firstPage: true).center) == Self.grey)
         #expect(try text(data).contains("Odd"))
@@ -208,7 +224,7 @@ struct ListPDFTests {
     /// A white page; a picture where the item has one, the grey block (#E6E6E6) where it has none; black text. Page 1 of
     /// a list with pictures and of one without them.
     @Test func thePageIsWhiteWithPicturesAndGreyBlocks() throws {
-        let data = ListPDF.data(title: Self.title, items: try smallList())   // drawn: Calm Rune, Dockside, Mind Rune
+        let data = try pdf(try smallList())   // drawn: Calm Rune, Dockside, Mind Rune
         let page = try PagePicture(data)
         #expect(page.color(at: CGPoint(x: 10, y: 10)) == Self.white)
         #expect(page.color(at: CGPoint(x: 585, y: 832)) == Self.white)
@@ -228,8 +244,8 @@ struct ListPDFTests {
             return PDFItem(name: name, count: index % 3 + 1, price: price, picture: index == 4 ? nil : picture)
         }
         let without = full.map { PDFItem(name: $0.name, count: $0.count, price: $0.price, picture: nil) }
-        let pictures = try PagePicture(ListPDF.data(title: Self.title, items: full))
-        let blocks = try PagePicture(ListPDF.data(title: Self.title, items: without))
+        let pictures = try PagePicture(pdf(full))
+        let blocks = try PagePicture(pdf(without))
         #expect(blocks.color(at: ListPDF.pictureRect(slot: 0, firstPage: true).center) == Self.grey)
         if let folder = ProcessInfo.processInfo.environment["TCG_PDF_LOOK_DIR"] {
             let dir = URL(fileURLWithPath: folder, isDirectory: true)

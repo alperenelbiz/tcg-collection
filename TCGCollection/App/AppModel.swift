@@ -516,6 +516,12 @@ final class AppModel {
         return true
     }
 
+    /// The save panel of a list's PDF ended (`fileExporter`): a failure that is not a cancel is said in the status line
+    /// ("The PDF could not be saved: …", `PDFExport.saveNotice`).
+    func pdfSaveEnded(_ result: Result<URL, any Error>) {
+        if let notice = PDFExport.saveNotice(result) { say(notice) }
+    }
+
     /// Shows `text` in the status line for `noticeDuration`, unless something else is said or the status changes first.
     private func say(_ text: String) {
         noticeTask?.cancel()

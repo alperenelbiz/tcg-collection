@@ -14,6 +14,9 @@ final class ForSaleScreenState: GameScreenState {
     var scrolledTo: PrintingKey?
     /// The game's collection rows joined with the catalog; the for-sale printings are laid on it.
     let join = RowsJoin()
+    /// "Make PDF…" (C10, C11): kept with the screen, so a card page opened on its stack does not stop it; the stack going
+    /// away cancels it (`pdfSaving`).
+    let export = PDFExport()
 
     init(gameID: String) {
         self.gameID = gameID
@@ -49,8 +52,6 @@ struct ForSaleView: View {
     @Bindable var state: ForSaleScreenState
     /// The printing "Sold" asks about (C7); nil while no dialog is open.
     @State private var selling: Sale?
-    /// "Make PDF…" (C10, C11): its pictures, progress and the made PDF; it ends with this screen.
-    @State private var export = PDFExport()
 
     /// What "Sold" asks about: the printing, its name, and the for-sale count the open dialog was made for.
     private struct Sale: Equatable {
@@ -71,6 +72,7 @@ struct ForSaleView: View {
         let phase = ListPhase.of(listed, game: state.gameID, library: library)
         // The list is read (also an empty one): its PDF can be made.
         let pdfReady = phase == .list || phase == .empty
+        let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined)
         let join = RowsJoin.key(game: state.gameID, model: model)
         // The dialog follows the live for-sale count of its printing (a reload, another window): it opens again with the
         // new numbers, and closes when nothing is for sale any more (`follow`).
@@ -83,11 +85,11 @@ struct ForSaleView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
-                    PDFButton(export: export, identifier: "for-sale-pdf", enabled: pdfReady) { pdfJob(all) }
+                    PDFButton(export: state.export, identifier: "for-sale-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "for-sale-sort")
                 }
             }
-            .listPDF(export, screen: .forSale, ready: pdfReady, model: model) { pdfJob(all) }
+            .launchPDF(state.export, screen: .forSale, ready: launchReady, model: model) { pdfJob(all) }
             // Plain buttons: selling is what the dialog is for, not a mistake to warn about (the system's destructive red
             // on its dark fill reads badly).
             .confirmationDialog(dialog?.title ?? "", isPresented: Binding(get: { dialog != nil }, set: { if !$0 { selling = nil } }),

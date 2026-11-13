@@ -117,6 +117,31 @@ struct PDFExportTests {
         await second.value
         #expect(export.made != nil)
         #expect(export.progress == nil)
+        export.cancel()                                                   // the screen went away: nothing is kept
+        #expect(export.made == nil)
+    }
+
+    /// The save panel's end: a save or a cancel says nothing; any other failure is said in the status line.
+    @Test func aFailedSaveIsSaidAndASaveOrACancelIsNot() {
+        #expect(PDFExport.saveNotice(.success(URL(fileURLWithPath: "/tmp/riftbound-for-sale-2026-11-13.pdf"))) == nil)
+        #expect(PDFExport.saveNotice(.failure(CocoaError(.userCancelled))) == nil)
+        #expect(PDFExport.saveNotice(.failure(NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError))) == nil)
+        let error = CocoaError(.fileWriteNoPermission)
+        #expect(PDFExport.saveNotice(.failure(error)) == "The PDF could not be saved: \(error.localizedDescription)")
+        let other = URLError(.cannotWriteToFile)
+        #expect(PDFExport.saveNotice(.failure(other)) == "The PDF could not be saved: \(other.localizedDescription)")
+    }
+
+    /// `-exportPDF` writes once the list is read by a join made on a settled catalog with the game's prices.
+    @Test func theLaunchExportWaitsForASettledCatalogAndPrices() {
+        func joined(settled: Bool, day: String?) -> CollectionJoin {
+            CollectionJoin(game: "riftbound", libraryVersion: 1, catalogVersion: 2, priceDay: day, catalogSettled: settled)
+        }
+        #expect(PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: "2026-11-12")))
+        #expect(!PDFExport.launchReady(listRead: false, joined: joined(settled: true, day: "2026-11-12")))
+        #expect(!PDFExport.launchReady(listRead: true, joined: joined(settled: false, day: "2026-11-12")))
+        #expect(!PDFExport.launchReady(listRead: true, joined: joined(settled: true, day: nil)))
+        #expect(!PDFExport.launchReady(listRead: true, joined: nil))
     }
 
     /// Every picture fails (a bad answer, or offline): a PDF with the names and grey blocks, each address asked once.
@@ -185,45 +210,5 @@ struct PDFExportTests {
         let job = PDFJob(list: .wanted, game: game, items: [], date: noon, timeZone: utc)
         #expect(job.title == "Riftbound — Wanted — 13 November 2026")
         #expect(job.fileName == "riftbound-wanted-2026-11-13.pdf")
-    }
-}
-
-/// Answers every picture request with `body` and `status`; counts the requests per address and the most that ran at once.
-/// When gated, every request waits until `open()`.
-actor PictureFetcher: DataFetching {
-    private let body: Data
-    private let status: Int
-    private var gated: Bool
-    private var gate: [CheckedContinuation<Void, Never>] = []
-    private var running = 0
-    private(set) var calls: [URL: Int] = [:]
-    private(set) var mostAtOnce = 0
-
-    init(body: Data, status: Int = 200, gated: Bool = false) {
-        self.body = body
-        self.status = status
-        self.gated = gated
-    }
-
-    /// The requests waiting at the gate.
-    var waiting: Int { gate.count }
-
-    func open() {
-        gated = false
-        for request in gate { request.resume() }
-        gate = []
-    }
-
-    func data(from url: URL) async throws -> (Data, Int) {
-        calls[url, default: 0] += 1
-        running += 1
-        mostAtOnce = max(mostAtOnce, running)
-        if gated {
-            await withCheckedContinuation { gate.append($0) }
-        } else {
-            try? await Task.sleep(for: .milliseconds(30))
-        }
-        running -= 1
-        return (body, status)
     }
 }

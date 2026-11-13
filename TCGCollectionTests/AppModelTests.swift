@@ -157,6 +157,18 @@ struct AppModelTests {
         #expect(outside.takeLaunchPDF(for: .forSale) == nil)
     }
 
+    /// The save panel of a PDF ended: a failure that is not a cancel is said in the status line; a save or a cancel is not.
+    @MainActor @Test func aFailedPDFSaveIsSaidInTheStatusLine() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        model.pdfSaveEnded(.failure(CocoaError(.userCancelled)))
+        #expect(model.statusNotice == nil)
+        model.pdfSaveEnded(.success(URL(fileURLWithPath: "/tmp/riftbound-wanted-2026-11-13.pdf")))
+        #expect(model.statusNotice == nil)
+        let error = CocoaError(.fileWriteOutOfSpace)
+        model.pdfSaveEnded(.failure(error))
+        #expect(model.statusNotice == "The PDF could not be saved: \(error.localizedDescription)")
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

@@ -44,6 +44,9 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-writeDelay", "1500"]).writeDelay == 1500)
         #expect(LaunchOptions(arguments: ["app"]).writeDelay == nil)
         #expect(LaunchOptions(arguments: ["app", "-writeDelay", "later"]).writeDelay == nil)
+        #expect(LaunchOptions(arguments: ["app", "-pictureDelay", "6000"]).pictureDelay == 6000)
+        #expect(LaunchOptions(arguments: ["app"]).pictureDelay == nil)
+        #expect(LaunchOptions(arguments: ["app", "-pictureDelay", "slow"]).pictureDelay == nil)
     }
     /// I3: `-fixtures` is honoured only in a Debug build with `-store`. Otherwise the run is offline (as `-offline YES`),
     /// never on the real network, and the app prints one line that says why. Without `-fixtures` the network is real.
@@ -95,6 +98,27 @@ struct LaunchOptionsTests {
         #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s2/out.pdf"]) == nil)      // a sibling
         #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale", "-exportPDF", "/tmp/s"]) == nil)               // the root
         #expect(pdf(["-store", "/tmp/s", "-screen", "for-sale"]) == nil)
+    }
+
+    /// `-exportPDF` never replaces a file and writes only a `.pdf`: it can never write over `<root>/user/<game>.json`.
+    @Test func theExportFlagRefusesAFileThatExistsAndAnythingButAPDF() throws {
+        let root = tempDir()
+        let user = root.appending(path: "user", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: user.appending(path: "riftbound.json"))
+        try Data("%PDF".utf8).write(to: root.appending(path: "old.pdf"))
+        func pdf(_ file: URL) -> LaunchPDF? {
+            LaunchOptions(arguments: ["app", "-store", root.path, "-screen", "for-sale", "-exportPDF", file.path])
+                .launchPDF(isDebugBuild: true)
+        }
+        #expect(pdf(root.appending(path: "out.pdf"))?.file.lastPathComponent == "out.pdf")
+        #expect(pdf(root.appending(path: "OUT.PDF")) != nil)
+        #expect(pdf(user.appending(path: "riftbound.json")) == nil)          // exists, and no PDF
+        #expect(pdf(user.appending(path: "yu-gi-oh.json")) == nil)           // no PDF
+        #expect(pdf(root.appending(path: "out")) == nil)
+        #expect(pdf(root.appending(path: "out.pdf.json")) == nil)
+        #expect(pdf(root.appending(path: "old.pdf")) == nil)                 // exists
+        #expect(pdf(user) == nil)                                            // a folder that exists
     }
 
     #if DEBUG

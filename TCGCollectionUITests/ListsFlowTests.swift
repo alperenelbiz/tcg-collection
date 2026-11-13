@@ -534,10 +534,11 @@ final class ListsFlowTests: UITestCase {
 
     // MARK: The PDF
 
-    /// C10, C11: `-exportPDF` writes For Sale's PDF once the screen has read its list: a PDF of one page with the title
-    /// and the printing with its for-sale count; the test keeps it, and a picture of its page. Then "Make PDF…" (left of
-    /// Sort) makes the PDF again and the system's save panel opens; it is cancelled, so nothing is saved (the panel itself
-    /// is not driven further).
+    /// C10, C11: `-exportPDF` writes For Sale's PDF once the screen's list is read on a settled catalog with prices: one
+    /// page with the title, the printing with its for-sale count and its price, the total, and the printing's picture in
+    /// the first cell (not the grey block); the test keeps it, and a picture of its page. Then "Make PDF…" (left of Sort)
+    /// makes the PDF again and the system's save panel opens; it is cancelled, so nothing is saved (the panel itself is not
+    /// driven further).
     func testMakeAPDFOfForSale() throws {
         let app = try launch(game: "riftbound", extra: { ["-screen", "for-sale", "-exportPDF", $0.appending(path: "out.pdf").path] }) { _ in
             try self.writeUserFile(game: "riftbound", json: Self.saleFile(owned: 3, forSale: 2))
@@ -550,24 +551,18 @@ final class ListsFlowTests: UITestCase {
         XCTAssertEqual(pdf.pageCount, 1)
         let page = try XCTUnwrap(pdf.page(at: 0))
         let pageText = page.string ?? ""
-        XCTAssertTrue(pageText.contains("Riftbound — For Sale — "), pageText)
-        XCTAssertTrue(pageText.contains("Dockside Lock-Up") && pageText.contains("×2") && pageText.contains("2 copies"), pageText)
-        XCTAssertTrue(pageText.contains("1 / 1"), pageText)
-        let file = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
-        file.name = "lists-29-for-sale.pdf"
-        file.lifetime = .keepAlways
-        add(file)
-        let picture = XCTAttachment(image: page.thumbnail(of: NSSize(width: 1190, height: 1684), for: .mediaBox))
-        picture.name = "lists-30-for-sale-pdf-page-1"
-        picture.lifetime = .keepAlways
-        add(picture)
+        for shown in ["Riftbound — For Sale — ", "Dockside Lock-Up", "×2", "$5.12", "2 copies · $10.24", "1 / 1"] {
+            XCTAssertTrue(pageText.contains(shown), "\(shown) is not on the page: \(pageText)")
+        }
+        keep(data, name: "pdf-01-for-sale", page: page)
+        try assertPictureInFirstCell(of: data)
 
         let button = element(app, "for-sale-pdf")
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntil { button.isEnabled }, "Make PDF… is off on a read list")
         XCTAssertTrue(element(app, "for-sale-sort").exists)
         XCTAssertLessThan(button.frame.minX, element(app, "for-sale-sort").frame.minX, "Make PDF… is not left of Sort")
-        shot("lists-31-for-sale-make-pdf-button")
+        shot("pdf-02-for-sale-make-pdf-button")
         button.click()
         // The system's panel (identifiers of AppKit's save panel): "Export As:" with the suggested name, "Export", "Cancel".
         let cancel = app.sheets.buttons["CancelButton"].firstMatch
@@ -576,13 +571,15 @@ final class ListsFlowTests: UITestCase {
         let name = app.sheets.textFields["saveAsNameTextField"].firstMatch.value as? String ?? ""
         XCTAssertTrue(name.hasPrefix("riftbound-for-sale-\(Self.today())"), name)
         XCTAssertFalse(name.hasSuffix(".pdf.pdf"), name)
-        shot("lists-32-for-sale-save-panel")
+        shot("pdf-03-for-sale-save-panel")
         cancel.click()
         XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "the save panel stayed open")
         XCTAssertTrue(waitUntil { button.isEnabled }, "Make PDF… stayed off after the panel")
+        XCTAssertFalse(text(app.staticTexts["status-line"]).hasPrefix("The PDF could not be saved"), "a cancel was said as a failure")
     }
 
-    /// `-exportPDF` on Wanted: one page with the title and the two cards with their wanted counts.
+    /// `-exportPDF` on Wanted: one page with the title, the two cards with their wanted counts, the priced card's price
+    /// (its cheapest printing's, $5.12) first, the total, and that card's picture in the first cell.
     func testMakeAPDFOfWanted() throws {
         let app = try launch(game: "riftbound", extra: { ["-screen", "wanted", "-exportPDF", $0.appending(path: "pdf/wanted.pdf").path] }) { root in
             try FileManager.default.createDirectory(at: root.appending(path: "pdf"), withIntermediateDirectories: true)
@@ -594,13 +591,69 @@ final class ListsFlowTests: UITestCase {
         }
         let out = try XCTUnwrap(root).appending(path: "pdf/wanted.pdf")
         XCTAssertTrue(waitUntil(timeout: 20) { FileManager.default.fileExists(atPath: out.path) }, "no PDF at \(out.path)")
-        let pdf = try XCTUnwrap(PDFDocument(data: try Data(contentsOf: out)))
+        let data = try Data(contentsOf: out)
+        let pdf = try XCTUnwrap(PDFDocument(data: data))
         XCTAssertEqual(pdf.pageCount, 1)
-        let pageText = pdf.page(at: 0)?.string ?? ""
-        for shown in ["Riftbound — Wanted — ", "Dockside Lock-Up", "×3", "Calm Rune", "×2", "5 copies"] {
+        let page = try XCTUnwrap(pdf.page(at: 0))
+        let pageText = page.string ?? ""
+        for shown in ["Riftbound — Wanted — ", "Dockside Lock-Up", "×3", "$5.12", "Calm Rune", "×2",
+                      "5 copies · $15.36 + 1 without a price"] {
             XCTAssertTrue(pageText.contains(shown), "\(shown) is not on the page: \(pageText)")
         }
+        let dockside = try XCTUnwrap(pageText.range(of: "Dockside Lock-Up")), calm = try XCTUnwrap(pageText.range(of: "Calm Rune"))
+        XCTAssertLessThan(dockside.lowerBound, calm.lowerBound, "the priced card is not first")
+        keep(data, name: "pdf-07-wanted", page: page)
+        try assertPictureInFirstCell(of: data)
         XCTAssertTrue(element(app, "wanted-pdf").waitForExistence(timeout: 10))
+    }
+
+    /// C11: an export goes on while a card page is open on the list's stack, and ends in the save panel when the list is on
+    /// show again; leaving the screen (the sidebar) cancels one: when the screen is back, there is no panel and the button
+    /// is idle.
+    /// `-pictureDelay 6000` keeps each export waiting for its picture (a cell's download of the same picture is joined).
+    func testAnExportGoesOnUnderACardPageAndStopsOnAnotherScreen() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "for-sale", "-pictureDelay", "6000"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "collection": [{"productID": 721334, "finish": "Normal", "count": 2, "condition": "", "name": "Dockside Lock-Up"}],
+             "forSale": [{"productID": 721334, "finish": "Normal", "count": 1, "name": "Dockside Lock-Up"}],
+             "wanted": [{"cardKey": "calm rune", "name": "Calm Rune", "count": 1}]}
+            """)
+        }
+        let cell = app.buttons["for-sale-cell-721334-Normal"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "the cell is not a link")
+        let button = element(app, "for-sale-pdf")
+        XCTAssertTrue(waitUntil { button.isEnabled })
+        button.click()
+        XCTAssertTrue(waitUntil(timeout: 3) { button.label.hasPrefix("Making PDF…") }, button.label)
+        shot("pdf-04-for-sale-making-pdf")
+        cell.click()                                             // a card page on For Sale's own stack
+        XCTAssertTrue(element(app, "card-page").waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(8))   // the export's picture arrives meanwhile
+        XCTAssertTrue(element(app, "card-page").exists)
+        goBack(app)
+        // The export went on under the page: its PDF is made, and the save panel opens once the list is on show again
+        // (macOS 27 does not present it over a pushed page).
+        let cancel = app.sheets.buttons["CancelButton"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10), "the export stopped when a card page was opened")
+        shot("pdf-05-save-panel-after-a-card-page")
+        cancel.click()
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists })
+
+        element(app, "sidebar-wanted").click()
+        XCTAssertTrue(app.buttons["wanted-cell-calm rune"].waitForExistence(timeout: 10))
+        let wanted = element(app, "wanted-pdf")
+        XCTAssertTrue(waitUntil { wanted.isEnabled })
+        wanted.click()
+        XCTAssertTrue(waitUntil(timeout: 3) { wanted.label.hasPrefix("Making PDF…") }, wanted.label)
+        element(app, "sidebar-collection").click()               // Wanted's stack goes away: its export is cancelled
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(8))   // longer than the picture's delay
+        element(app, "sidebar-wanted").click()
+        XCTAssertTrue(wanted.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil { wanted.isEnabled && !wanted.label.hasPrefix("Making PDF…") }, wanted.label)
+        XCTAssertFalse(app.sheets.firstMatch.exists, "a cancelled export opened the save panel")
+        shot("pdf-06-wanted-after-a-cancelled-export")
     }
 
     // MARK: Pages kept per screen (phase 2C task 4, fix round 1)
@@ -800,6 +853,42 @@ final class ListsFlowTests: UITestCase {
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
+    }
+
+    /// Keeps a PDF the app made in the result bundle (`<name>.pdf`), and a picture of its first page (`<name>-pdf-page-1`).
+    private func keep(_ data: Data, name: String, page: PDFPage) {
+        let file = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+        file.name = "\(name).pdf"
+        file.lifetime = .keepAlways
+        add(file)
+        let picture = XCTAttachment(image: page.thumbnail(of: NSSize(width: 1190, height: 1684), for: .mediaBox))
+        picture.name = "\(name)-pdf-page-1"
+        picture.lifetime = .keepAlways
+        add(picture)
+    }
+
+    /// Fails unless the first cell of page 1 shows a picture: its middle is a colour (the fixture picture is a flat
+    /// #525B7A), not a grey such as the missing-picture block #E6E6E6. The first cell's picture is 36–157.75 × 82–252 pt
+    /// from the page's top left (`ListPDF.pictureRect(slot: 0, firstPage: true)`). The page is drawn on white in sRGB at
+    /// 2 pixels per point.
+    private func assertPictureInFirstCell(of data: Data, file: StaticString = #filePath, line: UInt = #line) throws {
+        let provider = try XCTUnwrap(CGDataProvider(data: data as CFData))
+        let page = try XCTUnwrap(CGPDFDocument(provider)?.page(at: 1))
+        let box = page.getBoxRect(.mediaBox)
+        let width = Int(box.width * 2), height = Int(box.height * 2)
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.scaleBy(x: 2, y: 2)
+        context.drawPDFPage(page)
+        let bytes = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+        let offset = Int(167 * 2) * width * 4 + Int(97 * 2) * 4                 // the middle of the first cell's picture
+        let (r, g, b) = (Int(bytes[offset]), Int(bytes[offset + 1]), Int(bytes[offset + 2]))
+        XCTAssertFalse(r == 0xE6 && g == 0xE6 && b == 0xE6, "the first cell is the missing-picture block", file: file, line: line)
+        XCTAssertGreaterThan(max(r, g, b) - min(r, g, b), 20, "the first cell shows no picture: (\(r), \(g), \(b))",
+                             file: file, line: line)
     }
 
     /// A static text that shows `text` (macOS keeps it in `value` or `label`).

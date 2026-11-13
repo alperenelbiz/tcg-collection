@@ -69,9 +69,11 @@ nonisolated struct PDFMade: Sendable, Equatable {
 }
 
 /// The "Make PDF…" export of one list screen (C11). It collects the pictures through `PictureStore` (the disk cache first;
-/// a missing picture is fetched once, at most `picturesAtOnce` at a time; one that cannot be had is nil, the grey block),
-/// counts `done / total`, can be cancelled, then draws the PDF (`ListPDF.data`) off the main thread. The PDF goes to the
-/// save panel (`made`), or to a file (`-exportPDF`). One export at a time; a cancelled one changes nothing more.
+/// a missing picture is downloaded once, and `PictureStore` runs at most 4 downloads at a time over the whole app; one
+/// that cannot be had is nil, the grey block), counts `done / total`, can be cancelled, then draws the PDF
+/// (`ListPDF.data`) off the main thread. The PDF goes to the save panel (`made`), or to a file (`-exportPDF`). One export
+/// at a time; a cancelled one changes nothing more. The screen's state keeps it, so a card page opened on the screen's
+/// stack does not stop it; the stack going away (another screen, another game, the window closing) cancels it.
 @Observable
 final class PDFExport {
     /// While an export runs: how far it is. Nil otherwise.
@@ -80,10 +82,28 @@ final class PDFExport {
     var made: PDFMade?
     @ObservationIgnored private var task: Task<Void, Never>?
 
-    /// The same as `PictureStore`'s rule for the downloads (constraints: at most 4 at a time).
+    /// The pictures one export asks `PictureStore` for at a time. `PictureStore` holds the app's limit of 4 downloads;
+    /// this window keeps an export of hundreds of items from putting all of them in its line at once, ahead of the
+    /// pictures a gallery asks for meanwhile.
     nonisolated static let picturesAtOnce = 4
 
     var isRunning: Bool { task != nil }
+
+    /// `-exportPDF` writes once the screen's list is read (`listRead`) by a join made on a settled catalog
+    /// (`catalogSettled`) that had the game's prices (`priceDay`): then the PDF has the pictures and prices a person sees.
+    nonisolated static func launchReady(listRead: Bool, joined: CollectionJoin?) -> Bool {
+        guard listRead, let joined else { return false }
+        return joined.catalogSettled && joined.priceDay != nil
+    }
+
+    /// What the status line says when the save panel ends: nothing after a save or a cancel; else "The PDF could not be
+    /// saved: <why>".
+    nonisolated static func saveNotice(_ result: Result<URL, any Error>) -> String? {
+        guard case .failure(let error) = result else { return nil }
+        let cocoa = error as NSError
+        if cocoa.domain == NSCocoaErrorDomain && cocoa.code == NSUserCancelledError { return nil }
+        return "The PDF could not be saved: \(error.localizedDescription)"
+    }
 
     /// Starts an export of `job` and returns its task, or nil while another export runs. Its PDF is written to `file` when
     /// one is given (`-exportPDF`), else kept in `made` for the save panel. After `cancel()` the task changes nothing.
@@ -107,16 +127,17 @@ final class PDFExport {
         return task
     }
 
-    /// Stops the running export: no picture is asked for after this, and nothing is written or kept. A fetch already
-    /// running ends on its own (`PictureStore` keeps its picture for the next time).
+    /// Stops the running export: no picture is asked for after this, and nothing is written or kept (a made PDF not yet
+    /// saved is dropped too). A download already running ends on its own (`PictureStore` keeps its picture).
     func cancel() {
         task?.cancel()
         task = nil
         progress = nil
+        made = nil
     }
 
-    /// Collects the pictures of `job` and draws its PDF; nil when the task was cancelled. Every change of `progress` is made
-    /// only while the task is not cancelled, so a cancelled export never shows again.
+    /// Collects the pictures of `job` and draws its PDF; nil when the task was cancelled or no PDF could be drawn. Every
+    /// change of `progress` is made only while the task is not cancelled, so a cancelled export never shows again.
     func make(_ job: PDFJob, pictures: PictureStore) async -> Data? {
         let total = job.items.count
         // The items of each address: two finishes of one printing share their picture, which is asked for once.
@@ -157,7 +178,7 @@ final class PDFExport {
     }
 
     /// Off the main thread: 500 cells take a moment.
-    @concurrent private nonisolated static func draw(title: String, items: [PDFItem]) async -> Data {
+    @concurrent private nonisolated static func draw(title: String, items: [PDFItem]) async -> Data? {
         ListPDF.data(title: title, items: items)
     }
 

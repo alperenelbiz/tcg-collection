@@ -31,10 +31,13 @@ struct RootView: View {
             case .wanted:
                 let state = wanted.state(game: model.gameID)
                 ListStack(path: Bindable(state).path.kept(on: .wanted, in: model)) { WantedView(state: state) }
+                    // The PDF's save panel and its end: on the stack, which leaves only with the screen.
+                    .pdfSaving(state.export, model: model)
                     .id(model.gameID)
             case .forSale:
                 let state = forSale.state(game: model.gameID)
                 ListStack(path: Bindable(state).path.kept(on: .forSale, in: model)) { ForSaleView(state: state) }
+                    .pdfSaving(state.export, model: model)
                     .id(model.gameID)
             case .allCards:
                 CatalogStack(gameID: model.gameID, state: catalog.state(game: model.gameID, search: model.options.search),

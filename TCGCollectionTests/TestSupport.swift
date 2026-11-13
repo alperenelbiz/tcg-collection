@@ -239,3 +239,43 @@ extension CatalogStore {
         try modelContext.save()
     }
 }
+
+/// Answers every picture request with `body` and `status`; counts the requests per address and the most that ran at once.
+/// When gated, every request waits until `open()`.
+actor PictureFetcher: DataFetching {
+    private let body: Data
+    private let status: Int
+    private var gated: Bool
+    private var gate: [CheckedContinuation<Void, Never>] = []
+    private var running = 0
+    private(set) var calls: [URL: Int] = [:]
+    private(set) var mostAtOnce = 0
+
+    init(body: Data, status: Int = 200, gated: Bool = false) {
+        self.body = body
+        self.status = status
+        self.gated = gated
+    }
+
+    /// The requests waiting at the gate.
+    var waiting: Int { gate.count }
+
+    func open() {
+        gated = false
+        for request in gate { request.resume() }
+        gate = []
+    }
+
+    func data(from url: URL) async throws -> (Data, Int) {
+        calls[url, default: 0] += 1
+        running += 1
+        mostAtOnce = max(mostAtOnce, running)
+        if gated {
+            await withCheckedContinuation { gate.append($0) }
+        } else {
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        running -= 1
+        return (body, status)
+    }
+}
