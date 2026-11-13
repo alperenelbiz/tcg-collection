@@ -98,14 +98,19 @@ struct ListRulesTests {
         #expect(ListRules.selling(three, key: .init(productID: 2, finish: "Normal"), count: 1, day: "d", price: nil) == nil)  // owned, not for sale
     }
 
-    /// Review Focus 2: a file whose for-sale count is over its owned count sells at most what is owned; what stays for
-    /// sale is clamped to what is left.
+    /// Review Focus 2: a file whose for-sale count is over its owned count sells at most what is owned. Fix round 1:
+    /// `selling` lowers both counts by the copies sold and no more; what stays over is the clamp's (`UserLibrary`'s one
+    /// clamp, which counts it for the notice), not taken off here unsaid.
     @Test func sellingNeverTakesMoreThanAreOwned() throws {
         let over = file(owned: 2, forSale: 5)
         #expect(ListRules.selling(over, key: foil, count: 3, day: "d", price: nil) == nil)
-        let after = try #require(ListRules.selling(over, key: foil, count: 2, day: "d", price: nil))
-        #expect(after.collection.map(\.productID) == [2]); #expect(after.forSale.isEmpty)
-        #expect(after.sold.map(\.count) == [2])
+        let one = try #require(ListRules.selling(over, key: foil, count: 1, day: "d", price: nil))
+        #expect(one.collection.map(\.count) == [1, 1]); #expect(one.forSale.map(\.count) == [4])
+        #expect(ListRules.clamped(one.forSale, to: one.collection) == ([SaleEntry(productID: 1, finish: "Foil", count: 1, name: "A")], 3))
+        let all = try #require(ListRules.selling(over, key: foil, count: 2, day: "d", price: nil))
+        #expect(all.collection.map(\.productID) == [2]); #expect(all.forSale.map(\.count) == [3])
+        #expect(ListRules.clamped(all.forSale, to: all.collection) == ([], 3))
+        #expect(all.sold.map(\.count) == [2])
     }
 
     @Test func aLowPriceIsMarkedAndTheNameComesFromTheCollectionWhenEmpty() throws {

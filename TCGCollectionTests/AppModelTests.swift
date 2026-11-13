@@ -702,6 +702,28 @@ struct AppModelTests {
         #expect(model.library.saleNotice == "2 copies are no longer for sale.")
     }
 
+    /// Fix round 1: a for-sale notice that waited behind a problem sentence is said once that sentence is gone (here: its
+    /// time is up), then the library's notice is cleared.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSaleNoticeIsSaidOnceTheProblemIsGone() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        let folder = try #require(model.library.folder), key = PrintingKey(productID: 1, finish: "Normal")
+        model.library.setCount(2, game: "riftbound", key: key, name: "A")
+        model.library.setForSale(2, game: "riftbound", key: key, name: "A")
+        await model.library.flush()
+        model.importing = ImportModel(unreadable: "x", fileName: "x.csv", library: model.library, reader: model.reader)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        model.library.replace(game: "riftbound", rows: [])
+        await model.importApplied(.init(gameID: "riftbound", games: ["riftbound"], summary: "1 not in the file (removed)"))
+        let problem = try #require(model.library.problem(game: "riftbound"))
+        #expect(model.statusNotice == problem)
+        try await until { model.statusNotice == "2 copies are no longer for sale." }
+        #expect(model.library.saleNotice == nil)
+        try await until { model.statusNotice == nil }                            // said once: its own time ends it
+    }
+
     /// Fix round 1, item 5: while a file is still being read, and while an import is open, a second import (the panel, or
     /// a file) is ignored. The gate holds the first read, so it is in progress for sure.
     @MainActor @Test(.timeLimit(.minutes(1))) func aSecondImportIsIgnoredWhileOneIsReadOrOpen() async throws {

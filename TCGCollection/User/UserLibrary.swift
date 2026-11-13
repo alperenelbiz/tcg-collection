@@ -5,8 +5,8 @@ import Observation
 /// per game. Every change goes through it: memory first, then the whole game file, written on one serial path in the
 /// order of the changes.
 /// - It keeps each game's `GameUserFile`, not only its lists, so that what a newer app wrote survives a rewrite.
-/// - No for-sale count is over its owned count after a change (C8): each change lowers it in the same change and says so
-///   (`saleNotice`). A file read with more for sale than owned is kept as it is until the next change of that game.
+/// - No for-sale count in memory is over its owned count (C8): each change, and each file read, lowers it and says so
+///   (`saleNotice`). A read writes nothing: the file keeps its counts until the next change of that game writes them.
 /// - A game whose file was refused (newer, unreadable, not downloaded) is read-only for this run: no rows, no change,
 ///   and the file is never touched. The other games keep working.
 /// - A folder that is missing at launch is said (`problem`) and nothing is written; a write never makes a folder. A
@@ -205,18 +205,28 @@ final class UserLibrary {
         var file = current
         edit(&file)
         guard !file.hasSameLists(as: current) else { return false }
-        let (forSale, lost) = ListRules.clamped(file.forSale, to: file.collection)
-        file.forSale = forSale
+        addToSaleNotice(clampForSale(&file))
         files[game] = file
-        if lost > 0 {
-            copiesOffSale += lost
-            saleNotice = copiesOffSale == 1 ? "1 copy is no longer for sale." : "\(copiesOffSale) copies are no longer for sale."
-        }
         version += 1
         let number = changes[game, default: 0] + 1
         changes[game] = number
         enqueue { await self.write(game, change: number, to: folder) }
         return true
+    }
+
+    /// C8, the one clamp: every for-sale count over its printing's owned count is lowered to it. Run on every change and
+    /// on every file read into memory. Returns the copies taken off.
+    private func clampForSale(_ file: inout GameUserFile) -> Int {
+        let (forSale, lost) = ListRules.clamped(file.forSale, to: file.collection)
+        if lost > 0 { file.forSale = forSale }
+        return lost
+    }
+
+    /// Adds `lost` copies to `saleNotice` (nothing for 0).
+    private func addToSaleNotice(_ lost: Int) {
+        guard lost > 0 else { return }
+        copiesOffSale += lost
+        saleNotice = copiesOffSale == 1 ? "1 copy is no longer for sale." : "\(copiesOffSale) copies are no longer for sale."
     }
 
     /// `yyyy-MM-dd` of `date` in `timeZone`, in the Gregorian calendar.
@@ -377,11 +387,15 @@ final class UserLibrary {
     }
 
     /// Takes a read into memory. The whole file replaces memory, also when its lists are the same: keys another device
-    /// added then survive the next write. A for-sale count over its owned count is kept as read (Review Focus 2): a read
-    /// writes nothing, and the next change of the game lowers it.
+    /// added then survive the next write. A for-sale count over its owned count (a phase 2B device lowered an owned count;
+    /// Review Focus 2) is lowered in memory and said (`clampForSale`); the read writes nothing, and the file keeps it
+    /// until the next change of the game writes the lowered list. A refused file is not shown, so not clamped.
     private func apply(_ result: GameRead, to game: String) {
         switch result.content {
-        case .file(let file):
+        case .file(var file):
+            let lost = clampForSale(&file)
+            // A read that changes nothing on screen (the same file read again) says nothing again.
+            if !file.hasSameLists(as: shown(game)) { addToSaleNotice(lost) }
             files[game] = file
             refused[game] = nil
         case .missing:

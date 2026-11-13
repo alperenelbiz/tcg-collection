@@ -53,17 +53,20 @@ nonisolated enum ListRules {
     }
 
     /// C7: `count` copies of one printing are sold: the owned and the for-sale counts go down by `count` (a row at 0 is
-    /// removed; what stays for sale is clamped to what is left), and one record is appended. Nil when `count < 1`, or
-    /// more than are for sale or owned: nothing is sold.
+    /// removed), and one record is appended. Nil when `count < 1`, or more than are for sale or owned: nothing is sold.
+    /// It takes nothing more: a for-sale count that was over the owned one stays over by as much, for the one clamp
+    /// (`clamped`, in `UserLibrary`'s change) to take and to say.
     static func selling(_ file: GameUserFile, key: PrintingKey, count: Int, day: String, price: ShownPrice?) -> GameUserFile? {
         let owned = CollectionRules.count(file.collection, for: key)
-        guard let sale = file.forSale.first(where: { $0.key == key }), count >= 1, count <= sale.count, count <= owned else {
+        guard let i = file.forSale.firstIndex(where: { $0.key == key }), count >= 1, count <= file.forSale[i].count,
+              count <= owned else {
             return nil
         }
+        let sale = file.forSale[i]
         let name = sale.name.isEmpty ? file.collection.first(where: { $0.key == key })?.name ?? "" : sale.name
         var file = file
         file.collection = CollectionRules.setting(file.collection, count: owned - count, for: key, name: name)
-        file.forSale = settingForSale(file.forSale, count: sale.count - count, key: key, name: name, owned: owned - count)
+        if sale.count == count { file.forSale.remove(at: i) } else { file.forSale[i].count -= count }
         file.sold.append(SoldRecord(productID: key.productID, finish: key.finish, count: count, name: name, day: day,
                                     price: price?.amount, priceIsLow: price?.isLow ?? false))
         return file

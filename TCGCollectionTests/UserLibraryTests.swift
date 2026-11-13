@@ -670,7 +670,8 @@ struct UserLibraryTests {
 
     /// Review Focus 3: a sale while another device's file waits in the queue is made on the rows on screen and written
     /// first; the reload then reads our file (the last writer wins), so the copies are sold once. A reload that already
-    /// ran leaves its rows: a sale is then made on them, never on more copies than they own.
+    /// ran leaves its rows (for sale clamped to them in memory): a sale is then made on them, never on more copies than
+    /// they own.
     @MainActor @Test(.timeLimit(.minutes(1))) func aSaleWhileAReloadIsQueuedIsWrittenFirst() async throws {
         let dir = tempDir(), file = dir.appending(path: "riftbound.json")
         let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
@@ -690,14 +691,14 @@ struct UserLibraryTests {
         #expect(lib.sold(game: "riftbound") == stored.sold)
 
         // A phase 2B device lowers the owned count to 1 and keeps the for-sale count (an unknown key there): the reload
-        // takes that file as it is, and only 1 copy can be sold.
+        // clamps for sale to 1 in memory, and only 1 copy can be sold.
         lib.setCount(3, game: "riftbound", key: riftFoil, name: "A")
         lib.setForSale(3, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
         other = try storedFile(dir, "riftbound")
         other.collection = [.init(productID: 721334, finish: "Foil", count: 1, condition: "", name: "A")]
         try UserFiles.write(try other.data(), to: file)
         await lib.fileChanged(file)?.value
-        #expect(lib.count(game: "riftbound", key: riftFoil) == 1); #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 3)
+        #expect(lib.count(game: "riftbound", key: riftFoil) == 1); #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 1)
         #expect(!lib.sell(2, game: "riftbound", key: riftFoil, price: nil))
         #expect(lib.sell(1, game: "riftbound", key: riftFoil, price: nil))
         await lib.flush()
@@ -743,20 +744,59 @@ struct UserLibraryTests {
         #expect(try storedFile(dir, "riftbound").forSale == lib.forSale(game: "riftbound"))
     }
 
-    /// Review Focus 2: a file whose for-sale count is over its owned count is read as it is and not written by the read;
-    /// the next change of that game, of any list, clamps it, and says so.
-    @MainActor @Test func aFileOverTheCollectionIsClampedAtTheNextChange() async throws {
+    /// Review Focus 2, fix round 1: a file whose for-sale count is over its owned count is clamped in memory when it is
+    /// loaded, and said; the load writes nothing. The next change of that game, of any list, writes the clamped list and
+    /// says nothing more.
+    @MainActor @Test func aFileOverTheCollectionIsClampedInMemoryAtLoad() async throws {
         let dir = tempDir(), file = dir.appending(path: "riftbound.json")
         let onDisk = Data(#"{"collection":[{"productID":721334,"finish":"Foil","count":2}],"forSale":[{"productID":721334,"finish":"Foil","count":5}],"version":1}"#.utf8)
         try onDisk.write(to: file)
         let lib = UserLibrary(folder: dir, watcher: nil); await lib.load(); await lib.flush()
-        #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 5)
-        #expect(lib.saleNotice == nil); #expect(try Data(contentsOf: file) == onDisk)
-        lib.setWanted(1, game: "riftbound", cardKey: "x", name: "X")
         #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 2)
         #expect(lib.saleNotice == "3 copies are no longer for sale.")
+        #expect(try Data(contentsOf: file) == onDisk); #expect(!lib.hasPendingWork)
+        lib.clearSaleNotice()
+        lib.setWanted(1, game: "riftbound", cardKey: "x", name: "X")
+        #expect(lib.saleNotice == nil)
         await lib.flush()
         #expect(try storedFile(dir, "riftbound").forSale.map(\.count) == [2])
+    }
+
+    /// Fix round 1: a reload of a file with more for sale than owned (a phase 2B device lowered the owned count) clamps
+    /// for sale in memory, says so and bumps `version`, and writes nothing. The next change of another card writes the
+    /// clamped list, with no second notice. A refused file is not clamped (it is not shown).
+    @MainActor @Test func aReloadOverTheCollectionIsClampedInMemoryOnly() async throws {
+        let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")
+        let lib = UserLibrary(folder: dir, watcher: watcher); await lib.load()
+        lib.setCount(3, game: "riftbound", key: riftFoil, name: "A")
+        lib.setForSale(3, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        var other = try storedFile(dir, "riftbound")
+        other.collection = [.init(productID: 721334, finish: "Foil", count: 1, condition: "", name: "A")]
+        let onDisk = try other.data()
+        try UserFiles.write(onDisk, to: file)                                     // owned 1, for sale 3
+        let before = lib.version
+        await watcher.fire(file)
+        #expect(lib.count(game: "riftbound", key: riftFoil) == 1); #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 1)
+        #expect(lib.saleNotice == "2 copies are no longer for sale."); #expect(lib.version > before)
+        #expect(!lib.hasPendingWork); #expect(try Data(contentsOf: file) == onDisk)
+        // The same file reported again (the presenter can report one change more than once): nothing new to say.
+        lib.clearSaleNotice()
+        let same = lib.version
+        await watcher.fire(file)
+        #expect(lib.saleNotice == nil); #expect(lib.version == same); #expect(lib.forSaleCount(game: "riftbound", key: riftFoil) == 1)
+        lib.setWanted(1, game: "riftbound", cardKey: "other", name: "Other")
+        #expect(lib.saleNotice == nil)                                            // no second notice
+        await lib.flush()
+        let stored = try storedFile(dir, "riftbound")
+        #expect(stored.forSale == [SaleEntry(productID: 721334, finish: "Foil", count: 1, name: "A")])
+        #expect(stored.wanted.map(\.cardKey) == ["other"])
+
+        let refused = Data(#"{"version":2,"collection":[],"forSale":[{"productID":721334,"finish":"Foil","count":3}]}"#.utf8)
+        lib.clearSaleNotice()
+        try UserFiles.write(refused, to: file)
+        await watcher.fire(file)
+        #expect(lib.saleNotice == nil); #expect(lib.forSale(game: "riftbound").isEmpty)
+        #expect(try Data(contentsOf: file) == refused)
     }
 
     /// A reload that changes only a list bumps `version`, so views read it again.

@@ -23,17 +23,21 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
     let object: [String: Any]
     let collection: RawList<PrintingKey>
     let wanted: RawList<String>
+    /// The wanted cards whose object has a pin this build cannot read (one of the two keys, or one of the wrong type):
+    /// the entry reads as unpinned, and those keys are written back until the pin is set or cleared.
+    let unreadablePins: Set<String>
     let forSale: RawList<PrintingKey>
     /// The sold log is never merged, so two records can be equal: each parsed record keeps its object, in file order.
     let sold: [(record: SoldRecord, object: [String: Any])]
     let soldUnparseable: [Any]
 
     init(_ object: [String: Any], collection: RawList<PrintingKey> = .init(), wanted: RawList<String> = .init(),
-         forSale: RawList<PrintingKey> = .init(), sold: [(record: SoldRecord, object: [String: Any])] = [],
-         soldUnparseable: [Any] = []) {
+         unreadablePins: Set<String> = [], forSale: RawList<PrintingKey> = .init(),
+         sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = []) {
         self.object = object
         self.collection = collection
         self.wanted = wanted
+        self.unreadablePins = unreadablePins
         self.forSale = forSale
         self.sold = sold
         self.soldUnparseable = soldUnparseable
@@ -46,16 +50,21 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 ///   has an entry, so a phase 2B file keeps its bytes through a read and a rewrite.
 /// - Each entry keeps the keys this app does not know; entries that cannot be parsed are kept, in their order, after
 ///   the parsed ones. Wanted and for-sale entries of one key are merged on read, as collection rows are; sold records
-///   never are.
+///   never are, and a sold record with any key of its own this build cannot read is kept whole, unparsed (never edited).
+/// - A wanted entry's pin this build cannot read reads as no pin and is written back until the pin is set or cleared.
 /// - A for-sale count over the owned count is read as it is (Review Focus 2); `UserLibrary` clamps it at the next change.
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
 
     var collection: [CollectionRow]
-    var wanted: [WantedEntry]
+    var wanted: [WantedEntry] {
+        didSet { notePinChanges(from: oldValue) }
+    }
     var forSale: [SaleEntry]
     var sold: [SoldRecord]
     private let raw: JSONObjectBox
+    /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
+    private var pinsChanged: Set<String> = []
 
     init() {
         collection = []
@@ -96,9 +105,15 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         self.wanted = cleanWanted
         self.forSale = cleanForSale
         self.sold = sold.parsed.map { $0.0 }
+        let unreadablePins = Set(cleanWanted.compactMap { entry -> String? in
+            let object = wantedObjects[entry.cardKey] ?? [:]
+            let hasPinKey = object["pinProductID"] != nil || object["pinFinish"] != nil
+            return hasPinKey && entry.pin == nil ? entry.cardKey : nil
+        })
         raw = JSONObjectBox(object,
                             collection: RawList(objects: rowObjects, unparseable: rows.unparseable),
                             wanted: RawList(objects: wantedObjects, unparseable: wanted.unparseable),
+                            unreadablePins: unreadablePins,
                             forSale: RawList(objects: saleObjects, unparseable: forSale.unparseable),
                             sold: sold.parsed.map { (record: $0.0, object: $0.1) },
                             soldUnparseable: sold.unparseable)
@@ -119,8 +134,12 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             return (record, unusedSold.remove(at: i).object)
         }
         let lists: [(String, [Any])] = [
-            ("wanted", try Self.objects(wanted.map { ($0, raw.wanted.objects[$0.cardKey]) }, owned: WantedEntry.storedKeys,
-                                        encoder: encoder) + raw.wanted.unparseable),
+            ("wanted", try wanted.map { entry in
+                // An unreadable pin nobody set or cleared is not this entry's to drop.
+                let keepsPin = raw.unreadablePins.contains(entry.cardKey) && !pinsChanged.contains(entry.cardKey)
+                let owned = keepsPin ? WantedEntry.storedKeys.subtracting(["pinProductID", "pinFinish"]) : WantedEntry.storedKeys
+                return try Self.objects([(entry, raw.wanted.objects[entry.cardKey])], owned: owned, encoder: encoder)[0]
+            } + raw.wanted.unparseable),
             ("forSale", try Self.objects(forSale.map { ($0, raw.forSale.objects[$0.key]) }, owned: SaleEntry.storedKeys,
                                          encoder: encoder) + raw.forSale.unparseable),
             ("sold", try Self.objects(soldPairs, owned: SoldRecord.storedKeys, encoder: encoder) + raw.soldUnparseable),
@@ -139,9 +158,22 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         collection == other.collection && wanted == other.wanted && forSale == other.forSale && sold == other.sold
     }
 
-    /// Equal lists, and equal keys this app does not know. A copy of one read file differs only by its lists.
+    /// Equal lists, and equal keys this app does not know. A copy of one read file differs only by its lists (and by the
+    /// unreadable pins set or cleared since).
     static func == (lhs: GameUserFile, rhs: GameUserFile) -> Bool {
-        lhs.hasSameLists(as: rhs) && (lhs.raw === rhs.raw || (try? lhs.data()) == (try? rhs.data()))
+        lhs.hasSameLists(as: rhs)
+            && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged) || (try? lhs.data()) == (try? rhs.data()))
+    }
+
+    /// Notes the cards with an unreadable pin whose pin fields changed (set or cleared) in this change of `wanted`.
+    private mutating func notePinChanges(from old: [WantedEntry]) {
+        guard !raw.unreadablePins.isEmpty else { return }
+        for entry in wanted where raw.unreadablePins.contains(entry.cardKey) && !pinsChanged.contains(entry.cardKey) {
+            guard let before = old.first(where: { $0.cardKey == entry.cardKey }) else { continue }
+            if before.pinProductID != entry.pinProductID || before.pinFinish != entry.pinFinish {
+                pinsChanged.insert(entry.cardKey)
+            }
+        }
     }
 
     // MARK: Writing
@@ -218,6 +250,12 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         return number.intValue
     }
 
+    /// A JSON `true` or `false`; not a number.
+    private static func boolean(_ value: Any) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
     /// A JSON number; not a boolean. JSONSerialization reads a number of many digits (`0.070000000000000007`, as a phase 2B
     /// build rewrites `0.07`) as an NSDecimalNumber, whose `doubleValue` is off (`0.07000000000000003`): its text is read
     /// as a Double instead, which gives the number that was written.
@@ -257,13 +295,21 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         return SaleEntry(productID: productID, finish: finish(rawFinish), count: count, name: o["name"] as? String ?? "")
     }
 
-    /// Read as written: a record is never edited, not even its finish.
+    /// Read as written: a record is never edited, not even its finish. Every key of its own must be there and readable
+    /// (`price` may be absent); otherwise the record is not parsed and is kept whole, as written.
     private static func soldRecord(_ o: [String: Any]) -> SoldRecord? {
         guard let productID = o["productID"].flatMap(integer),
               let finish = o["finish"] as? String,
               let count = o["count"].flatMap(integer),
-              let day = o["day"] as? String else { return nil }
-        return SoldRecord(productID: productID, finish: finish, count: count, name: o["name"] as? String ?? "", day: day,
-                          price: o["price"].flatMap(number), priceIsLow: o["priceIsLow"] as? Bool ?? false)
+              let name = o["name"] as? String,
+              let day = o["day"] as? String,
+              let priceIsLow = o["priceIsLow"].flatMap(boolean) else { return nil }
+        var price: Double?
+        if let value = o["price"] {
+            guard let number = number(value) else { return nil }
+            price = number
+        }
+        return SoldRecord(productID: productID, finish: finish, count: count, name: name, day: day, price: price,
+                          priceIsLow: priceIsLow)
     }
 }

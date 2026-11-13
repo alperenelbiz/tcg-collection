@@ -301,6 +301,51 @@ struct GameUserFileTests {
         #expect(String(decoding: try back.data(), as: UTF8.self).contains("\"price\" : 0.07,"))
     }
 
+    /// Fix round 1: a sold record is never edited. A record with a key of its own that this build cannot read (a price as
+    /// text or null, `priceIsLow` as a number or missing, `name` as a number) is kept as it is, raw, after the records
+    /// read; a record with every key right is read.
+    @Test func aSoldRecordWithAnUnreadableKeyIsKeptRaw() throws {
+        let json = #"{"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":"12.50","priceIsLow":false},{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","priceIsLow":1},{"productID":1,"finish":"Normal","count":1,"name":5,"day":"2026-11-13","priceIsLow":false},{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":null,"priceIsLow":false},{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13"},{"productID":2,"finish":"Normal","count":1,"name":"B","day":"2026-11-13","price":2,"priceIsLow":true}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.sold == [SoldRecord(productID: 2, finish: "Normal", count: 1, name: "B", day: "2026-11-13", price: 2, priceIsLow: true)])
+        file.sold.append(SoldRecord(productID: 3, finish: "Normal", count: 1, name: "C", day: "2026-11-14", price: nil, priceIsLow: false))
+        let sold = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sold"] as! [[String: Any]]
+        #expect(sold.count == 7)
+        #expect(sold[0]["productID"] as? Int == 2); #expect(sold[1]["productID"] as? Int == 3)
+        #expect(sold[2]["price"] as? String == "12.50")
+        #expect(sold[3]["priceIsLow"] as? Int == 1); #expect(sold[3]["priceIsLow"] as? Bool != false)
+        #expect(sold[4]["name"] as? Int == 5)
+        #expect(sold[5]["price"] is NSNull)
+        #expect(Set(sold[6].keys) == ["productID", "finish", "count", "name", "day"])
+        #expect(try GameUserFile(data: try file.data()) == file)
+    }
+
+    /// Fix round 1: a half pin (one of the two pin keys, or one of the wrong type) reads as no pin, and its keys stay in
+    /// the file through other changes until the pin is set or cleared.
+    @Test func aHalfPinIsKeptUntilThePinIsSetOrCleared() throws {
+        let json = #"{"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":3},{"cardKey":"b","name":"B","count":1,"pinProductID":"3","pinFinish":"Foil"},{"cardKey":"c","name":"C","count":1,"pinFinish":"Foil"},{"cardKey":"d","name":"D","count":1,"pinProductID":4,"pinFinish":"Foil"}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.wanted.map(\.pin) == [nil, nil, nil, PrintingKey(productID: 4, finish: "Foil")])
+        #expect(file.wanted.prefix(3).allSatisfy { $0.pinProductID == nil && $0.pinFinish == nil })
+        for i in file.wanted.indices { file.wanted[i].count = 2 }                // a change elsewhere on each entry
+        var entries = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["wanted"] as! [[String: Any]]
+        #expect(entries[0]["pinProductID"] as? Int == 3); #expect(entries[0]["pinFinish"] == nil)
+        #expect(entries[1]["pinProductID"] as? String == "3"); #expect(entries[1]["pinFinish"] as? String == "Foil")
+        #expect(entries[2]["pinProductID"] == nil); #expect(entries[2]["pinFinish"] as? String == "Foil")
+        #expect(entries.map { $0["count"] as? Int } == [2, 2, 2, 2])
+        #expect(try GameUserFile(data: try file.data()).wanted.map(\.pin) == file.wanted.map(\.pin))
+        // Set on a; set then cleared on b; cleared on d (a whole pin): the half pins of a and b are gone, c keeps its own.
+        file.wanted = ListRules.pinning(file.wanted, cardKey: "a", to: .init(productID: 7, finish: "Normal"))
+        file.wanted = ListRules.pinning(file.wanted, cardKey: "b", to: .init(productID: 8, finish: "Foil"))
+        file.wanted = ListRules.pinning(file.wanted, cardKey: "b", to: nil)
+        file.wanted = ListRules.pinning(file.wanted, cardKey: "d", to: nil)
+        entries = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["wanted"] as! [[String: Any]]
+        #expect(entries[0]["pinProductID"] as? Int == 7); #expect(entries[0]["pinFinish"] as? String == "Normal")
+        #expect(entries[1]["pinProductID"] == nil); #expect(entries[1]["pinFinish"] == nil)
+        #expect(entries[2]["pinFinish"] as? String == "Foil")
+        #expect(entries[3]["pinProductID"] == nil); #expect(entries[3]["pinFinish"] == nil)
+    }
+
     /// The sold log is never merged: two equal records stay two, each with its own unknown keys.
     @Test func soldRecordsAreNeverMerged() throws {
         let json = #"{"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","priceIsLow":false,"n":1},{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","priceIsLow":false,"n":2}]}"#

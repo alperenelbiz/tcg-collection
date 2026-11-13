@@ -163,7 +163,8 @@ final class AppModel {
     private(set) var readsImport = false
     /// Tests only: runs on the main actor before a picked file is read, so a test can act while the read is in progress.
     @ObservationIgnored var beforeImportRead: (@MainActor (URL) async -> Void)?
-    private static let noticeDuration = Duration.seconds(20)
+    /// How long a status notice stays (`say`). Tests shorten it.
+    @ObservationIgnored var noticeDuration = Duration.seconds(20)
 
     #if DEBUG
     nonisolated static let isDebugBuild = true
@@ -484,8 +485,9 @@ final class AppModel {
     private func say(_ text: String) {
         noticeTask?.cancel()
         statusNotice = text
+        let duration = noticeDuration
         noticeTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.noticeDuration)
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self, self.statusNotice == text else { return }
             self.statusNotice = nil
         }
