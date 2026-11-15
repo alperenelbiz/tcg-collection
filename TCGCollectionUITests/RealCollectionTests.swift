@@ -435,4 +435,271 @@ final class RealCollectionTests: UITestCase {
         let dash = try XCTUnwrap(key.firstIndex(of: "-"), key)
         return (try XCTUnwrap(Int(key[..<dash]), key), String(key[key.index(after: dash)...]))
     }
+
+    // MARK: A deck (phase 3A task 8)
+
+    /// The section names of Riftbound's one format (`GameDecks.riftbound`), by id: the deck page's section titles.
+    private static let riftboundSections = ["legend": "Legend", "champion": "Champion", "main": "Main Deck", "runes": "Runes",
+                                            "battlefields": "Battlefields", "sideboard": "Sideboard"]
+
+    /// The paste's counts: five card lines and one misspelt line, 55 copies, so the deck holds 60 with the five cards added
+    /// from the search (rule checks warn and never block: the copy limit's warning is expected).
+    private static let pastedCounts = [9, 9, 9, 9, 9, 10]
+
+    /// A deck on a real Riftbound collection, offline (D7–D11, A14, A16). Skipped unless `TCG_REAL_STORE` is set and its root
+    /// has `user/riftbound.json`; the file must hold no deck (else it fails at once: give it a fresh copy each run). Three launches:
+    /// 1. The Collection: the names of its first 11 distinct cards, read from the cells' labels (never constants). "New
+    ///    Deck…" → Create: an empty deck, not active. "Add cards": the first five names searched one after the other, `+`
+    ///    once on each card's cell. The file: one deck, five cards of one copy.
+    /// 2. `-pasteDeck` on that deck with a text the test writes into its own temporary folder: the next five names (9 copies each) and the
+    ///    eleventh with its third letter dropped (10 copies). Read: one line not recognised; its first suggestion is picked
+    ///    (whether it is the card the line came from is recorded, not asserted); "Add to Deck". The file: 60 cards; the deck
+    ///    page's subtitle and section titles agree with it.
+    /// 3. The deck page again: how long until its sections show (the first join, from outside), and one `+` click on a cell
+    ///    until its new count shows, then `−` back.
+    /// After the last quit: `collection`, `wanted`, `forSale` and `sold` as before, one deck of 60 cards. The byte comparison
+    /// of those four lists before and after is a step outside the test (the report's "Decks, phase 3A check"). One text
+    /// attachment keeps the times (`real-deck-timings`).
+    func testADeckOnTheRealCollection() throws {
+        let root = try realStoreRoot()
+        let file = root.appending(path: "user").appending(path: "riftbound.json")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            throw XCTSkip("\(file.path) is not there: this test runs on a root whose Riftbound collection is imported")
+        }
+        let initial = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any], file.path)
+        XCTAssertTrue((initial["decks"] as? [Any])?.isEmpty ?? true, "\(file.path) has decks: give the test a fresh copy")
+        // The sandboxed test runner cannot write into the root (macOS refuses with "You don't have permission"); the app,
+        // which has no sandbox, reads the text from the runner's own temporary folder.
+        let pasteFile = FileManager.default.temporaryDirectory.appending(path: "deck-check-paste-\(UUID().uuidString).txt")
+        let bytesBefore = try Data(contentsOf: file).count
+        var times: [String] = []
+        let seconds = { (from: Date) in String(format: "%.1f s", Date().timeIntervalSince(from)) }
+
+        // 1. Names from the Collection, a new deck, five cards from "Add cards".
+        var app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        let rows = try storedCollection(game: "riftbound")
+        XCTAssertTrue(waitUntil(timeout: 60) { app.windows.firstMatch.title.hasSuffix(" " + self.totals(rows)) },
+                      app.windows.firstMatch.title)
+        let names = try collectionNames(app, count: 11)
+        let newDeck = element(app, "sidebar-new-deck")
+        XCTAssertTrue(waitUntil { newDeck.exists && newDeck.isEnabled }, "New Deck… is off")
+        newDeck.click()
+        XCTAssertTrue(element(app, "new-deck-sheet").waitForExistence(timeout: 5), "no New Deck sheet")
+        element(app, "new-deck-create").click()
+        let addCards = element(app, "deck-empty-add-cards")
+        XCTAssertTrue(addCards.waitForExistence(timeout: 10), "the new deck is not empty, or its page did not open")
+        var decks: [[String: Any]] = []
+        XCTAssertTrue(waitUntil { decks = self.storedDecks(); return decks.count == 1 }, "\(decks)")
+        let deckID = try XCTUnwrap(decks.first?["id"] as? String)
+        XCTAssertEqual(decks.first?["active"] as? Bool, false, "a new deck is active")
+        addCards.click()
+        XCTAssertTrue(element(app, "deck-add-screen").waitForExistence(timeout: 10), "no deck search")
+        var searched: [String] = []                              // the card keys added from the search
+        for name in names.prefix(5) {
+            let key = try addFromSearch(app, name: name)
+            searched.append(key)
+            XCTAssertTrue(waitUntil { self.deckCount(self.storedDecks()) == searched.count },
+                          "the file does not hold \(searched.count) cards: \(self.storedDecks())")
+        }
+        shot("real-deck-1-search")
+        app.toolbars.buttons["Back"].firstMatch.click()
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10), "Back did not show the deck")
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.contains(" 5 cards") }, app.windows.firstMatch.title)
+        quit(app)
+        XCTAssertEqual(Set(cards(of: storedDecks()).map(\.key)), Set(searched))
+
+        // 2. A paste into the deck: five names and one misspelt.
+        let misspelt = try XCTUnwrap(Self.withoutThirdLetter(names[10]), names[10])
+        let pasted = Array(names[5..<10]) + [misspelt]
+        let pasteText = zip(Self.pastedCounts, pasted).map { "\($0) \($1)" }.joined(separator: "\n") + "\n"
+        try Data(pasteText.utf8).write(to: pasteFile)
+        var launched = Date()
+        app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "deck:\(deckID)", "-pasteDeck", pasteFile.path])
+        let sheet = element(app, "paste-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 30), "no paste sheet")
+        let read = element(app, "paste-read")
+        XCTAssertTrue(waitUntil(timeout: 30) { read.isEnabled }, "Read stays off")
+        let readClicked = Date()
+        read.click()
+        let summary = element(app, "paste-summary")
+        XCTAssertTrue(waitUntil(timeout: 60) { summary.exists }, "no table")
+        times.append("Read -> the table (6 lines, 1 misspelt): \(seconds(readClicked))")
+        let unknown = element(app, "paste-unknown-6")
+        XCTAssertTrue(unknown.waitForExistence(timeout: 5), "the misspelt line is not unknown: \(text(summary))")
+        XCTAssertEqual(text(element(app, "paste-unknown-count")), "1 line not recognised: pick a name or drop the line.")
+        shot("real-deck-2-paste-table", of: sheet)
+        unknown.click()
+        let firstSuggestion = unknown.menuItems.firstMatch
+        XCTAssertTrue(firstSuggestion.waitForExistence(timeout: 5), "no menu")
+        let suggested = firstSuggestion.title
+        XCTAssertNotEqual(suggested, "No near names in the catalog", "no suggestion for \(misspelt)")
+        XCTAssertNotEqual(suggested, "Drop this line", "no suggestion for \(misspelt)")
+        shot("real-deck-3-suggestions")
+        firstSuggestion.click()
+        let apply = element(app, "paste-apply")
+        XCTAssertTrue(waitUntil { apply.isEnabled }, "Add to Deck stays off")
+        XCTAssertEqual(text(element(app, "paste-note-6")), "as written: \(misspelt)")
+        XCTAssertEqual(text(summary), "55 cards on 6 lines")
+        times.append("misspelt \"\(misspelt)\" for \"\(names[10])\": first suggestion \"\(suggested)\" "
+                     + "(\(suggested == names[10] ? "the right card" : "another card"))")
+        apply.click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        XCTAssertTrue(waitUntil { self.deckCount(self.storedDecks()) == 60 }, "\(storedDecks())")
+        try assertDeckPage(app)
+        shot("real-deck-4-deck")
+        quit(app)
+
+        // 3. The deck page's first join, and one `+` click.
+        launched = Date()
+        app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "deck:\(deckID)"])
+        let stored = cards(of: storedDecks())
+        let target = try XCTUnwrap(stored.first)
+        let sectionTitle = element(app, "deck-section-\(target.section)")
+        XCTAssertTrue(waitUntil(timeout: 60) { sectionTitle.exists && app.windows.firstMatch.title.contains(" 60 cards") },
+                      app.windows.firstMatch.title)
+        times.append("launch -> the deck page's section title and subtitle (60 cards, \(stored.count) lines): \(seconds(launched))")
+        let suffix = "\(target.key)-\(target.section)"
+        // A group's cells are in a lazy grid: the cell exists once it is scrolled near the window.
+        let cell = reveal(app, "deck-cell-\(suffix)")
+        XCTAssertTrue(waitUntil(timeout: 60) { cell.isEnabled }, "\(suffix) is not a link: the join did not end")
+        times.append("launch -> the cell scrolled into the window and a link (the join ended): \(seconds(launched))")
+        let plus = reveal(app, "deck-cell-plus-\(suffix)")
+        let value = element(app, "deck-cell-value-\(suffix)")
+        XCTAssertEqual(text(value), "\(target.count)")
+        let clicked = Date()
+        plus.click()
+        XCTAssertTrue(waitUntil { self.text(value) == "\(target.count + 1)" }, text(value))
+        times.append("+ click -> the new count on a 60-card deck: \(seconds(clicked))")
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.contains(" 61 cards") }, app.windows.firstMatch.title)
+        element(app, "deck-cell-minus-\(suffix)").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "\(target.count)" }, text(value))
+        XCTAssertTrue(waitUntil { self.deckCount(self.storedDecks()) == 60 }, "\(storedDecks())")
+        try assertDeckPage(app)
+        quit(app)
+
+        // After the last quit: one deck of 60 cards, the other lists as before.
+        let final = try XCTUnwrap(storedUserFile(game: "riftbound"))
+        for list in ["collection", "wanted", "forSale", "sold"] {
+            XCTAssertEqual(final[list] as? NSArray, initial[list] as? NSArray, "\(list) changed")
+        }
+        XCTAssertEqual(storedDecks().count, 1)
+        XCTAssertEqual(deckCount(storedDecks()), 60)
+        try? FileManager.default.removeItem(at: pasteFile)
+        times.append("riftbound.json: \(bytesBefore) bytes before, \(try Data(contentsOf: file).count) bytes after")
+        let report = times.joined(separator: "\n")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "real-deck-timings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print("RealCollectionTests deck\n\(report)")
+    }
+
+    /// The Collection's first `count` distinct card names in reading order, from the cells' labels (`<product name>, ×<n>,
+    /// …`): the product name without its trailing brackets (`Calm Rune (R02a)` → `Calm Rune`). Scrolls the gallery while
+    /// it needs more.
+    private func collectionNames(_ app: XCUIApplication, count: Int) throws -> [String] {
+        var names: [String] = []
+        let cells = collectionCells(app)
+        XCTAssertTrue(waitUntil(timeout: 30) { cells.count > 0 }, "no Collection cell")
+        for _ in 0..<40 where names.count < count {
+            for identifier in identifiersInOrder(cells) {
+                let label = app.buttons[identifier].label
+                guard let end = label.range(of: ", ×") else { continue }
+                let name = Self.withoutBrackets(String(label[..<end.lowerBound]))
+                if !names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { names.append(name) }
+            }
+            // The gallery's scroll view is not found by its identifier on every run: a cell's scroll moves its gallery.
+            if names.count < count, let shown = cells.allElementsBoundByIndex.last(where: \.isHittable) {
+                shown.scroll(byDeltaX: 0, deltaY: -300)
+            }
+        }
+        XCTAssertGreaterThanOrEqual(names.count, count, "\(names)")
+        return Array(names.prefix(count))
+    }
+
+    /// Searches `name` in the deck's search (the field emptied first), clicks `+` once under the cell whose label starts
+    /// with the name, waits for its count 1, and returns the card key (from the cell's identifier).
+    private func addFromSearch(_ app: XCUIApplication, name: String) throws -> String {
+        let field = searchField(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no search field")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(name)
+        let cell = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'card-cell-' AND label BEGINSWITH %@",
+                                                                        name + ", ")).firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "no result for \(name): \(identifiers(cardCells(app)))")
+        let key = String(cell.identifier.dropFirst("card-cell-".count))
+        let plus = element(app, "deck-add-plus-\(key)")
+        XCTAssertTrue(waitUntil(timeout: 20) { plus.exists && plus.isEnabled }, "+ of \(key) is off")
+        plus.click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-add-value-\(key)")) == "1" },
+                      text(element(app, "deck-add-value-\(key)")))
+        return key
+    }
+
+    /// The deck page's subtitle and section titles against the file: `<n> cards` and `<Section> · <n>` per section the
+    /// deck uses.
+    private func assertDeckPage(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
+        let stored = cards(of: storedDecks())
+        let total = stored.reduce(0) { $0 + $1.count }
+        let window = app.windows.firstMatch
+        XCTAssertTrue(waitUntil(timeout: 30) { window.title.contains(" – \(total) cards") }, "\(window.title), not \(total) cards",
+                      file: file, line: line)
+        var bySection: [String: Int] = [:]
+        for card in stored { bySection[card.section, default: 0] += card.count }
+        for (section, count) in bySection {
+            let name = Self.riftboundSections[section] ?? section
+            let title = element(app, "deck-section-\(section)")
+            XCTAssertTrue(waitUntil { self.text(title) == "\(name) · \(count)" }, "\(self.text(title)), not \(name) · \(count)",
+                          file: file, line: line)
+        }
+    }
+
+    /// The decks of the running root's Riftbound file as the app wrote them; [] without.
+    private func storedDecks() -> [[String: Any]] {
+        (((try? storedUserFile(game: "riftbound")) ?? nil)?["decks"] as? [[String: Any]]) ?? []
+    }
+
+    /// The cards of the first deck: card key, section, count.
+    private func cards(of decks: [[String: Any]]) -> [(key: String, section: String, count: Int)] {
+        ((decks.first?["cards"] as? [[String: Any]]) ?? []).map {
+            ($0["cardKey"] as? String ?? "", $0["section"] as? String ?? "", $0["count"] as? Int ?? 0)
+        }
+    }
+
+    /// The copies of the first deck.
+    private func deckCount(_ decks: [[String: Any]]) -> Int {
+        cards(of: decks).reduce(0) { $0 + $1.count }
+    }
+
+    /// The element `identifier` of the deck page, scrolled into the window (a group's cells are in a lazy grid).
+    private func reveal(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        let target = element(app, identifier), page = element(app, "deck-screen")
+        for _ in 0..<30 where !(target.exists && target.isHittable) {
+            page.scroll(byDeltaX: 0, deltaY: -120)
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(identifier) is not in the window")
+        return target
+    }
+
+    /// A name without its trailing bracket groups (`Calm Rune (R02a)` → `Calm Rune`).
+    private static func withoutBrackets(_ name: String) -> String {
+        var name = name.trimmingCharacters(in: .whitespaces)
+        while name.hasSuffix(")"), let open = name.range(of: " (", options: .backwards) {
+            name = String(name[..<open.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        return name
+    }
+
+    /// The misspelling of the check: the name without its third letter (`Calm Rune` → `Cam Rune`); nil with fewer than four
+    /// letters.
+    private static func withoutThirdLetter(_ name: String) -> String? {
+        guard name.count(where: \.isLetter) >= 4 else { return nil }
+        var letters = 0
+        for index in name.indices where name[index].isLetter {
+            letters += 1
+            if letters == 3 { return String(name[..<index]) + String(name[name.index(after: index)...]) }
+        }
+        return nil
+    }
 }
