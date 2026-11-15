@@ -22,8 +22,30 @@ nonisolated struct DeckFormat: Sendable, Hashable, Identifiable {
     let copyLimit: Int?
     /// The section ids whose cards count toward the copy limit together.
     let countedSections: [String]
+    /// Size rules over more than one section (Commander's 100 with the commander). Empty for most formats.
+    let totals: [DeckTotal]
+
+    init(id: String, name: String, sections: [DeckSection], copyLimit: Int?, countedSections: [String],
+         totals: [DeckTotal] = []) {
+        self.id = id
+        self.name = name
+        self.sections = sections
+        self.copyLimit = copyLimit
+        self.countedSections = countedSections
+        self.totals = totals
+    }
 
     func section(_ id: String) -> DeckSection? { sections.first { $0.id == id } }
+}
+
+/// A size rule over several sections together: the official number counts cards that the approved table splits into two
+/// sections. A nil bound is no rule.
+nonisolated struct DeckTotal: Sendable, Hashable {
+    let sections: [String]
+    let min: Int?
+    let max: Int?
+    /// What a warning calls these sections together: "Commander deck", "Main Deck with its Champion".
+    let name: String
 }
 
 /// A flag of `CardKind` that sends a card to a section by default, when the format has that section.
@@ -86,12 +108,13 @@ nonisolated enum GameDecks {
         kind: { CardKinds.yugioh(cardType: $0, ygoType: $1) })
 
     /// Comprehensive Rules 903 and 702.124 (Commander), 100.2a and 100.4a (Constructed). Commander's 100 cards include
-    /// one or two commanders, so the Deck section holds 98 or 99; the Commander section is filled by hand.
+    /// its one or two commanders: a total over both sections. The Commander section is filled by hand.
     static let magic = DeckDefinition(
         formats: [DeckFormat(id: "commander", name: "Commander",
                              sections: [section("commander", "Commander", min: 1, max: 2, byHand: true),
-                                        section("deck", "Deck", min: 98, max: 99)],
-                             copyLimit: 1, countedSections: ["commander", "deck"]),
+                                        section("deck", "Deck")],
+                             copyLimit: 1, countedSections: ["commander", "deck"],
+                             totals: [DeckTotal(sections: ["commander", "deck"], min: 100, max: 100, name: "Commander deck")]),
                   DeckFormat(id: "constructed", name: "Constructed",
                              sections: [section("deck", "Deck", min: 60),
                                         section("sideboard", "Sideboard", max: 15, byHand: true)],
@@ -100,17 +123,19 @@ nonisolated enum GameDecks {
         defaults: [],
         kind: { CardKinds.magic(cardType: $0, ygoType: $1) })
 
-    /// Riftbound Core Rules 103 and Tournament Rules 402, 601 (2026-10-09). The Main Deck's 40 include the Chosen
-    /// Champion, which may stand in the Champion section: the Main Deck section alone needs 39.
+    /// Riftbound Core Rules 103 and Tournament Rules 601 (2026-10-09). The Main Deck's "at least 40" include the Chosen
+    /// Champion, which stands in the Champion section: a total over both sections.
     static let riftbound = DeckDefinition(
         formats: [DeckFormat(id: "standard", name: "Standard",
                              sections: [section("legend", "Legend", min: 1, max: 1),
-                                        section("champion", "Champion", max: 1, byHand: true),
-                                        section("main", "Main Deck", min: 39),
+                                        section("champion", "Champion", min: 1, max: 1, byHand: true),
+                                        section("main", "Main Deck"),
                                         section("runes", "Runes", min: 12, max: 12),
                                         section("battlefields", "Battlefields", min: 3, max: 3),
                                         section("sideboard", "Sideboard", max: 10, byHand: true)],
-                             copyLimit: 3, countedSections: ["champion", "main", "sideboard"])],
+                             copyLimit: 3, countedSections: ["champion", "main", "sideboard"],
+                             totals: [DeckTotal(sections: ["champion", "main"], min: 40, max: nil,
+                                                name: "Main Deck with its Champion")])],
         groups: ["Units", "Spells", "Gear", "Legends", "Runes", "Battlefields", CardKind.other],
         defaults: [SectionDefault(flag: CardKind.legend, section: "legend"),
                    SectionDefault(flag: CardKind.rune, section: "runes"),

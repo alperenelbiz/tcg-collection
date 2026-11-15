@@ -6,9 +6,10 @@ does not change them. The numbers are in `TCGCollection/Games/DeckFormat.swift` 
 `TCGCollectionTests/DeckFormatTests.swift`.
 
 A section's bound is a per-section number: a rule warns when one section is under its minimum or over its maximum. A
-minimum of 0 is built as `nil` (no rule). Two official totals span two sections of the approved table (Magic Commander:
-100 with the commander; Riftbound: 40 with the Chosen Champion). Those sections carry the bound that no legal deck
-breaks; see "Derived bounds" and the questions at the end.
+minimum of 0 is built as `nil` (no rule). Two official sizes count cards that the approved table puts in two sections
+(Magic Commander: 100 with the commander; Riftbound: at least 40 with the Chosen Champion). They are built as a total
+over the two sections (`DeckFormat.totals`, `DeckTotal`), and neither section carries a bound of its own; see "Where the
+rules and the approved sections differ". No number in the app is an inference.
 
 ## Yu-Gi-Oh! — format `standard`
 
@@ -49,7 +50,8 @@ Source: Wizards of the Coast, Magic: The Gathering Comprehensive Rules, effectiv
 | Section | Min | Max | By hand | Sentence |
 |---|---|---|---|---|
 | Commander (`commander`) | 1 | 2 | yes | 903.3: "Each deck has a legendary card designated as its commander." 702.124a: "Each partner ability allows you to designate two legendary cards as your commander rather than one." 702.124g: "no partner ability or combination of partner abilities can ever let a player have more than two commanders." |
-| Deck (`deck`) | 98 | 99 | no | Derived from 903.5a: "Each deck must contain exactly 100 cards, including its commander." and 702.124b: "Your deck must contain exactly 100 cards, including its two commanders." |
+| Deck (`deck`) | — | — | no | No number of its own: the 100 below include the commander. |
+| Total "Commander deck" (`commander` + `deck`) | 100 | 100 | — | 903.5a: "Each deck must contain exactly 100 cards, including its commander. In other words, the minimum deck size and the maximum deck size are both 100." 702.124b: "Your deck must contain exactly 100 cards, including its two commanders." |
 
 - Copy limit 1, over Commander + Deck, basic lands exempt. 903.5b: "Other than basic lands, each card in a Commander
   deck must have a different English name."
@@ -69,8 +71,9 @@ riftbound.leagueoflegends.com redirects):
 | Section | Min | Max | By hand | Sentence |
 |---|---|---|---|---|
 | Legend (`legend`) | 1 | 1 | no | CR 103.2: "1 Champion Legend". TR 402.1: "… 1 Legend …" |
-| Champion (`champion`) | — | 1 | yes | CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". TR 402.1: "(including a chosen champion)". One Chosen Champion. |
-| Main Deck (`main`) | 39 | — | no | Derived from CR 103.3 (above): the 40 include the Chosen Champion, which this table can hold in its own section. |
+| Champion (`champion`) | 1 | 1 | yes | CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". CR 103.3.a.1: "This will be placed in the Champion Zone at the start of the game." TR 402.1: "(including a chosen champion)". One Chosen Champion. |
+| Main Deck (`main`) | — | — | no | No number of its own: the 40 below include the Chosen Champion. |
+| Total "Main Deck with its Champion" (`champion` + `main`) | 40 | — | — | CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". |
 | Runes (`runes`) | 12 | 12 | no | CR 103.4.a: "12 Rune Cards". TR 402.1: "12 runes". |
 | Battlefields (`battlefields`) | 3 | 3 | no | CR 487.4.a (and 488–491, every sanctioned mode): "Each player provides three (3) Battlefields, included in their deck during deck building." TR 402.1: "exactly 3 battlefields each with a unique name." |
 | Sideboard (`sideboard`) | — | 10 | yes | TR 601.1.c.1: "A player's sideboard can include 10 or fewer cards." (in competitions where a sideboard is allowed) |
@@ -79,8 +82,8 @@ riftbound.leagueoflegends.com redirects):
   named card." CR 103.3.b.1: "This includes your Chosen Champion." TR 601.1.c.3: "Limits on copies of named cards apply
   to the combination of main deck and sideboard." Runes, the Legend and Battlefields are not Main Deck cards and are not
   counted (`countedSections` = champion, main, sideboard).
-- Main Deck size: CR says "at least 40"; TR 402.1 / 601.1.b says "exactly 40" in competitions. The built rule follows CR
-  (no maximum).
+- Main Deck size, a note: CR 103.3 says "at least 40" (built, no maximum); TR 601.1.b says "In competitions, a player's
+  Main Deck must be exactly 40 cards." (also TR 402.1). The competition number is not built as a bound.
 - Not built (other rules, not numbers of a section): CR 103.3.d, at most 3 Signature cards in total; CR 103.5.c, no two
   Battlefields of one name; domain identity.
 - Card types (for `CardKind`): CR 103.3 names "Units, Gear, and Spells"; the catalog's `Card Type` values (copy of the
@@ -104,15 +107,15 @@ section on deck building (no date on the page; footer "© 2026").
   "It designates the card as a Legend, Unit, Program, or Gear." The catalog's `CardType` values are those four.
 - Not built: the RAM limit ("Cards must stay within the RAM limit set by your Legends").
 
-## Derived bounds
+## Where the rules and the approved sections differ
 
-Two official totals span two sections of the approved table. Each section carries the bound that no legal deck breaks,
-so a warning is never wrong, but an illegal deck can pass without one:
+The sections of spec 5.3 are approved and kept. In three places an official rule counts or names cards differently:
 
-| Format | Official total | Built | A deck that passes without a warning |
-|---|---|---|---|
-| Magic Commander | 100 with 1 or 2 commanders | Commander 1–2, Deck 98–99 | 1 commander + 98 (99 cards); 2 commanders + 99 (101 cards) |
-| Riftbound | Main Deck 40 with the Chosen Champion | Champion ≤ 1, Main Deck ≥ 39 | Champion empty + 39 in the Main Deck |
+| Rule | Sentence | What the app does |
+|---|---|---|
+| Magic Commander, CR 903.5a | "Each deck must contain exactly 100 cards, including its commander." | The commander stands in its own section (Commander, 1–2, by hand only). A total "Commander deck" over Commander + Deck is exactly 100; the Deck section has no bound of its own. |
+| Riftbound, CR 103.3 | "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells" | The Chosen Champion stands in its own section (Champion, exactly 1, by hand only). A total "Main Deck with its Champion" over Champion + Main Deck is at least 40; the Main Deck section has no bound of its own. A Champion Unit still goes to the Main Deck by default (spec 5.3), so the Champion section is under its minimum until the user moves the champion there. |
+| Riftbound, TR 601.1.b | "In competitions, a player's Main Deck must be exactly 40 cards." | Not a bound: the app follows the Core Rules' "at least 40" (no maximum). Recorded as a note. |
 
 ## Not confirmed (built as nil)
 
@@ -123,7 +126,9 @@ so a warning is never wrong, but an illegal deck can pass without one:
 
 ## Questions for Alperen
 
-1. Commander and Riftbound totals (Derived bounds): keep the per-section bounds, or add a total over two sections to the
-   format (for example "Commander + Deck = 100", "Champion + Main Deck ≥ 40") so the warning is exact?
-2. Riftbound Main Deck: "at least 40" (Core Rules, built) or "exactly 40" (Tournament Rules)?
-3. Cyberpunk Side Deck: confirm the number (7 per a fan blog) from the official Tournament Rules, or keep no rule.
+1. Cyberpunk Side Deck size: the official Tournament Rules page could not be read here. A fan blog (gamertagmythras.com,
+   "Cyberpunk TCG tournament rules") says the sideboard is exactly 7 cards; it is not an official source. Until a number
+   comes from WeirdCo's own rules, the Side Deck has no size rule.
+2. Cyberpunk copy limit and the Side Deck: the official gameplay guide says "Use no more than 3 copies of the same card"
+   and does not say whether Side Deck cards count. The same fan blog implies they do; not official. The app counts the
+   Main Deck only.

@@ -36,8 +36,9 @@ struct DeckFormatTests {
 
     @Test func magicNumbers() {
         let commander = magic.format("commander"), constructed = magic.format("constructed")
-        // Commander: 100 cards including one or two commanders (CR 903.5a, 903.3, 702.124a/b): the Deck holds 98 or 99.
-        #expect(shape(commander) == ["commander|Commander|1|2|true", "deck|Deck|98|99|false"])
+        // Commander: one commander, or two with a partner ability (CR 903.3, 702.124a/g); 100 cards with it (903.5a).
+        #expect(shape(commander) == ["commander|Commander|1|2|true", "deck|Deck|-|-|false"])
+        #expect(commander.totals == [DeckTotal(sections: ["commander", "deck"], min: 100, max: 100, name: "Commander deck")])
         #expect(commander.copyLimit == 1); #expect(commander.countedSections == ["commander", "deck"])
         #expect(shape(constructed) == ["deck|Deck|60|-|false", "sideboard|Sideboard|-|15|true"])
         #expect(constructed.copyLimit == 4); #expect(constructed.countedSections == ["deck", "sideboard"])
@@ -45,10 +46,12 @@ struct DeckFormatTests {
 
     @Test func riftboundNumbers() {
         let format = riftbound.format("standard")
-        // The Main Deck's 40 include the Chosen Champion (CR 103.3), which may stand in its own section: 39 here.
-        #expect(shape(format) == ["legend|Legend|1|1|false", "champion|Champion|-|1|true", "main|Main Deck|39|-|false",
+        // The Main Deck's 40 include the Chosen Champion (CR 103.3): a total over both sections, no bound on Main alone.
+        #expect(shape(format) == ["legend|Legend|1|1|false", "champion|Champion|1|1|true", "main|Main Deck|-|-|false",
                                   "runes|Runes|12|12|false", "battlefields|Battlefields|3|3|false",
                                   "sideboard|Sideboard|-|10|true"])
+        #expect(format.totals == [DeckTotal(sections: ["champion", "main"], min: 40, max: nil,
+                                            name: "Main Deck with its Champion")])
         #expect(format.copyLimit == 3); #expect(format.countedSections == ["champion", "main", "sideboard"])
     }
 
@@ -56,6 +59,29 @@ struct DeckFormatTests {
         let format = cyberpunk.format("standard")
         #expect(shape(format) == ["legends|Legends|3|3|false", "main|Main Deck|40|50|false", "side|Side Deck|-|-|true"])
         #expect(format.copyLimit == 3); #expect(format.countedSections == ["main"])
+    }
+
+    @Test func onlyCommanderAndRiftboundHaveTotals() {
+        #expect(yugioh.format("standard").totals.isEmpty); #expect(cyberpunk.format("standard").totals.isEmpty)
+        #expect(magic.format("constructed").totals.isEmpty)
+        for game in Games.all {
+            for format in game.formats {
+                for total in format.totals {
+                    #expect(Set(total.sections).isSubset(of: Set(format.sections.map(\.id))), "\(game.id) \(format.id)")
+                    #expect(total.min != nil || total.max != nil); #expect(!total.name.isEmpty)
+                }
+            }
+        }
+    }
+
+    /// No section bound is an inference from a total any more: 98, 99 and 39 are nowhere.
+    @Test func noDerivedBoundIsLeft() {
+        let bounds = Games.all.flatMap(\.formats).flatMap(\.sections).flatMap { [$0.min, $0.max] }.compactMap { $0 }
+        #expect(!bounds.contains(98)); #expect(!bounds.contains(99)); #expect(!bounds.contains(39))
+    }
+
+    @Test func aFormatWithoutTotalsDefaultsToNone() {
+        #expect(DeckFormat(id: "x", name: "X", sections: [], copyLimit: nil, countedSections: []).totals.isEmpty)
     }
 
     @Test func everySideDeckAndSideboardAndTheChampionAreByHandOnly() {
