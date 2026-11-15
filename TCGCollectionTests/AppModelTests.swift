@@ -515,6 +515,11 @@ struct AppModelTests {
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 0, writtenAt: yesterday, now: evening) == false)
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: yesterday, now: evening))
         #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: morning, now: evening) == false)
+        // An index of an older version (no types) is fetched once, not on the day it was written, and without new sets.
+        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: yesterday, now: evening))
+        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: morning, now: evening) == false)
+        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: nil, now: evening))
+        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: true, newSets: 0, writtenAt: yesterday, now: evening) == false)
     }
 
     @MainActor @Test func theFilterListsAreWrittenAfterASyncAndReadAtTheNextLaunch() async throws {

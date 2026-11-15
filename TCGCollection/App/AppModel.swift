@@ -816,7 +816,7 @@ final class AppModel {
 
     private func refreshYGOIndexIfNeeded(newSets: Int, now: Date) async -> String? {
         let writtenAt = (try? paths.ygoIndex.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        guard Self.needsYGOIndex(hasIndex: ygoIndex != nil, newSets: newSets, writtenAt: writtenAt, now: now) else { return nil }
+        guard Self.needsYGOIndex(hasIndex: ygoIndex != nil, isCurrent: ygoIndex?.isCurrent ?? true, newSets: newSets, writtenAt: writtenAt, now: now) else { return nil }
         status = .syncing(StatusText.ygoIndex)
         do {
             ygoIndex = try await ygoLoader.refresh()
@@ -827,13 +827,19 @@ final class AppModel {
     }
 
     /// D9: fetch the index when there is none, or when the sync added a Yu-Gi-Oh! set and the index is not from today (UTC).
-    nonisolated static func needsYGOIndex(hasIndex: Bool, newSets: Int, writtenAt: Date?, now: Date) -> Bool {
+    /// An index of an older version (no types, D14) is fetched once more, but also not twice in one UTC day.
+    nonisolated static func needsYGOIndex(hasIndex: Bool, isCurrent: Bool = true, newSets: Int, writtenAt: Date?, now: Date) -> Bool {
         guard hasIndex else { return true }
-        guard newSets > 0 else { return false }
+        guard newSets > 0 || !isCurrent else { return false }
         guard let writtenAt else { return true }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return !calendar.isDate(writtenAt, inSameDayAs: now)
+    }
+
+    /// The YGOPRODeck type (`frameType`) of a Yu-Gi-Oh! card by name; nil when the index lacks it (A15: fall back).
+    func ygoType(cardName: String) -> String? {
+        ygoIndex?.type(name: cardName)
     }
 
     private nonisolated static func describe(_ error: any Error) -> String {

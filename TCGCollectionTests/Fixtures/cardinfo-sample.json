@@ -3,6 +3,7 @@
   {
    "id": 80181649,
    "name": "\"A Case for K9\"",
+   "frameType": "spell",
    "card_sets": [
     {
      "set_code": "JUSH-EN040"
@@ -26,6 +27,7 @@
   {
    "id": 46986414,
    "name": "Dark Magician",
+   "frameType": "normal",
    "card_sets": [
     {
      "set_code": "CT13-EN003"
@@ -79,9 +81,26 @@
   {
    "id": 99999001,
    "name": "Hand Written Promo",
+   "frameType": "effect",
    "card_images": [
     {
      "id": 99999001
+    }
+   ]
+  }
+ ,
+  {
+   "id": 44508094,
+   "name": "Stardust Dragon",
+   "frameType": "synchro",
+   "card_sets": [
+    {
+     "set_code": "TDGS-EN040"
+    }
+   ],
+   "card_images": [
+    {
+     "id": 44508094
     }
    ]
   }
