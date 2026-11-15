@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// What the user owns, wants, has for sale and sold, per game, in memory, kept in the user folder as one `<game id>.json`
+/// What the user owns, wants, has for sale and sold, and the user's decks, per game, in memory, kept in the user folder as one `<game id>.json`
 /// per game. Every change goes through it: memory first, then the whole game file, written on one serial path in the
 /// order of the changes.
 /// - It keeps each game's `GameUserFile`, not only its lists, so that what a newer app wrote survives a rewrite.
@@ -56,6 +56,8 @@ final class UserLibrary {
 
     @ObservationIgnored private let watcher: (any UserFileWatching)?
     @ObservationIgnored private let now: () -> Date
+    /// The id of a new deck (a UUID string; tests inject their own).
+    @ObservationIgnored private let newID: () -> String
     /// The time zone of a sold record's day.
     @ObservationIgnored private let timeZone: TimeZone
     /// The copies `saleNotice` counts.
@@ -75,11 +77,12 @@ final class UserLibrary {
     @ObservationIgnored private var loadGeneration = 0
 
     init(folder: URL?, watcher: (any UserFileWatching)?, now: @escaping () -> Date = { Date() },
-         timeZone: TimeZone = .autoupdatingCurrent) {
+         timeZone: TimeZone = .autoupdatingCurrent, newID: @escaping () -> String = { UUID().uuidString }) {
         self.folder = folder
         self.watcher = watcher
         self.now = now
         self.timeZone = timeZone
+        self.newID = newID
     }
 
     // MARK: Reading
@@ -111,6 +114,11 @@ final class UserLibrary {
     func forSale(game: String) -> [SaleEntry] { shown(game).forSale }
 
     func sold(game: String) -> [SoldRecord] { shown(game).sold }
+
+    /// The game's decks, in the user's deck order.
+    func decks(game: String) -> [Deck] { shown(game).decks }
+
+    func deck(game: String, id: String) -> Deck? { decks(game: game).first { $0.id == id } }
 
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
@@ -203,6 +211,50 @@ final class UserLibrary {
         }
         if sold { unsavedSales.insert(game) }
         return sold
+    }
+
+    /// Refused as `setCount` is (nil). Appends a new deck that is not active (A14) and returns its id. An empty or blank
+    /// name becomes "Deck" made unique among the game's deck names; a name another deck has is kept (the id tells them
+    /// apart).
+    @discardableResult
+    func addDeck(game: String, name: String, format: String) -> String? {
+        let id = newID()
+        var added = false
+        change(game) { file in
+            guard !file.decks.contains(where: { $0.id == id }) else { return }
+            let blank = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let shownName = blank ? DeckRules.uniqueName("Deck", among: file.decks.map(\.name)) : name
+            file.decks.append(DeckRules.new(name: shownName, format: format, id: id))
+            added = true
+        }
+        return added ? id : nil
+    }
+
+    /// The one way to change a deck: `edit` gets the deck as it is in memory at this moment, inside the change, so two
+    /// edits made one after the other both count (Review Focus 5). Its result replaces the deck, with the deck's id kept.
+    /// Nothing happens when the deck is gone, or when refused as `setCount` is; an edit that changes nothing writes
+    /// nothing.
+    func changeDeck(game: String, id: String, _ edit: (Deck) -> Deck) {
+        change(game) { file in
+            guard let i = file.decks.firstIndex(where: { $0.id == id }) else { return }
+            var deck = edit(file.decks[i])
+            deck.id = id
+            file.decks[i] = deck
+        }
+    }
+
+    /// Refused as `setCount` is. A deck that is gone changes nothing.
+    func removeDeck(game: String, id: String) {
+        change(game) { file in file.decks.removeAll { $0.id == id } }
+    }
+
+    /// Refused as `setCount` is. Puts the deck at `index` of the deck order (an index past the end is the end).
+    func moveDeck(game: String, id: String, to index: Int) {
+        change(game) { file in
+            guard let i = file.decks.firstIndex(where: { $0.id == id }) else { return }
+            let deck = file.decks.remove(at: i)
+            file.decks.insert(deck, at: min(max(index, 0), file.decks.count))
+        }
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.

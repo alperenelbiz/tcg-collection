@@ -5,7 +5,7 @@ nonisolated enum GameUserFileError: Error, Equatable {
     case notAnObject
     case malformedVersion
     case malformedCollection
-    /// `wanted`, `forSale` or `sold` (the name) is neither an array nor null.
+    /// `wanted`, `forSale`, `sold` or `decks` (the name) is neither an array nor null.
     case malformedList(String)
 }
 
@@ -13,6 +13,13 @@ nonisolated enum GameUserFileError: Error, Equatable {
 /// parsed, in their order.
 nonisolated private struct RawList<Key: Hashable> {
     var objects: [Key: [String: Any]] = [:]
+    var unparseable: [Any] = []
+}
+
+/// The raw JSON of one deck's cards: each parsed card's own object, in the order of the deck's cards as read, and the
+/// elements that could not be parsed, in their order.
+nonisolated private struct RawCards {
+    var objects: [(id: String, cardKey: String, object: [String: Any])] = []
     var unparseable: [Any] = []
 }
 
@@ -30,10 +37,14 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
     /// The sold log is never merged, so two records can be equal: each parsed record keeps its object, in file order.
     let sold: [(record: SoldRecord, object: [String: Any])]
     let soldUnparseable: [Any]
+    /// Each parsed deck's object by its id (its `cards` are in `deckCards`), and the decks that could not be parsed.
+    let decks: RawList<String>
+    let deckCards: [String: RawCards]
 
     init(_ object: [String: Any], collection: RawList<PrintingKey> = .init(), wanted: RawList<String> = .init(),
          unreadablePins: Set<String> = [], forSale: RawList<PrintingKey> = .init(),
-         sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = []) {
+         sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = [],
+         decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:]) {
         self.object = object
         self.collection = collection
         self.wanted = wanted
@@ -41,11 +52,14 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
         self.forSale = forSale
         self.sold = sold
         self.soldUnparseable = soldUnparseable
+        self.decks = decks
+        self.deckCards = deckCards
     }
 }
 
-/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, and whatever else a
-/// newer app wrote. The version stays 1 (C1): a phase 2B build keeps the three lists as unknown keys.
+/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, `decks`, and whatever
+/// else a newer app wrote. The version stays 1 (C1, D1): a phase 2B build keeps the three lists, and a phase 2B or 2C build
+/// keeps `decks`, as unknown keys.
 /// - A list key the file has (even `[]` or null) is written back; one it does not have is written only once its list
 ///   has an entry, so a phase 2B file keeps its bytes through a read and a rewrite.
 /// - Each entry keeps the keys this app does not know; entries that cannot be parsed are kept, in their order, after
@@ -54,6 +68,11 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 /// - A wanted entry's pin this build cannot read reads as no pin and is written back until the pin is set or cleared
 ///   (`setPin`, also with `nil` on that entry). A `null` pin key is no pin key.
 /// - A for-sale count over the owned count is read as it is (Review Focus 2); `UserLibrary` clamps it at the next change.
+/// - A deck is a nested entry: the deck keeps its own unknown keys, and each of its cards keeps its own. A deck that cannot
+///   be parsed (no `id`, a second deck of one id, `cards` or another key of its own of the wrong type) is kept whole, as
+///   written, after the parsed decks. A deck card that cannot be parsed is kept inside its deck, after the parsed cards.
+///   Cards of one (card, section) are merged on read; a card under count 1 is dropped. A card moved to another section
+///   keeps the unknown keys of the card it was.
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
 
@@ -63,6 +82,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     }
     var forSale: [SaleEntry]
     var sold: [SoldRecord]
+    /// In the user's deck order.
+    var decks: [Deck]
     private let raw: JSONObjectBox
     /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
     private var pinsChanged: Set<String> = []
@@ -72,6 +93,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         wanted = []
         forSale = []
         sold = []
+        decks = []
         raw = JSONObjectBox([:])
     }
 
@@ -87,6 +109,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         let wanted = Self.split(try Self.array(object, "wanted", else: .malformedList("wanted")), Self.wantedEntry)
         let forSale = Self.split(try Self.array(object, "forSale", else: .malformedList("forSale")), Self.saleEntry)
         let sold = Self.split(try Self.array(object, "sold", else: .malformedList("sold")), Self.soldRecord)
+        let deckElements = try Self.array(object, "decks", else: .malformedList("decks"))
 
         let (cleanRows, rowObjects) = Self.merged(rows.parsed, key: \.key, count: \.count) { first, later in
             first.count += later.count
@@ -106,6 +129,20 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         self.wanted = cleanWanted
         self.forSale = cleanForSale
         self.sold = sold.parsed.map { $0.0 }
+        // A second deck of one id is not parsed, so an id addresses exactly one deck.
+        var decks: [Deck] = [], deckObjects: [String: [String: Any]] = [:], deckCards: [String: RawCards] = [:]
+        var unparseableDecks: [Any] = []
+        for element in deckElements {
+            guard let deckObject = element as? [String: Any], let parsed = Self.deck(deckObject),
+                  deckObjects[parsed.deck.id] == nil else {
+                unparseableDecks.append(element)
+                continue
+            }
+            decks.append(parsed.deck)
+            deckObjects[parsed.deck.id] = deckObject
+            deckCards[parsed.deck.id] = parsed.cards
+        }
+        self.decks = decks
         let unreadablePins = Set(cleanWanted.compactMap { entry -> String? in
             let object = wantedObjects[entry.cardKey] ?? [:]
             // A `null` pin key is no pin key (B3): such an entry has no pin, and its next write leaves no pin key.
@@ -118,7 +155,9 @@ nonisolated struct GameUserFile: Sendable, Equatable {
                             unreadablePins: unreadablePins,
                             forSale: RawList(objects: saleObjects, unparseable: forSale.unparseable),
                             sold: sold.parsed.map { (record: $0.0, object: $0.1) },
-                            soldUnparseable: sold.unparseable)
+                            soldUnparseable: sold.unparseable,
+                            decks: RawList(objects: deckObjects, unparseable: unparseableDecks),
+                            deckCards: deckCards)
     }
 
     /// UTF-8, pretty-printed, sorted keys, ending with a newline.
@@ -145,6 +184,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             ("forSale", try Self.objects(forSale.map { ($0, raw.forSale.objects[$0.key]) }, owned: SaleEntry.storedKeys,
                                          encoder: encoder) + raw.forSale.unparseable),
             ("sold", try Self.objects(soldPairs, owned: SoldRecord.storedKeys, encoder: encoder) + raw.soldUnparseable),
+            ("decks", try decks.map { try deckObject($0, encoder: encoder) } + raw.decks.unparseable),
         ]
         // A key the file did not have stays out while its list is empty.
         for (key, elements) in lists where !elements.isEmpty || raw.object[key] != nil {
@@ -165,9 +205,10 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         }
     }
 
-    /// The four lists are equal (what the app reads and changes); keys it does not know are not compared.
+    /// The lists and the decks are equal (what the app reads and changes); keys it does not know are not compared.
     func hasSameLists(as other: GameUserFile) -> Bool {
         collection == other.collection && wanted == other.wanted && forSale == other.forSale && sold == other.sold
+            && decks == other.decks
     }
 
     /// Equal lists, and equal keys this app does not know. A copy of one read file differs only by its lists (and by the
@@ -189,6 +230,27 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     }
 
     // MARK: Writing
+
+    /// A deck as a JSON object: the object it was read from with the deck's own keys written over it, and its cards, each
+    /// over the object it was read from, then the cards that could not be parsed. A card with no object of its own key (it
+    /// was moved to another section, or a format change moved it) takes the object of a card of the same card key that
+    /// is no longer in the deck, so its unknown keys go with it.
+    private func deckObject(_ deck: Deck, encoder: JSONEncoder) throws -> Any {
+        guard var object = try Self.objects([(deck, raw.decks.objects[deck.id])], owned: Deck.storedKeys,
+                                            encoder: encoder)[0] as? [String: Any] else { return [:] }
+        let rawCards = raw.deckCards[deck.id] ?? RawCards()
+        var byID: [String: [String: Any]] = [:]
+        for card in rawCards.objects { byID[card.id] = card.object }
+        let current = Set(deck.cards.map(\.id))
+        var spare = rawCards.objects.filter { !current.contains($0.id) }
+        let pairs = deck.cards.map { card -> (DeckCard, [String: Any]?) in
+            if let own = byID[card.id] { return (card, own) }
+            guard let i = spare.firstIndex(where: { $0.cardKey == card.cardKey }) else { return (card, nil) }
+            return (card, spare.remove(at: i).object)
+        }
+        object["cards"] = try Self.objects(pairs, owned: DeckCard.storedKeys, encoder: encoder) + rawCards.unparseable
+        return object
+    }
 
     /// Each entry as a JSON object: the object it was read from (the keys this app does not know) with the entry's own
     /// keys written over it. The keys the entry owns are taken out first, so a nil pin or price leaves no key behind.
@@ -305,6 +367,44 @@ nonisolated struct GameUserFile: Sendable, Equatable {
               let rawFinish = o["finish"] as? String,
               let count = o["count"].flatMap(integer) else { return nil }
         return SaleEntry(productID: productID, finish: finish(rawFinish), count: count, name: o["name"] as? String ?? "")
+    }
+
+    /// A deck needs a string `id`. A missing, null or blank `name` reads as "Deck", a missing `format` as "" (the views
+    /// take the game's first format), a missing `active` as false, missing `cards` as none; any of them of another type
+    /// makes the deck unparseable. Its cards that cannot be parsed are kept apart; cards of one (card, section) are summed
+    /// into the first (an empty name is filled), cards under count 1 are dropped.
+    private static func deck(_ o: [String: Any]) -> (deck: Deck, cards: RawCards)? {
+        guard let id = o["id"] as? String,
+              let name = optional(o["name"], else: "", as: String.self),
+              let format = optional(o["format"], else: "", as: String.self),
+              let active = optional(o["active"], else: false, as: Bool.self, read: boolean),
+              let elements = optional(o["cards"], else: [], as: [Any].self) else { return nil }
+        let cards = split(elements, deckCard)
+        let (clean, objects) = merged(cards.parsed, key: \.id, count: \.count) { first, later in
+            first.count += later.count
+            if first.name.isEmpty { first.name = later.name }
+        }
+        let blank = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let deck = Deck(id: id, name: blank ? "Deck" : name, format: format, active: active, cards: clean)
+        let raw = RawCards(objects: clean.map { (id: $0.id, cardKey: $0.cardKey, object: objects[$0.id] ?? [:]) },
+                           unparseable: cards.unparseable)
+        return (deck, raw)
+    }
+
+    /// Needs a string `cardKey` and `section` and a whole `count`; a `name` that is there must be a string.
+    private static func deckCard(_ o: [String: Any]) -> DeckCard? {
+        guard let cardKey = o["cardKey"] as? String,
+              let section = o["section"] as? String,
+              let count = o["count"].flatMap(integer),
+              let name = optional(o["name"], else: "", as: String.self) else { return nil }
+        return DeckCard(cardKey: cardKey, name: name, section: section, count: count)
+    }
+
+    /// `fallback` for a missing or null value, the value read as `T`, or nil (unreadable).
+    private static func optional<T>(_ value: Any?, else fallback: T, as type: T.Type,
+                                    read: (Any) -> T? = { $0 as? T }) -> T? {
+        guard let value, !(value is NSNull) else { return fallback }
+        return read(value)
     }
 
     /// Read as written: a record is never edited, not even its finish. Every key of its own must be there and readable

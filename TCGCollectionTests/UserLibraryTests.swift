@@ -933,6 +933,182 @@ struct UserLibraryTests {
         }
     }
 
+    // MARK: Phase 3A task 3: decks
+
+    /// Ids "d1", "d2", … in order.
+    @MainActor private final class IDs {
+        var next = 0
+        func make() -> String { next += 1; return "d\(next)" }
+    }
+
+    @MainActor private func deckLibrary(_ dir: URL, watcher: FakeWatcher? = nil) async -> UserLibrary {
+        let ids = IDs()
+        let lib = UserLibrary(folder: dir, watcher: watcher, newID: { ids.make() })
+        await lib.load()
+        return lib
+    }
+
+    /// `addDeck` writes a new deck that is not active (A14) and returns its id; an empty or blank name becomes a unique
+    /// "Deck"; a name that is taken is allowed (the id tells the decks apart). A deck-only change writes the file.
+    @MainActor @Test func addDeckWritesAndReturnsTheID() async throws {
+        let dir = tempDir(), lib = await deckLibrary(dir)
+        var before = lib.version
+        #expect(lib.addDeck(game: "magic-the-gathering", name: "Burn", format: "constructed") == "d1")
+        #expect(lib.version > before); before = lib.version
+        #expect(lib.addDeck(game: "magic-the-gathering", name: "  ", format: "commander") == "d2")
+        #expect(lib.addDeck(game: "magic-the-gathering", name: "", format: "commander") == "d3")
+        #expect(lib.addDeck(game: "magic-the-gathering", name: "Burn", format: "constructed") == "d4")
+        #expect(lib.version > before)
+        #expect(lib.decks(game: "magic-the-gathering").map(\.name) == ["Burn", "Deck", "Deck 2", "Burn"])
+        #expect(lib.deck(game: "magic-the-gathering", id: "d1")
+                == Deck(id: "d1", name: "Burn", format: "constructed", active: false, cards: []))
+        #expect(lib.deck(game: "magic-the-gathering", id: "none") == nil)
+        #expect(lib.decks(game: "riftbound").isEmpty)
+        await lib.flush()
+        #expect(try storedFile(dir, "magic-the-gathering").decks == lib.decks(game: "magic-the-gathering"))
+        #expect(try UserFiles.read(dir.appending(path: "riftbound.json")) == nil)
+    }
+
+    /// Review Focus 5: each edit applies to the deck as it is in memory at that moment, so two edits made from one old copy
+    /// of the page both count; both reach the file. An edit cannot change the deck's id.
+    @MainActor @Test func changeDeckAppliesItsEditToTheDeckAsItIsThen() async throws {
+        let dir = tempDir(), lib = await deckLibrary(dir)
+        let id = try #require(lib.addDeck(game: "riftbound", name: "Kai'Sa", format: "standard"))
+        let plusOne: (Deck) -> Deck = { deck in
+            let now = deck.cards.first { $0.id == "bolt|main" }?.count ?? 0
+            return DeckRules.setting(deck, count: now + 1, cardKey: "bolt", name: "Bolt", section: "main")
+        }
+        var before = lib.version
+        lib.changeDeck(game: "riftbound", id: id, plusOne)
+        #expect(lib.version > before); before = lib.version
+        lib.changeDeck(game: "riftbound", id: id, plusOne)
+        #expect(lib.version > before)
+        #expect(lib.deck(game: "riftbound", id: id)?.cards.map(\.count) == [2])
+        lib.changeDeck(game: "riftbound", id: id) { deck in
+            var deck = deck
+            deck.id = "other"; deck.active = true
+            return deck
+        }
+        #expect(lib.deck(game: "riftbound", id: id)?.active == true); #expect(lib.deck(game: "riftbound", id: "other") == nil)
+        // An edit that changes nothing is not a change.
+        let same = lib.version
+        lib.changeDeck(game: "riftbound", id: id) { $0 }
+        #expect(lib.version == same)
+        await lib.flush()
+        let stored = try storedFile(dir, "riftbound").decks
+        #expect(stored.map(\.id) == [id]); #expect(stored[0].cards.map(\.count) == [2]); #expect(stored[0].active)
+    }
+
+    /// `changeDeck` on a deck that is gone (removed here or on another device) does nothing and writes nothing.
+    @MainActor @Test func changeDeckOnARemovedDeckDoesNothing() async throws {
+        let dir = tempDir(), lib = await deckLibrary(dir), file = dir.appending(path: "yu-gi-oh.json")
+        let keep = try #require(lib.addDeck(game: "yu-gi-oh", name: "A", format: "standard"))
+        let gone = try #require(lib.addDeck(game: "yu-gi-oh", name: "B", format: "standard"))
+        lib.removeDeck(game: "yu-gi-oh", id: gone)
+        #expect(lib.decks(game: "yu-gi-oh").map(\.id) == [keep])
+        await lib.flush()
+        let bytes = try Data(contentsOf: file), before = lib.version
+        var called = false
+        lib.changeDeck(game: "yu-gi-oh", id: gone) { called = true; return $0 }
+        lib.removeDeck(game: "yu-gi-oh", id: gone)
+        await lib.flush()
+        #expect(!called); #expect(lib.version == before); #expect(try Data(contentsOf: file) == bytes)
+        #expect(try storedFile(dir, "yu-gi-oh").decks.map(\.id) == [keep])
+    }
+
+    /// `moveDeck` puts a deck at an index of the deck order (an index past the end is the end) and writes the order.
+    @MainActor @Test func moveDeckReorders() async throws {
+        let dir = tempDir(), lib = await deckLibrary(dir)
+        for name in ["A", "B", "C"] { lib.addDeck(game: "cyberpunk", name: name, format: "standard") }
+        var before = lib.version
+        lib.moveDeck(game: "cyberpunk", id: "d3", to: 0)
+        #expect(lib.decks(game: "cyberpunk").map(\.name) == ["C", "A", "B"]); #expect(lib.version > before)
+        lib.moveDeck(game: "cyberpunk", id: "d3", to: 9)
+        #expect(lib.decks(game: "cyberpunk").map(\.name) == ["A", "B", "C"])
+        lib.moveDeck(game: "cyberpunk", id: "d1", to: 1)
+        #expect(lib.decks(game: "cyberpunk").map(\.name) == ["B", "A", "C"])
+        before = lib.version
+        lib.moveDeck(game: "cyberpunk", id: "d1", to: 1)                          // where it is already
+        lib.moveDeck(game: "cyberpunk", id: "none", to: 0)
+        #expect(lib.version == before)
+        await lib.flush()
+        #expect(try storedFile(dir, "cyberpunk").decks.map(\.name) == ["B", "A", "C"])
+    }
+
+    /// A refused file (newer, or `decks` of the wrong type) refuses every deck function: nothing in memory, nothing
+    /// written, no version bump. Before the first load, too.
+    @MainActor @Test func aRefusedFileRefusesEveryDeckChange() async throws {
+        for onDisk in [Data(#"{"version":2,"decks":[{"id":"a","name":"A","format":"standard","cards":[]}]}"#.utf8),
+                       Data(#"{"version":1,"collection":[],"decks":3}"#.utf8)] {
+            let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+            try onDisk.write(to: file)
+            let lib = await deckLibrary(dir)
+            #expect(lib.problem(game: "riftbound") != nil); #expect(!lib.canChange(game: "riftbound"))
+            let before = lib.version
+            #expect(lib.addDeck(game: "riftbound", name: "B", format: "standard") == nil)
+            lib.changeDeck(game: "riftbound", id: "a") { var d = $0; d.name = "Z"; return d }
+            lib.removeDeck(game: "riftbound", id: "a")
+            lib.moveDeck(game: "riftbound", id: "a", to: 0)
+            await lib.flush()
+            #expect(lib.version == before); #expect(try Data(contentsOf: file) == onDisk)
+            #expect(lib.decks(game: "riftbound").isEmpty); #expect(lib.deck(game: "riftbound", id: "a") == nil)
+        }
+        let unloaded = UserLibrary(folder: tempDir(), watcher: nil, newID: { "x" })
+        #expect(unloaded.addDeck(game: "riftbound", name: "B", format: "standard") == nil)
+        #expect(unloaded.decks(game: "riftbound").isEmpty)
+        let loaded = await deckLibrary(tempDir())
+        #expect(loaded.addDeck(game: "no-such-game", name: "B", format: "standard") == nil)
+    }
+
+    /// A deck change leaves `collection`, `wanted`, `forSale` and `sold` byte-equal in the file, unknown keys included,
+    /// and the clamp still runs on a later list change.
+    @MainActor @Test func aDeckChangeLeavesTheOtherListsByteEqual() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let json = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A","k":1}],"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":3,"note":"x"}],"forSale":[{"productID":1,"finish":"Normal","count":2,"name":"A"}],"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":0.07,"priceIsLow":false},{"productID":9,"price":"1"}],"future":{"a":1}}"#
+        // In this app's own form first, so the comparison is about the lists, not the layout.
+        try UserFiles.write(try GameUserFile(data: Data(json.utf8)).data(), to: file)
+        let original = try Data(contentsOf: file)
+        let lib = await deckLibrary(dir)
+        let id = try #require(lib.addDeck(game: "riftbound", name: "D", format: "standard"))
+        lib.changeDeck(game: "riftbound", id: id) { DeckRules.setting($0, count: 3, cardKey: "a", name: "A", section: "main") }
+        await lib.flush()
+        let after = try Data(contentsOf: file)
+        #expect(after != original)
+        func part(_ data: Data, _ key: String) throws -> Data {
+            let value = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?[key])
+            return try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+        for key in ["collection", "wanted", "forSale", "sold", "future"] {
+            #expect(try part(after, key) == part(original, key), "\(key)")
+        }
+        // The text of the file is the original with the decks key added (it sorts between collection and forSale).
+        var text = String(decoding: after, as: UTF8.self)
+        let decksStart = try #require(text.range(of: "  \"decks\" : ["))
+        let decksEnd = try #require(text.range(of: "  \"forSale\" : ["))
+        text.removeSubrange(decksStart.lowerBound..<decksEnd.lowerBound)
+        #expect(text == String(decoding: original, as: UTF8.self))
+        // The one change path still clamps for sale to owned.
+        lib.setCount(1, game: "riftbound", key: .init(productID: 1, finish: "Normal"), name: "A")
+        #expect(lib.forSaleCount(game: "riftbound", key: .init(productID: 1, finish: "Normal")) == 1)
+        #expect(lib.saleNotice == "1 copy is no longer for sale.")
+        #expect(lib.decks(game: "riftbound").map(\.id) == [id])
+    }
+
+    /// Review Focus 4: a reload that removes a deck (deleted on another device) bumps `version`, and the deck is gone.
+    @MainActor @Test func aReloadThatRemovesADeckBumpsTheVersion() async throws {
+        let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")
+        let lib = await deckLibrary(dir, watcher: watcher)
+        let id = try #require(lib.addDeck(game: "riftbound", name: "D", format: "standard"))
+        await lib.flush()
+        var other = try storedFile(dir, "riftbound")
+        other.decks = []
+        try UserFiles.write(try other.data(), to: file)
+        let before = lib.version
+        await watcher.fire(file)
+        #expect(lib.version > before); #expect(lib.deck(game: "riftbound", id: id) == nil)
+        #expect(lib.decks(game: "riftbound").isEmpty)
+    }
+
     /// The JSON object stored in `file`.
     private func jsonObject(_ file: URL) throws -> [String: Any] {
         let data = try #require(try UserFiles.read(file))

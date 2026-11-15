@@ -367,4 +367,210 @@ struct GameUserFileTests {
         let sold = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sold"] as! [[String: Any]]
         #expect(sold.map { $0["n"] as? Int } == [1, 2, nil])
     }
+
+    // MARK: Phase 3A task 3: decks
+
+    /// The exact text a phase 2C build writes with its three lists and no decks.
+    private let phase2CText = """
+        {
+          "collection" : [
+            {
+              "condition" : "Near Mint",
+              "count" : 2,
+              "finish" : "Foil",
+              "name" : "Dockside Lock-Up",
+              "productID" : 721334
+            }
+          ],
+          "forSale" : [
+            {
+              "count" : 1,
+              "finish" : "Foil",
+              "name" : "Dockside Lock-Up",
+              "productID" : 721334
+            }
+          ],
+          "sold" : [
+            {
+              "count" : 1,
+              "day" : "2026-11-13",
+              "finish" : "Foil",
+              "name" : "Dockside Lock-Up",
+              "price" : 0.07,
+              "priceIsLow" : false,
+              "productID" : 721334
+            }
+          ],
+          "version" : 1,
+          "wanted" : [
+            {
+              "cardKey" : "dockside lock-up",
+              "count" : 2,
+              "name" : "Dockside Lock-Up",
+              "pinFinish" : "Foil",
+              "pinProductID" : 721334
+            }
+          ]
+        }
+
+        """
+
+    private let decksJSON = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A"}],"decks":[{"id":"d1","name":"Burn","format":"constructed","active":true,"note":"deck note","cards":[{"cardKey":"bolt","name":"Lightning Bolt","section":"deck","count":4,"foil":true},{"cardKey":"ring","name":"Sol Ring","section":"deck","count":1},{"cardKey":"bolt","name":"Lightning Bolt","section":"sideboard","count":1}]},{"id":"d2","name":"Other","format":"future-format","active":false,"cards":[{"cardKey":"x","name":"X","section":"future-section","count":2}]}]}"#
+
+    /// Review Focus 1: a phase 2C file opens with no decks, and a read and `data()` keep its exact bytes.
+    @Test func aPhase2CFileReadsWithNoDecksAndKeepsItsBytes() throws {
+        let file = try GameUserFile(data: Data(phase2CText.utf8))
+        #expect(file.decks.isEmpty)
+        #expect(file.wanted.count == 1 && file.forSale.count == 1 && file.sold.count == 1)
+        #expect(try file.data() == Data(phase2CText.utf8))
+    }
+
+    /// Decks are read, written and read again unchanged; an unknown format or section id is kept as written.
+    @Test func decksRoundTrip() throws {
+        let file = try GameUserFile(data: Data(decksJSON.utf8))
+        #expect(file.decks == [
+            Deck(id: "d1", name: "Burn", format: "constructed", active: true, cards: [
+                DeckCard(cardKey: "bolt", name: "Lightning Bolt", section: "deck", count: 4),
+                DeckCard(cardKey: "ring", name: "Sol Ring", section: "deck", count: 1),
+                DeckCard(cardKey: "bolt", name: "Lightning Bolt", section: "sideboard", count: 1)]),
+            Deck(id: "d2", name: "Other", format: "future-format", active: false, cards: [
+                DeckCard(cardKey: "x", name: "X", section: "future-section", count: 2)])])
+        let data = try file.data()
+        #expect(try GameUserFile(data: data) == file)
+        #expect(try GameUserFile(data: data).data() == data)
+        let decks = (try JSONSerialization.jsonObject(with: data) as! [String: Any])["decks"] as! [[String: Any]]
+        #expect(Set(decks[1].keys) == ["id", "name", "format", "active", "cards"])
+        #expect(decks[1]["active"] as? Bool == false); #expect(decks[1]["format"] as? String == "future-format")
+        let cards = decks[1]["cards"] as! [[String: Any]]
+        #expect(Set(cards[0].keys) == ["cardKey", "name", "section", "count"])
+        #expect(cards[0]["section"] as? String == "future-section")
+    }
+
+    /// A deck's own unknown keys and a deck card's unknown keys survive a change of another deck, a change of that deck,
+    /// and a move of that card to another section.
+    @Test func aDecksAndADeckCardsUnknownKeysSurviveAChange() throws {
+        var file = try GameUserFile(data: Data(decksJSON.utf8))
+        file.decks[1] = DeckRules.setting(file.decks[1], count: 3, cardKey: "x", name: "X", section: "future-section")
+        func first() throws -> [String: Any] {
+            ((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]
+        }
+        var deck = try first(), cards = deck["cards"] as! [[String: Any]]
+        #expect(deck["note"] as? String == "deck note"); #expect(cards[0]["foil"] as? Bool == true)
+        file.decks[0].name = "Burn 2"
+        file.decks[0] = DeckRules.setting(file.decks[0], count: 2, cardKey: "ring", name: "", section: "deck")
+        file.decks[0] = DeckRules.setting(file.decks[0], count: 3, cardKey: "bolt", name: "", section: "deck")
+        deck = try first(); cards = deck["cards"] as! [[String: Any]]
+        #expect(deck["note"] as? String == "deck note"); #expect(deck["name"] as? String == "Burn 2")
+        #expect(cards[0]["foil"] as? Bool == true); #expect(cards[0]["count"] as? Int == 3); #expect(cards[1]["foil"] == nil)
+        // A move gives the card another key (card, section); its unknown keys go with it.
+        file.decks[0] = DeckRules.moving(file.decks[0], cardKey: "bolt", from: "deck", to: "commander")
+        cards = try first()["cards"] as! [[String: Any]]
+        let moved = try #require(cards.first { $0["section"] as? String == "commander" })
+        #expect(moved["foil"] as? Bool == true); #expect(moved["count"] as? Int == 3)
+        #expect(try GameUserFile(data: try file.data()) == file)
+    }
+
+    /// A deck that cannot be parsed (no `id`, `cards` not an array, a second deck of one id, not an object) is kept as
+    /// written, in its order, after the parsed decks. An id addresses exactly one deck.
+    @Test func unparseableDecksSurviveAtTheEnd() throws {
+        let json = #"{"decks":[{"name":"no id","cards":[]},{"id":"c","name":"C","cards":"x"},{"id":"a","name":"A","format":"constructed","cards":[]},{"id":"a","name":"second A","cards":[]},7]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks.map(\.id) == ["a"]); #expect(file.decks[0].name == "A")
+        file.decks[0].name = "A changed"
+        let decks = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [Any]
+        #expect(decks.count == 5)
+        #expect((decks[0] as! [String: Any])["name"] as? String == "A changed")
+        #expect((decks[1] as! [String: Any])["name"] as? String == "no id")
+        #expect((decks[2] as! [String: Any])["cards"] as? String == "x")
+        #expect((decks[3] as! [String: Any])["name"] as? String == "second A")
+        #expect(Set((decks[3] as! [String: Any]).keys) == ["id", "name", "cards"])
+        #expect(decks[4] as? Int == 7)
+        #expect(try GameUserFile(data: try file.data()) == file)
+    }
+
+    /// A deck card that cannot be parsed (no `cardKey`, a count that is not a whole number, no section) is kept as written
+    /// inside its deck, after the parsed cards, through a change of that deck.
+    @Test func unparseableDeckCardsSurviveInsideTheirDeck() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"constructed","cards":[{"name":"no key","section":"deck","count":1},{"cardKey":"b","section":"deck","count":"2"},"x",{"cardKey":"c","name":"C","section":"deck","count":1},{"cardKey":"d","name":"D","count":1}]}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks[0].cards.map(\.id) == ["c|deck"])
+        file.decks[0] = DeckRules.setting(file.decks[0], count: 2, cardKey: "c", name: "", section: "deck")
+        let cards = ((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [Any]
+        #expect(cards.count == 5)
+        #expect((cards[0] as! [String: Any])["count"] as? Int == 2)
+        #expect((cards[1] as! [String: Any])["name"] as? String == "no key")
+        #expect((cards[2] as! [String: Any])["count"] as? String == "2")
+        #expect(cards[3] as? String == "x")
+        #expect((cards[4] as! [String: Any])["cardKey"] as? String == "d")
+        #expect(try GameUserFile(data: try file.data()) == file)
+    }
+
+    @Test func decksOfTheWrongTypeRefuseTheFile() {
+        #expect(throws: GameUserFileError.malformedList("decks")) { try GameUserFile(data: Data(#"{"decks":3}"#.utf8)) }
+        #expect(throws: GameUserFileError.malformedList("decks")) { try GameUserFile(data: Data(#"{"decks":{"id":"a"}}"#.utf8)) }
+        #expect(throws: Never.self) { try GameUserFile(data: Data(#"{"decks":null}"#.utf8)) }
+    }
+
+    /// Two cards of one (card, section) are summed into the first (its name filled when empty); one card in two sections
+    /// stays two cards; a card with a count under 1 is dropped.
+    @Test func deckCardsOfOneKeyAreMergedOnRead() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"constructed","cards":[{"cardKey":"bolt","name":"","section":"deck","count":1,"k":"first"},{"cardKey":"bolt","name":"Bolt","section":"sideboard","count":1},{"cardKey":"bolt","name":"Bolt","section":"deck","count":2,"k":"second"},{"cardKey":"z","name":"Z","section":"deck","count":0}]}]}"#
+        let file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks[0].cards == [DeckCard(cardKey: "bolt", name: "Bolt", section: "deck", count: 3),
+                                        DeckCard(cardKey: "bolt", name: "Bolt", section: "sideboard", count: 1)])
+        let card = (((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]])[0]
+        #expect(card["k"] as? String == "first")
+    }
+
+    /// A missing or empty name reads as "Deck", a missing `active` as false, missing `cards` as no cards, a missing
+    /// `format` as "" (the game's first format in the views).
+    @Test func missingDeckFieldsHaveDefaults() throws {
+        let json = #"{"decks":[{"id":"a"},{"id":"b","name":"","format":"commander","active":true,"cards":null}]}"#
+        let file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks == [Deck(id: "a", name: "Deck", format: "", active: false, cards: []),
+                               Deck(id: "b", name: "Deck", format: "commander", active: true, cards: [])])
+    }
+
+    /// A deck key that is in the file stays there (also as `[]`); one that is not stays out while there is no deck.
+    @Test func theDecksKeyStaysAsTheFileHasIt() throws {
+        var file = try GameUserFile(data: Data(#"{"version":1,"collection":[],"decks":[]}"#.utf8))
+        #expect((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as? [Any] != nil)
+        file = try GameUserFile(data: Data(#"{"version":1,"collection":[]}"#.utf8))
+        file.decks = [DeckRules.new(name: "A", format: "standard", id: "a")]
+        #expect(((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as? [Any])?.count == 1)
+        file.decks = []
+        #expect((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] == nil)
+    }
+
+    /// Equality sees a change of the decks alone, so the library writes it.
+    @Test func aDeckOnlyChangeMakesTheFileDifferent() throws {
+        let file = try GameUserFile(data: Data(decksJSON.utf8))
+        var changed = file
+        changed.decks[0].active = false
+        #expect(changed != file)
+        #expect(!changed.hasSameLists(as: file))
+    }
+
+    /// Review Focus 1: a phase 2C build on another device rewrites the file to change a collection count. It parses the
+    /// whole object, changes `collection` and writes with its options: `decks` comes back byte-equal and reads the same.
+    @Test func aPhase2CRewriteKeepsTheDecks() throws {
+        let file = try GameUserFile(data: Data(decksJSON.utf8))
+        let ours = try file.data()
+        var object = try JSONSerialization.jsonObject(with: ours) as! [String: Any]
+        object["version"] = 1
+        object["collection"] = [["productID": 1, "finish": "Normal", "count": 3, "condition": "", "name": "A"]]
+        var rewritten = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        rewritten.append(0x0A)
+        func decksText(_ data: Data) throws -> Data {
+            let decks = (try JSONSerialization.jsonObject(with: data) as! [String: Any])["decks"]!
+            return try JSONSerialization.data(withJSONObject: decks, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+        #expect(try decksText(rewritten) == decksText(ours))
+        let oursText = String(decoding: ours, as: UTF8.self), rewrittenText = String(decoding: rewritten, as: UTF8.self)
+        let decksPart: (String) -> Substring = { $0[$0.range(of: "\"decks\"")!.lowerBound..<$0.range(of: "\"version\"")!.lowerBound] }
+        #expect(decksPart(rewrittenText) == decksPart(oursText))
+        let back = try GameUserFile(data: rewritten)
+        #expect(back.collection.map(\.count) == [3]); #expect(back.decks == file.decks)
+        #expect(try decksText(back.data()) == decksText(ours))
+    }
 }
