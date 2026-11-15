@@ -124,6 +124,9 @@ The sections of spec 5.3 are approved and kept. In three places an official rule
 | Cyberpunk | Side Deck min / max | Not on the official gameplay guide. The official Tournament Rules page (<https://cyberpunktcg.com/tournament-rules>) loads its text with JavaScript, and the text could not be read here. A fan blog (gamertagmythras.com, "Cyberpunk TCG tournament rules") says the tournament sideboard is exactly 7 cards (Tournament Rules 2.1.3, Appendix D.1). Not an official source. |
 | Cyberpunk | Whether the copy limit counts the Side Deck | Not on the gameplay guide; the same fan blog implies it. `countedSections` is main only. |
 
+Built, but a reading and not a quoted number: Riftbound's Champion "exactly 1" reads the singular of CR 103.3 ("A Chosen
+Champion Unit"); no rule writes the number 1 for it.
+
 ## Questions for Alperen
 
 1. Cyberpunk Side Deck size: the official Tournament Rules page could not be read here. A fan blog (gamertagmythras.com,
