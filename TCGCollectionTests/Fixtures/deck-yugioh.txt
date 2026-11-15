@@ -1,0 +1,9 @@
+# A made-up Yu-Gi-Oh! deck from the fixture catalog (not the owner's).
+Main Deck:
+3 Swiftwind Panther Warrior
+
+Extra Deck:
+2 Stardust Dragon
+
+Side Deck:
+1 Token: Joey and Red-Eyes Black Dragon

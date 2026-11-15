@@ -4,7 +4,7 @@ import SwiftUI
 /// game with more than one format, "Create" (default) and "Cancel". Create adds the deck, not active (A14), and opens its
 /// page. A blank name becomes a unique "Deck" (`UserLibrary.addDeck`). Opened from a card page's "Add to deck" (`adding`),
 /// Create adds that card's one copy to the new deck instead (its default section in the chosen format), and the card page
-/// stays on show.
+/// stays on show. From the sidebar, "Paste a deck…" closes it and opens the paste sheet with its name and format.
 struct NewDeckSheet: View {
     let gameID: String
     /// The card a card page's "New Deck…" adds to the new deck; nil from the sidebar.
@@ -30,6 +30,15 @@ struct NewDeckSheet: View {
                     ForEach(formats) { format in Text(format.name).tag(format.id) }
                 }
                 .accessibilityIdentifier("new-deck-format")
+            }
+            // From the sidebar only: a card page's "New Deck…" adds its card.
+            if adding == nil {
+                Button("Paste a deck…") {
+                    model.pendingPaste = (name, format)
+                    dismiss()
+                }
+                .disabled(formats.isEmpty || !model.library.canChange(game: gameID))
+                .accessibilityIdentifier("new-deck-paste")
             }
         } confirmed: {
             guard let id = model.library.addDeck(game: gameID, name: name, format: format) else { return }

@@ -209,9 +209,17 @@ final class AppModel {
     /// "New Deck…" of a card page's "Add to deck": the card the new deck gets one copy of after Create. Nil when the
     /// sidebar opened the sheet; cleared when the sheet closes.
     var newDeckCard: DeckCardToAdd?
+    /// The paste the paste sheet shows (`PasteDeckSheet`); nil while no paste sheet is open.
+    var pasting: PasteDeckModel?
+    /// "Paste a deck…" of the New Deck sheet: the name and format typed there. The paste sheet opens with them once the New
+    /// Deck sheet has closed (`openPendingPaste`).
+    @ObservationIgnored var pendingPaste: (name: String, format: String)?
     /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet, the
-    /// New Deck sheet): a dialog asked for meanwhile would not show (For Sale's Sold dialog does not open again then).
-    var showsSheet: Bool { needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil || showsNewDeck }
+    /// New Deck sheet, the paste sheet): a dialog asked for meanwhile would not show (For Sale's Sold dialog does not open
+    /// again then).
+    var showsSheet: Bool {
+        needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil || showsNewDeck || pasting != nil
+    }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
     /// until the status changes (the next sync line replaces it) or `noticeDuration` has passed. `status` itself is never
@@ -575,6 +583,25 @@ final class AppModel {
         let sale = library.saleNotice
         library.clearSaleNotice()
         say("Imported: \(applied.summary)" + (sale.map { ". \($0)" } ?? ""))
+    }
+
+    // MARK: Pasting a deck
+
+    /// "Paste…" of a deck page (`deckID`), or "Paste a deck…" of the New Deck sheet (nil: a new deck with `name` and
+    /// `format`): opens the paste sheet on the game shown. Not while another sheet is open.
+    func pasteDeck(into deckID: String?, name: String = "", format: String = "") {
+        guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet else { return }
+        let game = Games.game(gameID)
+        pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, library: library, reader: reader,
+                                 catalogSettled: { [weak self] game in self?.catalogSettled(game: game) ?? false },
+                                 ygoType: { [weak self] name in game?.pictures == .ygoprodeck ? self?.ygoType(cardName: name) : nil })
+    }
+
+    /// The New Deck sheet has closed: the paste sheet it asked for opens now (two sheets never change places at once).
+    func openPendingPaste() {
+        guard let pending = pendingPaste else { return }
+        pendingPaste = nil
+        pasteDeck(into: nil, name: pending.name, format: pending.format)
     }
 
     /// C7: sells `count` copies of a printing on the For Sale list, at the price of this moment (the price table's, for

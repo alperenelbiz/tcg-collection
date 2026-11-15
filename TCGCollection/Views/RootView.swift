@@ -80,7 +80,11 @@ struct RootView: View {
             case .failure(let error): model.importFailed(error)
             }
         }
-        .sheet(isPresented: $model.showsNewDeck, onDismiss: { model.newDeckCard = nil }) {
+        // "Paste a deck…" of this sheet opens the paste sheet once this one has closed.
+        .sheet(isPresented: $model.showsNewDeck, onDismiss: {
+            model.newDeckCard = nil
+            model.openPendingPaste()
+        }) {
             NewDeckSheet(gameID: model.gameID, deckNames: model.library.decks(game: model.gameID).map(\.name),
                          adding: model.newDeckCard)
                 .environment(model)
@@ -88,6 +92,12 @@ struct RootView: View {
         }
         .sheet(item: $model.importing) { importModel in
             ImportSheet(importModel: importModel)
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        // "Paste…" of a deck page, and "Paste a deck…" of the New Deck sheet.
+        .sheet(item: $model.pasting) { paste in
+            PasteDeckSheet(paste: paste)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }

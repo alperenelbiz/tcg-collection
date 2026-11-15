@@ -375,4 +375,43 @@ struct CatalogStoreTests {
         #expect(try await store.sets(game: "riftbound").count == 13)
         #expect(try await store.search(game: "magic-the-gathering", text: "", filter: .init(), limit: 10).isEmpty == false)
     }
+
+    // MARK: Pasting a deck (phase 3A task 7)
+
+    /// Exact card keys of one game to the card's name and a printing's type (the first printing with a type, newest
+    /// first); keys of another game or of no card are left out; more keys than one batch of 500.
+    @Test func cardsByExactKey() async throws {
+        let s = try await filledStore()
+        let found = try await s.cards(game: "yu-gi-oh", keys: ["stardust dragon", "swiftwind panther warrior", "calm rune", "nothing"])
+        #expect(found == ["stardust dragon": CatalogCard(cardKey: "stardust dragon", name: "Stardust Dragon", cardType: "Synchro Monster"),
+                          "swiftwind panther warrior": CatalogCard(cardKey: "swiftwind panther warrior",
+                                                                   name: "Swiftwind Panther Warrior", cardType: "Effect Monster")])
+        let many = try await s.cards(game: "riftbound", keys: (1...1_200).map { "card \($0)" } + ["calm rune", "kai sa rebel"])
+        #expect(Set(many.keys) == ["calm rune", "kai sa rebel"])
+        #expect(many["kai sa rebel"] == CatalogCard(cardKey: "kai sa rebel", name: "Kai'Sa, Rebel", cardType: "Champion Unit"))
+        #expect(try await s.cards(game: "riftbound", keys: []).isEmpty)
+        // The newest printing has no type: the type of the next one.
+        try await s.replaceProducts(of: 99, with: [product(id: 9002, groupID: 99, name: "Twin"),
+                                                   product(id: 9001, groupID: 99, name: "Twin", cardType: "Unit")], at: .now)
+        #expect(try await s.cards(game: "riftbound", keys: ["twin"])["twin"]?.cardType == "Unit")
+    }
+
+    /// The nearest names of a text in one game: distinct cards, nearest first, at most `limit`; a typo in the first word
+    /// is found through the longest word; an empty text has none.
+    @Test func nearestNamesRankByDistanceInTheGame() async throws {
+        let s = try await filledStore()
+        let names = ["Ash Blossom & Joyous Spring", "Ash Hound", "Ash Barrage", "Ashen Rider", "Blossom Bombardment", "Ash Zealot", "Flash"]
+        try await s.replaceProducts(of: 98, with: names.enumerated().map { product(id: 9100 + $0.offset, game: "yu-gi-oh", groupID: 98, name: $0.element) }
+            + [product(id: 9200, game: "yu-gi-oh", groupID: 98, name: "Ash Blossom & Joyous Spring (Secret Rare)")], at: .now)
+        try await s.replaceProducts(of: 97, with: [product(id: 9300, groupID: 97, name: "Ash Blosom")], at: .now)   // Riftbound
+        let found = try await s.nearestNames(game: "yu-gi-oh", to: "Ash Blosom", limit: 5)
+        #expect(found.first == Suggestion(cardKey: "ash blossom joyous spring", name: "Ash Blossom & Joyous Spring"))
+        #expect(found.count == 5 && Set(found.map(\.cardKey)).count == 5)
+        #expect(!found.contains { $0.cardKey == "ash blosom" })
+        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Ahs Blossom", limit: 5).first?.name == "Ash Blossom & Joyous Spring")
+        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Ash Blosom", limit: 2).count == 2)
+        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "", limit: 5).isEmpty)
+        #expect(try await s.nearestNames(game: "yu-gi-oh", to: " , ", limit: 5).isEmpty)
+        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Qqq Zzz", limit: 5).isEmpty)
+    }
 }

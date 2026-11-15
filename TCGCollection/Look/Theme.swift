@@ -106,8 +106,9 @@ nonisolated extension Color {
 extension View {
     /// The default button of a sheet (Return): a flat `accent` button with a `ground` label. The system's default button
     /// draws a white label on the accent, which reads at under 2:1 on amber, and on macOS 27 it ignores a label colour.
-    func sheetDefaultButton() -> some View {
-        keyboardShortcut(.defaultAction)
+    /// `onReturn` false: the look without the Return key, for a sheet whose text editor takes Return for a new line.
+    func sheetDefaultButton(onReturn: Bool = true) -> some View {
+        keyboardShortcut(onReturn ? .defaultAction : nil)
             .buttonStyle(AccentButtonStyle())
     }
 }

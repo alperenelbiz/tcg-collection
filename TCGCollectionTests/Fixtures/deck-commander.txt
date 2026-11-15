@@ -1,0 +1,12 @@
+# A made-up Commander list from the fixture catalog (not the owner's).
+Commander:
+1 Ajani Resolute
+
+Deck:
+1 Chándra, Chill of Compliance
+1 Bloodline Recollector
+1 Stingcaster Mage (Borderless) (0329)
+1 Fire // Ice
+
+Sideboard:
+1 Bloodline Recollector

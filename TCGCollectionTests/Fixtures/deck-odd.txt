@@ -1,0 +1,108 @@
+# Review Focus 3: a made-up Commander list of 100 card lines with odd lines (not the owner's).
+Commander:
+1 Ajani Resolute
+
+Deck:
+1 Bloodline Recollector
+1 Bloodline Recollector
+1 Fire // Ice
+1 Chándra, Chill of Compliance
+1	Stingcaster Mage
+4x Stingcaster Mage
+0 Bloodline Recollector
+500 Stingcaster Mage
+3 7 Colored Fish
+Ajani Resolute
+1 Made-up Card 01
+1 Made-up Card 02
+1 Made-up Card 03
+1 Made-up Card 04
+1 Made-up Card 05
+1 Made-up Card 06
+1 Made-up Card 07
+1 Made-up Card 08
+1 Made-up Card 09
+1 Made-up Card 10
+1 Made-up Card 11
+1 Made-up Card 12
+1 Made-up Card 13
+1 Made-up Card 14
+1 Made-up Card 15
+1 Made-up Card 16
+1 Made-up Card 17
+1 Made-up Card 18
+1 Made-up Card 19
+1 Made-up Card 20
+1 Made-up Card 21
+1 Made-up Card 22
+1 Made-up Card 23
+1 Made-up Card 24
+1 Made-up Card 25
+1 Made-up Card 26
+1 Made-up Card 27
+1 Made-up Card 28
+1 Made-up Card 29
+1 Made-up Card 30
+1 Made-up Card 31
+1 Made-up Card 32
+1 Made-up Card 33
+1 Made-up Card 34
+1 Made-up Card 35
+1 Made-up Card 36
+1 Made-up Card 37
+1 Made-up Card 38
+1 Made-up Card 39
+1 Made-up Card 40
+1 Made-up Card 41
+1 Made-up Card 42
+1 Made-up Card 43
+1 Made-up Card 44
+1 Made-up Card 45
+1 Made-up Card 46
+1 Made-up Card 47
+1 Made-up Card 48
+1 Made-up Card 49
+1 Made-up Card 50
+1 Made-up Card 51
+1 Made-up Card 52
+1 Made-up Card 53
+1 Made-up Card 54
+1 Made-up Card 55
+1 Made-up Card 56
+1 Made-up Card 57
+1 Made-up Card 58
+1 Made-up Card 59
+1 Made-up Card 60
+1 Made-up Card 61
+1 Made-up Card 62
+1 Made-up Card 63
+1 Made-up Card 64
+1 Made-up Card 65
+1 Made-up Card 66
+1 Made-up Card 67
+1 Made-up Card 68
+1 Made-up Card 69
+1 Made-up Card 70
+1 Made-up Card 71
+1 Made-up Card 72
+1 Made-up Card 73
+1 Made-up Card 74
+1 Made-up Card 75
+1 Made-up Card 76
+1 Made-up Card 77
+1 Made-up Card 78
+1 Made-up Card 79
+1 Made-up Card 80
+1 Made-up Card 81
+1 Made-up Card 82
+1 Made-up Card 83
+1 Made-up Card 84
+1 Made-up Card 85
+1 Made-up Card 86
+1 Made-up Card 87
+1 Made-up Card 88
+1 Made-up Card 89
+
+Maybeboard:
+1 Bloodline Recollector
+# end

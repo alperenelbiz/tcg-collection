@@ -91,6 +91,16 @@ struct DeckRulesTests {
         #expect(DeckRules.adding(start, [card("ring", "deck", 5000)]).cards.map(\.count) == [2, 999])
     }
 
+    /// Task 5's review, fixed in task 7: a paste never lowers a count. A card above 999 (written by hand) keeps its count;
+    /// otherwise a sum is 999 at most.
+    @Test func addingNeverLowersACount() {
+        #expect(DeckRules.adding(deck([card("bolt", "deck", 1200)]), [card("bolt", "deck", 1)]).cards.map(\.count) == [1200])
+        #expect(DeckRules.adding(deck([card("bolt", "deck", 990)]), [card("bolt", "deck", 5), card("bolt", "deck", 10)])
+            .cards.map(\.count) == [999])
+        #expect(DeckRules.adding(deck([]), [card("bolt", "deck", 600), card("bolt", "deck", 600)]).cards.map(\.count) == [999])
+        #expect(DeckRules.adding(deck([card("bolt", "deck", 1200)]), [card("ring", "deck", 1200)]).cards.map(\.count) == [1200, 999])
+    }
+
     @Test func uniqueName() {
         #expect(DeckRules.uniqueName("Deck", among: []) == "Deck")
         #expect(DeckRules.uniqueName("Deck", among: ["Deck"]) == "Deck 2")

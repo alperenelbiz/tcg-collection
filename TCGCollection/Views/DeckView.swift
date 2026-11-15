@@ -332,6 +332,10 @@ struct DeckView: View {
                         .help("Add cards")
                         .disabled(deck == nil || !library.canChange(game: gameID))
                         .accessibilityIdentifier("deck-add-cards")
+                    Button("Paste…") { model.pasteDeck(into: state.deckID) }
+                        .help("Paste a deck as text")
+                        .disabled(deck == nil || !library.canChange(game: gameID))
+                        .accessibilityIdentifier("deck-paste")
                     deckMenu(deck, game: game, kinds: state.join.read?.kinds ?? [:])
                 }
             }
@@ -391,6 +395,8 @@ struct DeckView: View {
             EmptyMessage(sentence: "This deck has no cards yet.") {
                 Button("Add cards") { openSearch() }
                     .accessibilityIdentifier("deck-empty-add-cards")
+                Button("Paste…") { model.pasteDeck(into: state.deckID) }
+                    .accessibilityIdentifier("deck-empty-paste")
             }
         case .list:
             if let deck, let listed {

@@ -78,20 +78,29 @@ nonisolated enum DeckRules {
             card.section = defaultSection(card)
             return card
         }
-        deck.cards = summed(moved, limit: nil)
+        deck.cards = summed(moved)
         return deck
     }
 
-    /// A paste: each card with a count of 1 or more is summed into the card of its (card, section), or appended. A sum is
-    /// kept at `maxCount` at most.
+    /// A paste: each card with a count of 1 or more is summed into the card of its (card, section), or appended. A paste
+    /// never lowers a count: a sum is kept at `max(maxCount, the count before the paste)` at most, so a card above
+    /// `maxCount` (a file written by hand) keeps its count, and any other sum is `maxCount` at most.
     static func adding(_ deck: Deck, _ cards: [DeckCard]) -> Deck {
         var deck = deck
-        let pasted = cards.filter { $0.count >= 1 }.map { card -> DeckCard in
-            var card = card
-            card.count = min(card.count, maxCount)
-            return card
+        deck.cards = summed(deck.cards)
+        var index = Dictionary(deck.cards.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        let before = deck.cards.map(\.count)
+        for card in cards where card.count >= 1 {
+            if let i = index[card.id] {
+                deck.cards[i].count = min(deck.cards[i].count + card.count, max(maxCount, i < before.count ? before[i] : 0))
+                if deck.cards[i].name.isEmpty { deck.cards[i].name = card.name }
+            } else {
+                var card = card
+                card.count = min(card.count, maxCount)
+                index[card.id] = deck.cards.count
+                deck.cards.append(card)
+            }
         }
-        deck.cards = summed(deck.cards + pasted, limit: maxCount)
         return deck
     }
 
@@ -105,13 +114,12 @@ nonisolated enum DeckRules {
     }
 
     /// Cards of one (card, section) summed into the first (its place and name; an empty name is filled).
-    private static func summed(_ cards: [DeckCard], limit: Int?) -> [DeckCard] {
+    private static func summed(_ cards: [DeckCard]) -> [DeckCard] {
         var result: [DeckCard] = []
         var index: [String: Int] = [:]
         for card in cards {
             if let i = index[card.id] {
                 result[i].count += card.count
-                if let limit { result[i].count = min(result[i].count, limit) }
                 if result[i].name.isEmpty { result[i].name = card.name }
             } else {
                 index[card.id] = result.count
