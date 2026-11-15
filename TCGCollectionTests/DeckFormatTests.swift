@@ -74,10 +74,25 @@ struct DeckFormatTests {
         }
     }
 
-    /// No section bound is an inference from a total any more: 98, 99 and 39 are nowhere.
-    @Test func noDerivedBoundIsLeft() {
-        let bounds = Games.all.flatMap(\.formats).flatMap(\.sections).flatMap { [$0.min, $0.max] }.compactMap { $0 }
-        #expect(!bounds.contains(98)); #expect(!bounds.contains(99)); #expect(!bounds.contains(39))
+    /// Every bound of every format, exactly (final fix B9): each section's min and max and each total's, nothing derived
+    /// from a total (no 98, 99 or 39). A change to a number fails here and needs its source in the sources report.
+    @Test func everyBoundIsTheSourcedOne() {
+        func bound(_ min: Int?, _ max: Int?) -> String { "\(min.map(String.init) ?? "-")…\(max.map(String.init) ?? "-")" }
+        var all: [String: [String]] = [:]
+        for game in Games.all {
+            for format in game.formats {
+                all["\(game.id)/\(format.id)"] = format.sections.map { "\($0.id) \(bound($0.min, $0.max))" }
+                    + format.totals.map { "\($0.sections.joined(separator: "+")) \(bound($0.min, $0.max))" }
+            }
+        }
+        #expect(all == [
+            "yu-gi-oh/standard": ["main 40…60", "extra -…15", "side -…15"],
+            "magic-the-gathering/commander": ["commander 1…2", "deck -…-", "commander+deck 100…100"],
+            "magic-the-gathering/constructed": ["deck 60…-", "sideboard -…15"],
+            "riftbound/standard": ["legend 1…1", "champion 1…1", "main -…-", "runes 12…12", "battlefields 3…3",
+                                   "sideboard -…10", "champion+main 40…-"],
+            "cyberpunk/standard": ["legends 3…3", "main 40…50", "side -…-"],
+        ])
     }
 
     @Test func aFormatWithoutTotalsDefaultsToNone() {

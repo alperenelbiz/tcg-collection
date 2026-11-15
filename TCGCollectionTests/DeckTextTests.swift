@@ -48,9 +48,11 @@ struct DeckTextTests {
         #expect(kinds("4X Stingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
         #expect(kinds("  2   Calm Rune  ") == [.card(count: 2, name: "Calm Rune")])
         #expect(kinds("3 Xyz Dragon") == [.card(count: 3, name: "Xyz Dragon")])
-        // Fix round 1: an `x` alone between the count and the name is a separator, as in `4x`.
-        #expect(kinds("4 x Stingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
-        #expect(kinds("4 X\tStingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
+        // Final fix B3: an `x` alone between the count and the name stays in the name (`3 X Dragon` may be the card "X
+        // Dragon"); the matcher reads it as a separator only when the name with it matches no card (`DeckPaste.keys`).
+        #expect(kinds("4 x Stingcaster Mage") == [.card(count: 4, name: "x Stingcaster Mage")])
+        #expect(kinds("4 X\tStingcaster Mage") == [.card(count: 4, name: "X\tStingcaster Mage")])
+        #expect(kinds("3 X Dragon") == [.card(count: 3, name: "X Dragon")])
         // Kept as written: the sheet marks 0 as dropped, and caps nothing here.
         #expect(kinds("0 Bloodline Recollector") == [.card(count: 0, name: "Bloodline Recollector")])
         #expect(kinds("500 Stingcaster Mage") == [.card(count: 500, name: "Stingcaster Mage")])

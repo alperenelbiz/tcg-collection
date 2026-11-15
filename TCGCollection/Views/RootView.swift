@@ -61,6 +61,9 @@ struct RootView: View {
             forSale.keep(game: game)
             decks.keep(game: game)
         }
+        // A deck deleted (here, or on another device) drops its kept state at once. A view of its own reads the decks, so a
+        // change of the library does not compute this body again.
+        .background { DeckMemoryKeeper(memory: decks) }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
@@ -101,6 +104,18 @@ struct RootView: View {
                 .environment(model)
                 .preferredColorScheme(.dark)
         }
+    }
+}
+
+/// Drops the kept state of a deck that is gone (`DeckMemory.keep(decks:)`) as soon as the game's deck ids change.
+private struct DeckMemoryKeeper: View {
+    @Environment(AppModel.self) private var model
+    let memory: DeckMemory
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: model.library.decks(game: model.gameID).map(\.id)) { _, ids in memory.keep(decks: Set(ids)) }
     }
 }
 
@@ -190,11 +205,8 @@ private struct Sidebar: View {
                 #if DEBUG && os(macOS)
                 .capturableSidebar()
                 #endif
-            VStack(alignment: .leading, spacing: 0) {
-                // On a list screen these lines are in the screen itself.
-                if !model.screen.isList { LibraryLines(inSidebar: true) }
-                StatusLine(status: model.status, notice: model.statusNotice)
-            }
+            // A view of its own: a status change redraws only it, not the list and its decks (final fix B9).
+            SidebarStatus()
         }
     }
 
@@ -220,15 +232,15 @@ private struct Sidebar: View {
                 row(.forSale, title: "For Sale", icon: "tag")
                     .accessibilityIdentifier("sidebar-for-sale")
             }
-            decksSection
+            SidebarDecks(selection: selection, activeDecks: activeDecks)
             Section("Catalog") {
                 row(.allCards, title: "All cards", icon: "square.grid.2x2")
                     .accessibilityIdentifier("sidebar-all-cards")
             }
         }
         .onChange(of: selection) { _, new in if let new { model.screen = new } }
-        .task(id: DeckJoin.key(game: model.gameID, model: model)) {
-            let key = DeckJoin.key(game: model.gameID, model: model)
+        .task(id: DeckJoin.deckKey(game: model.gameID, model: model)) {
+            let key = DeckJoin.deckKey(game: model.gameID, model: model)
             let active = model.library.decks(game: key.game).filter(\.active)
             // Without an active deck no row shows a count: nothing to read.
             guard !active.isEmpty else { return }
@@ -237,12 +249,43 @@ private struct Sidebar: View {
         .onChange(of: model.screen) { _, new in selection = new }
     }
 
-    /// D7: one row per deck of the game, in deck order, with its missing count (an active deck that misses copies), the
-    /// line for decks this build cannot read, then "New Deck…", a button, not a selectable row.
-    private var decksSection: some View {
+    /// A row of the list's selection. The selected one draws its own accent fill over the system's (grey without focus,
+    /// the user's colour with a system accent other than Multicolor), so it is amber in every state; it stays the list's
+    /// real selection for the arrow keys and VoiceOver.
+    private func row(_ screen: Screen, title: String, icon: String) -> some View {
+        let selected = selection == screen
+        return SidebarRow(title: title, icon: icon, selected: selected)
+            .tag(screen)
+            .listRowBackground(selected ? SelectionFill() : nil)
+    }
+}
+
+/// The sidebar's status area: the library's lines (on a screen that is not a list) and the status line.
+private struct SidebarStatus: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // On a list screen these lines are in the screen itself.
+            if !model.screen.isList { LibraryLines(inSidebar: true) }
+            StatusLine(status: model.status, notice: model.statusNotice)
+        }
+    }
+}
+
+/// D7: one row per deck of the game, in deck order, with its missing count (an active deck that misses copies), the
+/// line for decks this build cannot read, then "New Deck…", a button, not a selectable row. A view of its own, so a
+/// change of the status line does not compute it again (final fix B9).
+private struct SidebarDecks: View {
+    @Environment(AppModel.self) private var model
+    let selection: Screen?
+    /// The sidebar's one join of every active deck (`Sidebar.activeDecks`).
+    let activeDecks: DeckJoin
+
+    var body: some View {
         let library = model.library, game = model.gameID
         let read = activeDecks.read(game: game)
-        return Section("Decks") {
+        Section("Decks") {
             ForEach(library.decks(game: game)) { deck in
                 deckRow(deck, missing: DeckPage.sidebarCount(deck, read: read))
             }
@@ -278,16 +321,6 @@ private struct Sidebar: View {
         .accessibilityIdentifier("sidebar-deck-\(deck.id)")
         .tag(screen)
         .listRowBackground(selected ? SelectionFill() : nil)
-    }
-
-    /// A row of the list's selection. The selected one draws its own accent fill over the system's (grey without focus,
-    /// the user's colour with a system accent other than Multicolor), so it is amber in every state; it stays the list's
-    /// real selection for the arrow keys and VoiceOver.
-    private func row(_ screen: Screen, title: String, icon: String) -> some View {
-        let selected = selection == screen
-        return SidebarRow(title: title, icon: icon, selected: selected)
-            .tag(screen)
-            .listRowBackground(selected ? SelectionFill() : nil)
     }
 }
 

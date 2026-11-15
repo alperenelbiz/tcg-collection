@@ -8,12 +8,20 @@ nonisolated struct DeckCard: Codable, Sendable, Equatable, Identifiable {
     var section: String
     var count: Int
 
-    /// The card's key in its deck: `cardKey|section`.
+    /// The card's key in its deck (D2): the card and its section. Every merge of deck cards uses it.
+    var key: DeckCardKey { DeckCardKey(cardKey: cardKey, section: section) }
+    /// The same as a string, `cardKey|section`, for SwiftUI's ids and the UI tests' identifiers only.
     var id: String { "\(cardKey)|\(section)" }
 
     enum CodingKeys: String, CodingKey, CaseIterable { case cardKey, name, section, count }
     /// The JSON keys this type writes; the game file takes them out of the object it read before writing them.
     static let storedKeys = Set(CodingKeys.allCases.map(\.rawValue))
+}
+
+/// The key of a card in its deck (D2): one card can stand in two sections (final fix B9: a struct, not `cardKey|section`).
+nonisolated struct DeckCardKey: Hashable, Sendable {
+    let cardKey: String
+    let section: String
 }
 
 /// A deck of one game (D1): a stable id (a UUID string), a name, a format id of the game (kept as written when this build

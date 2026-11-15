@@ -41,13 +41,11 @@ struct NewDeckSheet: View {
                 .accessibilityIdentifier("new-deck-paste")
             }
         } confirmed: {
-            guard let id = model.library.addDeck(game: gameID, name: name, format: format) else { return }
+            // A card page's "New Deck…": the deck and the card's one copy in one library change (final fix A3).
+            let cards = adding.flatMap { card in Games.game(gameID).map { DeckPage.newDeckCards(card, format: format, game: $0) } }
+            guard let id = model.library.addDeck(game: gameID, name: name, format: format, cards: cards ?? []) else { return }
             dismiss()
-            if let adding, let game = Games.game(gameID) {
-                model.library.changeDeck(game: gameID, id: id) { DeckPage.addingOne($0, adding, game: game) }
-            } else {
-                model.showRoot(of: .deck(id))
-            }
+            if adding == nil { model.showRoot(of: .deck(id)) }
         } cancelled: {
             dismiss()
         }
@@ -84,6 +82,9 @@ struct RenameDeckSheet: View {
         } cancelled: {
             dismiss()
         }
+        // One of the app's sheets (`AppModel.showsSheet`): no import starts under it (final fix B5).
+        .onAppear { model.renamingDeck = true }
+        .onDisappear { model.renamingDeck = false }
     }
 }
 
@@ -99,6 +100,15 @@ private struct DeckNameSheet<Extra: View>: View {
     @ViewBuilder let extra: Extra
     let confirmed: () -> Void
     let cancelled: () -> Void
+    /// The sheet confirmed once (final fix A2): a double click on the default button, or Return and a click, confirms once.
+    @State private var done = false
+
+    /// `confirmed`, at most once per sheet.
+    private func confirmOnce() {
+        guard canConfirm, !done else { return }
+        done = true
+        confirmed()
+    }
 
     var body: some View {
         let isNew = identifier == "new-deck"
@@ -108,7 +118,6 @@ private struct DeckNameSheet<Extra: View>: View {
                 .foregroundStyle(Theme.text)
             TextField("Name", text: $name)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { if canConfirm { confirmed() } }
                 .accessibilityIdentifier(isNew ? "new-deck-name" : "deck-rename-field")
             extra
             HStack {
@@ -116,9 +125,10 @@ private struct DeckNameSheet<Extra: View>: View {
                 Button("Cancel", action: cancelled)
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("\(identifier)-cancel")
-                Button(confirm, action: confirmed)
+                // The default button takes Return (`sheetDefaultButton`); the field has no `onSubmit` of its own.
+                Button(confirm, action: confirmOnce)
                     .sheetDefaultButton()
-                    .disabled(!canConfirm)
+                    .disabled(!canConfirm || done)
                     .accessibilityIdentifier(isNew ? "new-deck-create" : "deck-rename-save")
             }
             .padding(.top, 6)

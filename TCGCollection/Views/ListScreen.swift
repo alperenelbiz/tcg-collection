@@ -171,8 +171,9 @@ extension View {
     }
 }
 
-/// What the catalog cannot give yet (`CollectionContent.note`): one muted line above a list's gallery.
-private struct CatalogNote: View {
+/// What the catalog cannot give yet (`CollectionContent.note`): one muted line above a list's gallery. A deck page also
+/// says with it that cards of the deck cannot be read (final fix B8).
+struct CatalogNote: View {
     let text: String?
     let identifier: String
 

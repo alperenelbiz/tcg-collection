@@ -50,6 +50,9 @@ final class PasteDeckModel: Identifiable {
     private(set) var picks: [String: Suggestion] = [:]
     /// The line numbers the user dropped.
     private(set) var drops: Set<Int> = []
+    /// `apply()` ran (final fix A1): set before the write, so a second call (a double click, Return plus a click) writes
+    /// nothing and "Create deck" / "Add to <deck>" is off.
+    private(set) var applied = false
 
     private var parsed: [DeckTextLine] = []
     /// The last read: each written name's card, by the name's search key (`DeckPaste.keys`: the whole name, then its base).
@@ -66,19 +69,27 @@ final class PasteDeckModel: Identifiable {
     @ObservationIgnored private let catalogSettled: @MainActor (String) -> Bool
     /// The YGOPRODeck type of a card name (A15); the caller gives one only for Yu-Gi-Oh!.
     @ObservationIgnored private let ygoType: @MainActor (String) -> String?
+    /// The game's names to rank unknown names against, kept for the run by the model (final fix B1).
+    @ObservationIgnored private let nameIndexes: PasteNames
+    /// The catalog's version now (`AppModel.catalogVersion`): the kept names are of one version.
+    @ObservationIgnored private let catalogVersion: @MainActor () -> Int
     /// Each read takes the next number; only the latest one stores what it found.
     @ObservationIgnored private var reading = 0
     /// The running read (`startRead`); Cancel, Back and the sheet going away cancel it (`cancelRead`).
     @ObservationIgnored private(set) var readTask: Task<Void, Never>?
     /// Whether the game's catalog has products (`checkCatalog`, and each read); nil until known.
     private(set) var catalogHasProducts: Bool?
-    /// Tests only: runs on the main actor at the start of a read, so a test can act while a read is in progress.
+    #if DEBUG
+    /// Test seam (Debug only): runs on the main actor at the start of a read, so a test can act while a read is in
+    /// progress.
     @ObservationIgnored var beforeLookup: (@MainActor () async -> Void)?
+    #endif
     @ObservationIgnored private let log = Logger(subsystem: "TCGCollection2", category: "paste")
 
     init(gameID: String, deckID: String?, name: String = "", format: String = "", text: String = "", library: UserLibrary,
          reader: CatalogStore, catalogSettled: @escaping @MainActor (String) -> Bool,
-         ygoType: @escaping @MainActor (String) -> String? = { _ in nil }) {
+         ygoType: @escaping @MainActor (String) -> String? = { _ in nil }, names: PasteNames? = nil,
+         catalogVersion: @escaping @MainActor () -> Int = { 0 }) {
         self.gameID = gameID
         self.deckID = deckID
         self.name = name
@@ -88,6 +99,8 @@ final class PasteDeckModel: Identifiable {
         self.reader = reader
         self.catalogSettled = catalogSettled
         self.ygoType = ygoType
+        nameIndexes = names ?? PasteNames(container: reader.modelContainer)
+        self.catalogVersion = catalogVersion
     }
 
     private var game: GameDefinition? { Games.game(gameID) }
@@ -159,10 +172,10 @@ final class PasteDeckModel: Identifiable {
         return deck == deckAtRead ? nil : Self.deckChanged
     }
 
-    /// "Create deck" / "Add to <deck>" is on: the table is shown, the game can change, the deck is there (when adding), no
-    /// line is still unknown, and at least one line is saved.
+    /// "Create deck" / "Add to <deck>" is on: not applied yet, the table is shown, the game can change, the deck is there
+    /// (when adding), no line is still unknown, and at least one line is saved.
     var canApply: Bool {
-        guard step == .table, problem == nil, deckID == nil || deck != nil else { return false }
+        guard !applied, step == .table, problem == nil, deckID == nil || deck != nil else { return false }
         let lines = lines
         return DeckPaste.unknownCount(lines) == 0 && !DeckPaste.cards(lines).isEmpty
     }
@@ -184,17 +197,19 @@ final class PasteDeckModel: Identifiable {
         if step == .reading { step = .text }
     }
 
-    /// Parses the text, looks every written name up by its exact keys (one store call); when a name is unknown, reads the
-    /// game's names once (`CatalogStore.cardNames`, on a throwaway store on the container: a long scan never runs on
-    /// `reader`) and ranks every unknown name against them off the main thread (`DeckPaste.NameIndex`); then the cards of
-    /// the suggestions (one call), then shows the table. A read that a later one overtook, or that was cancelled, stores
-    /// nothing.
+    /// Parses the text, looks every written name up by its exact keys (one store call); when a name is unknown, takes the
+    /// game's name index (`PasteNames`: kept for the run per catalog version; the first time read in four key ranges on
+    /// throwaway stores, never on `reader`) and ranks every unknown name against it off the main thread
+    /// (`DeckPaste.NameIndex`); then the cards of the suggestions (one call), then shows the table. A read that a later one
+    /// overtook, or that was cancelled, stores nothing.
     func read() async {
         guard canRead, let game else { return }
         reading += 1
         let number = reading
         step = .reading
+        #if DEBUG
         await beforeLookup?()
+        #endif
         let parsed = DeckText.parse(text)
         var names: [String: String] = [:], counted: Set<String> = []
         for line in parsed {
@@ -215,22 +230,22 @@ final class PasteDeckModel: Identifiable {
             }
             let keys = names.mapValues { DeckPaste.keys(for: $0, game: game) }
             let cards = try await reader.cards(game: gameID, keys: Array(Set(keys.values.flatMap { $0 })))
-            var found: [String: Found] = [:], whole = 0, base = 0
+            // The first key in `DeckPaste.keys`' order that the catalog has: the whole name, its base name, then the same
+            // without a lone leading `x` (final fix B3).
+            var found: [String: Found] = [:], whole = 0, other = 0
             for (key, tries) in keys {
-                if let card = tries.first.flatMap({ cards[$0] }) {
-                    found[key] = make(card, game: game)
-                    whole += 1
-                } else if tries.count > 1, let card = cards[tries[1]] {
-                    found[key] = make(card, game: game)
-                    base += 1
-                }
+                guard let hit = tries.firstIndex(where: { cards[$0] != nil }), let card = cards[tries[hit]] else { continue }
+                found[key] = make(card, game: game)
+                if hit == 0 { whole += 1 } else { other += 1 }
             }
             var suggestions: [String: [Suggestion]] = [:]
+            // An unknown name is ranked without its lone leading `x` (`4 x Ash Blosom`): there it is the count's separator.
             let unknown = names.filter { found[$0.key] == nil && counted.contains($0.key) }
+                .mapValues { DeckPaste.withoutLoneX($0) ?? $0 }
             if !unknown.isEmpty {
                 try Task.checkCancellation()
-                let all = try await CatalogStore(modelContainer: reader.modelContainer).cardNames(game: gameID)
-                suggestions = try await Self.rank(unknown, among: all)
+                let index = try await nameIndexes.index(game: gameID, version: catalogVersion())
+                suggestions = try await Self.rank(unknown, in: index)
             }
             let offered = try await reader.cards(game: gameID, keys: Array(Set(suggestions.values.flatMap { $0.map(\.cardKey) })))
             guard number == reading, !Task.isCancelled else { return }
@@ -243,7 +258,7 @@ final class PasteDeckModel: Identifiable {
             drops = []
             deckAtRead = deck
             step = .table
-            log.debug("paste read: \(names.count) names, \(whole) by the whole name, \(base) by the base name, \(names.count - whole - base) unknown")
+            log.debug("paste read: \(names.count) names, \(whole) by the whole name, \(other) by the base name or without a lone x, \(names.count - whole - other) unknown")
         } catch {
             guard number == reading, !(error is CancellationError), !Task.isCancelled else { return }
             step = .failed(Self.unreadable(error.localizedDescription))
@@ -252,8 +267,7 @@ final class PasteDeckModel: Identifiable {
 
     /// The nearest names (at most 5) of each unknown written name, by its key, off the main thread.
     @concurrent private nonisolated static func rank(_ unknown: [String: String],
-                                                     among names: [(cardKey: String, name: String)]) async throws -> [String: [Suggestion]] {
-        let index = DeckPaste.NameIndex(names)
+                                                     in index: DeckPaste.NameIndex) async throws -> [String: [Suggestion]] {
         var ranked: [String: [Suggestion]] = [:]
         for (key, name) in unknown {
             try Task.checkCancellation()
@@ -299,9 +313,11 @@ final class PasteDeckModel: Identifiable {
     /// Writes the paste in one library change: a new deck with its cards (`addDeck(…cards:)`, not active, A14); for a deck,
     /// one `changeDeck` on the deck as it is then. Each card is summed into the deck's card of its (card, section) (`DeckRules.adding`: no
     /// count is lowered). Returns the deck's id; nil when nothing is written (`canApply` is false, or the library refused).
+    /// Works once per sheet (`applied`).
     @discardableResult
     func apply() -> String? {
         guard canApply else { return nil }
+        applied = true
         let cards = cards
         guard let deckID else { return library.addDeck(game: gameID, name: name, format: format, cards: cards) }
         library.changeDeck(game: gameID, id: deckID) { DeckRules.adding($0, cards) }

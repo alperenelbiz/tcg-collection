@@ -58,25 +58,25 @@ nonisolated enum DeckMaths {
         isBasic ? 0 : max(0, use - owned)
     }
 
-    /// True for a card whose first printing is a basic card of the game (`GameDefinition.isBasicCard`); false for a card
-    /// without a printing.
+    /// True for a card whose deciding printing (`CardKinds.decidingPrinting`, the one that decides its kind) is a basic
+    /// card of the game (`GameDefinition.isBasicCard`); false for a card without a printing.
     static func isBasic(game: GameDefinition, printings: [String: [ProductRecord]]) -> (String) -> Bool {
         let basics = Set(printings.compactMap { key, list in
-            list.first.map { game.isBasicCard(name: $0.name, cardType: $0.cardType) } == true ? key : nil
+            CardKinds.decidingPrinting(list).map { game.isBasicCard(name: $0.name, cardType: $0.cardType) } == true ? key : nil
         })
         return { basics.contains($0) }
     }
 
-    /// The deck with each `DeckCard.id` once: a later card of the same card key and section is summed into the first, so
-    /// every line id is unique and no copy counts twice.
+    /// The deck with each `DeckCard.key` once: a later card of the same card key and section is summed into the first,
+    /// so every line id is unique and no copy counts twice.
     static func merged(_ deck: Deck) -> Deck {
         var cards: [DeckCard] = []
-        var index: [String: Int] = [:]
+        var index: [DeckCardKey: Int] = [:]
         for card in deck.cards {
-            if let at = index[card.id] {
+            if let at = index[card.key] {
                 cards[at].count += card.count
             } else {
-                index[card.id] = cards.count
+                index[card.key] = cards.count
                 cards.append(card)
             }
         }
@@ -95,21 +95,21 @@ nonisolated enum DeckMaths {
         return sections
     }
 
-    /// Each line's missing copies (by `DeckCard.id`): a card's owned copies serve its lines in the order of `sections`.
+    /// Each line's missing copies (by `DeckCard.key`): a card's owned copies serve its lines in the order of `sections`.
     private static func missingByLine(_ deck: Deck, sections: [DeckSection], printings: [String: [ProductRecord]],
-                                      ownedByCard: [String: Int], isBasic: (String) -> Bool) -> [String: Int] {
+                                      ownedByCard: [String: Int], isBasic: (String) -> Bool) -> [DeckCardKey: Int] {
         var left: [String: Int] = [:]
-        var result: [String: Int] = [:]
+        var result: [DeckCardKey: Int] = [:]
         for section in sections {
             for card in deck.cards where card.section == section.id {
                 guard !(printings[card.cardKey] ?? []).isEmpty, !isBasic(card.cardKey) else {
-                    result[card.id] = 0
+                    result[card.key] = 0
                     continue
                 }
                 let owned = left[card.cardKey] ?? ownedByCard[card.cardKey] ?? 0
                 let covered = min(max(card.count, 0), owned)
                 left[card.cardKey] = owned - covered
-                result[card.id, default: 0] += max(card.count, 0) - covered
+                result[card.key, default: 0] += max(card.count, 0) - covered
             }
         }
         return result
@@ -132,7 +132,7 @@ nonisolated enum DeckMaths {
         return sections.map { section in
             let lines = deck.cards.enumerated().filter { $0.element.section == section.id }.map { index, card in
                 (index, line(card, printings: printings[card.cardKey] ?? [], owned: ownedByCard[card.cardKey] ?? 0,
-                             missing: missing[card.id] ?? 0, isBasic: isBasic(card.cardKey), kindOf: kindOf,
+                             missing: missing[card.key] ?? 0, isBasic: isBasic(card.cardKey), kindOf: kindOf,
                              price: price))
             }
             let byGroup = Dictionary(grouping: lines) { $0.1.kind?.group ?? CardKind.other }
@@ -193,23 +193,18 @@ nonisolated enum DeckMaths {
         return [head, "\(missing) missing", tail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// A size the deck needs says so: `needs 40–60 cards`, `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`; a
-    /// maximum alone: `at most 15 cards`; nil without a bound.
-    private static func boundText(min: Int?, max: Int?) -> String? {
+    /// The warning of a count that breaks its bound says which way (final fix B2). Under a minimum: `needs 40–60 cards`,
+    /// `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`. Over a maximum: `at most 60 cards`, `at most 1 card`
+    /// (also for an exact size or a range). Nil when the count breaks no bound.
+    private static func boundText(count: Int, min: Int?, max: Int?) -> String? {
         func cards(_ n: Int) -> String { n == 1 ? "1 card" : "\(n) cards" }
-        switch (min, max) {
-        case let (low?, high?) where low == high: return "needs \(cards(low))"
-        case let (low?, high?): return "needs \(low)–\(high) cards"
-        case let (low?, nil): return "needs at least \(cards(low))"
-        case let (nil, high?): return "at most \(cards(high))"
-        case (nil, nil): return nil
+        if let max, count > max { return "at most \(cards(max))" }
+        guard let min, count < min else { return nil }
+        switch max {
+        case min?: return "needs \(cards(min))"
+        case let high?: return "needs \(min)–\(high) cards"
+        case nil: return "needs at least \(cards(min))"
         }
-    }
-
-    private static func breaks(_ count: Int, min: Int?, max: Int?) -> Bool {
-        if let min, count < min { return true }
-        if let max, count > max { return true }
-        return false
     }
 
     /// Section id → warning text (rule checks warn, never block). On one section, in this order, joined by " · ":
@@ -226,13 +221,14 @@ nonisolated enum DeckMaths {
         let deck = merged(deck)
         func count(_ ids: [String]) -> Int { deck.cards.filter { ids.contains($0.section) }.reduce(0) { $0 + $1.count } }
         var texts: [String: [String]] = [:]
-        for section in format.sections where breaks(count([section.id]), min: section.min, max: section.max) {
-            if let text = boundText(min: section.min, max: section.max) { texts[section.id, default: []].append(text) }
+        for section in format.sections {
+            if let text = boundText(count: count([section.id]), min: section.min, max: section.max) {
+                texts[section.id, default: []].append(text)
+            }
         }
         for total in format.totals {
             guard let last = total.sections.last(where: { format.section($0) != nil }).flatMap(format.section),
-                  breaks(count(total.sections), min: total.min, max: total.max),
-                  let text = boundText(min: total.min, max: total.max) else { continue }
+                  let text = boundText(count: count(total.sections), min: total.min, max: total.max) else { continue }
             texts[last.id, default: []].append(total.name == last.name ? text : "\(total.name): \(text)")
         }
         if let limit = format.copyLimit {

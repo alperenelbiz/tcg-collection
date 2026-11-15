@@ -55,7 +55,8 @@ final class DecksFlowTests: UITestCase {
     private var title: String { XCUIApplication(bundleIdentifier: Self.debugBundleID).windows.firstMatch.title }
 
     /// The Riftbound deck of the section test: Kai'Sa ×2 (1 owned), Dockside Lock-Up ×2 (3 owned), Calm Rune ×12 (none
-    /// owned, basic), all in the format's default sections; plus one deck this build cannot read.
+    /// owned, basic), all in the format's default sections, and one card this build cannot read (a count as text); plus a
+    /// second deck and one deck this build cannot read.
     private static let riftboundDeck = """
         {"version": 1,
          "collection": [{"productID": 721337, "finish": "Normal", "count": 1, "condition": "", "name": "Kai'Sa, Rebel"},
@@ -63,7 +64,8 @@ final class DecksFlowTests: UITestCase {
          "decks": [{"id": "rb1", "name": "Kai'Sa", "format": "standard", "active": false,
                     "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2},
                               {"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2},
-                              {"cardKey": "calm rune", "name": "Calm Rune", "section": "runes", "count": 12}]},
+                              {"cardKey": "calm rune", "name": "Calm Rune", "section": "runes", "count": 12},
+                              {"cardKey": "odd card", "name": "Odd Card", "section": "main", "count": "2"}]},
                    {"id": "rb9", "name": "Second", "format": "standard", "active": false, "cards": []},
                    {"name": "no id"}]}
         """
@@ -127,11 +129,20 @@ final class DecksFlowTests: UITestCase {
         }
         XCTAssertTrue(waitUntil { self.title.contains("16 cards · 1 missing") }, title)
         XCTAssertEqual(text(element(app, "sidebar-decks-unreadable")), "1 deck cannot be read.")
+        // Final fix B8: the card this build cannot read is named under the totals.
+        XCTAssertEqual(text(element(app, "deck-unreadable-cards")), "1 card of this deck cannot be read.")
         XCTAssertFalse(element(app, "sidebar-deck-missing-rb1").exists, "a deck that is not active shows a count")
-        // The status area has its own room: the sidebar's last row is above it, with two decks in the 450 pt window.
-        let allCards = element(app, "sidebar-all-cards"), status = app.staticTexts["status-line"]
-        XCTAssertTrue(allCards.frame.maxY <= status.frame.minY || !allCards.isHittable,
-                      "the status line is over All cards: \(allCards.frame) \(status.frame)")
+        // The status area has its own room: the sidebar's list ends above it, and the last row inside the list's visible
+        // part ends above the status line too (final fix B9: not passing when a row is not hittable).
+        let status = app.staticTexts["status-line"], list = app.outlines.firstMatch
+        XCTAssertTrue(status.exists && list.exists, "no status line or sidebar list")
+        XCTAssertLessThanOrEqual(list.frame.maxY, status.frame.minY + 0.5, "the list reaches under the status line: \(list.frame) \(status.frame)")
+        let rows = ["sidebar-collection", "sidebar-wanted", "sidebar-for-sale", "sidebar-deck-rb1", "sidebar-deck-rb9",
+                    "sidebar-decks-unreadable", "sidebar-new-deck", "sidebar-all-cards"].map { element(app, $0) }
+            .filter { $0.exists && $0.frame.minY < list.frame.maxY }
+        let last = try XCTUnwrap(rows.max { $0.frame.maxY < $1.frame.maxY }, "no sidebar row in the list's visible part")
+        XCTAssertLessThanOrEqual(min(last.frame.maxY, list.frame.maxY), status.frame.minY + 0.5,
+                                 "the status line is over \(last.identifier): \(last.frame) \(status.frame)")
         shot("decks-04-riftbound-deck-top")
         let dockside = reveal(app, "deck-cell-dockside lock up-main")
         XCTAssertTrue(dockside.label.hasPrefix("Dockside Lock-Up, ×2, $5.12"), dockside.label)
@@ -513,6 +524,128 @@ final class DecksFlowTests: UITestCase {
         element(app, "sidebar-deck-rb6").click()
         let deckCell = reveal(app, "deck-cell-\(key)-main")
         XCTAssertTrue(deckCell.label.hasPrefix("Dockside Lock-Up, ×2"), deckCell.label)
+    }
+
+    // MARK: Final fix wave
+
+    /// Final fix A2: New Deck's Create works once. A name typed and Return: one deck; a double click on Create: one deck
+    /// more, not two.
+    func testCreateMakesOneDeckOnReturnAndOnADoubleClick() throws {
+        let app = launch(game: "riftbound", extra: ["-screen", "collection"])
+        let newDeck = element(app, "sidebar-new-deck")
+        XCTAssertTrue(newDeck.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntil { newDeck.isEnabled }, "New Deck… stays off")
+        newDeck.click()
+        let sheet = element(app, "new-deck-sheet"), field = element(app, "new-deck-name")
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText("Rift")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !sheet.exists }, "Return did not close the sheet")
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))          // a second deck would be written by now
+        var decks = try storedDecks(game: "riftbound")
+        XCTAssertEqual(decks.map(\.name), ["Rift"], "Return made \(decks.count) decks")
+
+        XCTAssertTrue(waitUntil { newDeck.isEnabled })
+        newDeck.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        element(app, "new-deck-create").doubleClick()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        decks = try storedDecks(game: "riftbound")
+        XCTAssertEqual(decks.map(\.name), ["Rift", "Deck"], "a double click made \(decks.count - 1) decks")
+        XCTAssertEqual(deckRows(app).count, 2, "\(identifiers(deckRows(app)))")
+    }
+
+    /// C1: a card page opened from a deck cell is kept across a switch of the sidebar to the Collection and back; Back shows
+    /// the deck. A deck card without a printing opens no page.
+    func testACardPageOfADeckIsKeptAcrossASidebarSwitch() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb3"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "decks": [{"id": "rb3", "name": "Kept", "format": "standard", "active": false,
+                        "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 1},
+                                  {"cardKey": "vanished card", "name": "Vanished Card", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let kaisa = element(app, "deck-cell-kai sa rebel-main")
+        XCTAssertTrue(kaisa.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        kaisa.click()
+        let page = element(app, "card-page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "a deck cell opens no card page")
+        XCTAssertEqual(text(element(app, "card-title")), "Kai'Sa, Rebel")
+        element(app, "sidebar-collection").click()
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
+        XCTAssertFalse(page.exists)
+        element(app, "sidebar-deck-rb3").click()
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "the card page was not kept")
+        XCTAssertEqual(text(element(app, "card-title")), "Kai'Sa, Rebel")
+        shot("decks-26-card-page-kept")
+        app.toolbars.buttons["Back"].click()
+        XCTAssertTrue(waitUntil { !page.exists }, "Back left the card page")
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10))
+        let vanished = reveal(app, "deck-cell-vanished card-main")
+        vanished.click()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertFalse(page.exists, "a deck card without a printing opened a page")
+        XCTAssertTrue(element(app, "deck-screen").exists)
+    }
+
+    /// C2: the arrow keys in the sidebar go from the Collection down over Wanted, For Sale, each deck row and All cards; the
+    /// unreadable-decks line and "New Deck…" are not selectable, so they are passed over.
+    func testTheArrowKeysCrossTheDeckRows() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.riftboundDeck)
+        }
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 20))
+        XCTAssertTrue(element(app, "sidebar-decks-unreadable").waitForExistence(timeout: 10))
+        element(app, "sidebar-collection").click()
+        let steps: [(row: String, title: String)] = [("sidebar-wanted", "Wanted"), ("sidebar-for-sale", "For Sale"),
+                                                     ("sidebar-deck-rb1", "Kai'Sa"), ("sidebar-deck-rb9", "Second"),
+                                                     ("sidebar-all-cards", "Riftbound")]
+        for step in steps {
+            app.typeKey(.downArrow, modifierFlags: [])
+            XCTAssertTrue(waitUntil { self.title.hasPrefix(step.title) }, "\(step.row): the window shows \(self.title)")
+            assertAccentFill(app, row: step.row)
+        }
+        shot("decks-27-arrow-down-to-all-cards")
+        for step in steps.reversed().dropFirst() {
+            app.typeKey(.upArrow, modifierFlags: [])
+            XCTAssertTrue(waitUntil { self.title.hasPrefix(step.title) }, "\(step.row): the window shows \(self.title)")
+        }
+        app.typeKey(.upArrow, modifierFlags: [])
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
+    }
+
+    /// C3: fast `+` clicks on a deck cell, then Cmd+Q at once while the write waits (`-writeDelay`): the file has every
+    /// click, and the next launch shows it.
+    func testFastDeckClicksAndAQuitAtOnceReachTheFile() throws {
+        let app = try launch(game: "cyberpunk", extra: ["-screen", "deck:cp1", "-writeDelay", "4000"]) { _ in
+            try self.writeUserFile(game: "cyberpunk", json: """
+            {"version": 1,
+             "decks": [{"id": "cp1", "name": "Rockers", "format": "standard", "active": false,
+                        "cards": [{"cardKey": "kerry eurodyne the last rockerboy", "name": "Kerry Eurodyne", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let kerry = "kerry eurodyne the last rockerboy"
+        let plus = element(app, "deck-cell-plus-\(kerry)-main")
+        XCTAssertTrue(plus.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntil { plus.isEnabled })
+        plus.doubleClick()
+        plus.click()
+        plus.click()
+        let value = element(app, "deck-cell-value-\(kerry)-main")
+        XCTAssertTrue(waitUntil(timeout: 3) { self.text(value) == "5" }, text(value))
+        XCTAssertNotEqual(try storedDecks(game: "cyberpunk").first?.cards, ["\(kerry)|main|5"],
+                          "the write was done before the quit: nothing to wait for")
+        quit(app)                                                // at once: the last write is still waiting
+        XCTAssertEqual(try storedDecks(game: "cyberpunk").first?.cards, ["\(kerry)|main|5"])
+
+        app.launch()
+        XCTAssertTrue(waitUntil(timeout: 20) { self.text(self.element(app, "deck-cell-value-\(kerry)-main")) == "5" })
     }
 
     // MARK: Pasting a deck (phase 3A task 7)

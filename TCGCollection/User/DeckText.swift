@@ -8,7 +8,8 @@ nonisolated struct DeckTextLine: Sendable, Equatable {
     nonisolated enum Kind: Sendable, Equatable {
         /// `Main Deck:`: the cards below it are in this section, by the name as written.
         case section(String)
-        /// `3 Card name`, `3x Card name` or `3<tab>Card name`: the count as written (0 and 500 too) and the name.
+        /// `3 Card name`, `3x Card name` or `3<tab>Card name`: the count as written (0 and 500 too) and the name (`3 x Card
+        /// name`: the name `x Card name`).
         case card(count: Int, name: String)
         /// A blank line, or a line starting with `#`.
         case note
@@ -37,14 +38,14 @@ nonisolated enum DeckText {
         return card(trimmed).map { .card(count: $0.count, name: $0.name) } ?? .unreadable(trimmed)
     }
 
-    /// Leading ASCII digits, then an optional `x` (glued to them, or alone between white space: `4x Name`, `4 x Name`), then
-    /// white space and a name.
+    /// Leading ASCII digits, then an optional `x` glued to them (`4x Name`), then white space and a name. An `x` alone
+    /// between white space (`4 x Name`) stays in the name: `3 X Dragon` may be the card "X Dragon". The matcher reads it as
+    /// a separator only when the name with it matches no card (`DeckPaste.keys`, final fix B3).
     private static func card(_ line: String) -> (count: Int, name: String)? {
         let digits = line.prefix { $0.isASCII && $0.isNumber }
         guard !digits.isEmpty, let count = Int(digits) else { return nil }
         var rest = line[digits.endIndex...]
-        let spaced = rest.drop { $0.isWhitespace }
-        if let x = spaced.first, x == "x" || x == "X", spaced.dropFirst().first?.isWhitespace == true { rest = spaced.dropFirst() }
+        if let x = rest.first, x == "x" || x == "X", rest.dropFirst().first?.isWhitespace == true { rest = rest.dropFirst() }
         guard rest.first?.isWhitespace == true else { return nil }
         let name = rest.trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? nil : (count, name)

@@ -58,6 +58,8 @@ nonisolated enum DeckRules {
         }
         var deck = deck
         if let j = deck.cards.firstIndex(where: { $0.cardKey == cardKey && $0.section == to }) {
+            // The target card keeps its own object in the file, so its own unknown keys; the moved card's unknown keys
+            // are not written any more (`GameUserFile.deckObject`: a card of an existing key keeps its own object).
             deck.cards[j].count += deck.cards[i].count
             deck.cards.remove(at: i)
         } else {
@@ -88,16 +90,16 @@ nonisolated enum DeckRules {
     static func adding(_ deck: Deck, _ cards: [DeckCard]) -> Deck {
         var deck = deck
         deck.cards = summed(deck.cards)
-        var index = Dictionary(deck.cards.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        var index = Dictionary(deck.cards.enumerated().map { ($0.element.key, $0.offset) }, uniquingKeysWith: { a, _ in a })
         let before = deck.cards.map(\.count)
         for card in cards where card.count >= 1 {
-            if let i = index[card.id] {
+            if let i = index[card.key] {
                 deck.cards[i].count = min(deck.cards[i].count + card.count, max(maxCount, i < before.count ? before[i] : 0))
                 if deck.cards[i].name.isEmpty { deck.cards[i].name = card.name }
             } else {
                 var card = card
                 card.count = min(card.count, maxCount)
-                index[card.id] = deck.cards.count
+                index[card.key] = deck.cards.count
                 deck.cards.append(card)
             }
         }
@@ -116,13 +118,13 @@ nonisolated enum DeckRules {
     /// Cards of one (card, section) summed into the first (its place and name; an empty name is filled).
     private static func summed(_ cards: [DeckCard]) -> [DeckCard] {
         var result: [DeckCard] = []
-        var index: [String: Int] = [:]
+        var index: [DeckCardKey: Int] = [:]
         for card in cards {
-            if let i = index[card.id] {
+            if let i = index[card.key] {
                 result[i].count += card.count
                 if result[i].name.isEmpty { result[i].name = card.name }
             } else {
-                index[card.id] = result.count
+                index[card.key] = result.count
                 result.append(card)
             }
         }

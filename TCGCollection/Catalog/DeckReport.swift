@@ -142,14 +142,14 @@ enum DeckReport {
     private enum Hit { case first, top5, absent, matched, other }
 
     private static func pasteLines(model: AppModel) async throws -> [String] {
-        var lines = ["== Paste (PasteDeckModel.read on this store: parse, exact keys, the game's names once, the ranking, "
-                     + "the suggestions' cards; one line per text: first run / median of 3; the misspelling drops the "
-                     + "third letter)"]
+        var lines = ["== Paste (PasteDeckModel.read on this store: parse, exact keys, the game's name index, the ranking, "
+                     + "the suggestions' cards; one line per text: first run (the names read and indexed) / median of 3 "
+                     + "(the index kept in memory, PasteNames); the misspelling drops the third letter)"]
         var names: [String: [(cardKey: String, name: String)]] = [:]
         var hits: [String: [Hit]] = [:]
         var failures: [String: [String]] = [:]
         for game in Games.all.map(\.id) {
-            names[game] = try await CatalogStore(modelContainer: model.reader.modelContainer).cardNames(game: game)
+            names[game] = try await CatalogStore.cardNames(game: game, container: model.reader.modelContainer)
         }
         for test in pasteCases {
             guard let game = Games.game(test.game), let all = names[test.game] else { continue }
@@ -164,10 +164,12 @@ enum DeckReport {
             }.joined(separator: "\n")
             var times: [Duration] = []
             var paste: PasteDeckModel?
+            // One kept index per text, as the app keeps one per game for the run: the first run reads the names.
+            let kept = PasteNames(container: model.reader.modelContainer)
             for _ in 0..<3 {
                 let run = PasteDeckModel(gameID: game.id, deckID: nil, text: text, library: model.library,
                                          reader: model.reader, catalogSettled: { _ in true },
-                                         ygoType: { model.ygoType(cardName: $0) })
+                                         ygoType: { model.ygoType(cardName: $0) }, names: kept, catalogVersion: { 1 })
                 guard run.canRead else {
                     lines.append("\(game.name) \(test.lines) lines: Read is off (\(run.problem ?? run.catalogBlock ?? "?"))")
                     break
@@ -216,8 +218,8 @@ enum DeckReport {
         return lines
     }
 
-    /// The two halves of an unknown name's work, timed alone: the game's names read (`cardNames`, a throwaway store), the
-    /// index built, and 30 names ranked.
+    /// The two halves of an unknown name's work, timed alone: the game's names read (`cardNames` in one read on a
+    /// throwaway store, and in four key ranges at once as the paste reads them), the index built, and 30 names ranked.
     private static func rankingLines(names: [String: [(cardKey: String, name: String)]],
                                      container: ModelContainer) async throws -> [String] {
         var lines = ["Alone (median of 3):"]
@@ -226,12 +228,16 @@ enum DeckReport {
             let read = try await durations(3) {
                 _ = try await CatalogStore(modelContainer: container).cardNames(game: game)
             }
+            let ranges = try await durations(3) {
+                _ = try await CatalogStore.cardNames(game: game, container: container)
+            }
             let wrong = sample(all, count: 30, offset: 0).compactMap { misspelt($0.name) }
             var index: DeckPaste.NameIndex?
             let build = await durations(3) { index = await indexed(all) }
             let built = index!
             let rank = await durations(3) { await ranked(wrong, in: built) }
-            lines.append("  \(game): cardNames \(all.count) names \(ms(read)); index \(ms(build)); 30 names ranked \(ms(rank))")
+            lines.append("  \(game): cardNames \(all.count) names: one read \(ms(read)), four ranges at once \(ms(ranges)); "
+                         + "index \(ms(build)); 30 names ranked \(ms(rank))")
         }
         return lines
     }

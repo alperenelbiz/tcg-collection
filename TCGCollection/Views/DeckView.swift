@@ -62,12 +62,8 @@ nonisolated enum DeckPhase: Equatable, Sendable {
 nonisolated struct DeckContent: Equatable {
     /// Every section of the format in its order (then any the format lacks), with its groups and lines.
     let sections: [DeckSectionView]
-    /// True when the game's catalog is settled: only then is a card without a printing "not in the catalog" (D13).
-    let settled: Bool
     /// One muted line above the sections that says what the catalog cannot give; nil when it gives everything.
     let note: String?
-    /// Card keys the join that made `sections` did not look up (a card added since): pending until the next join.
-    let uncovered: Set<String>
 }
 
 /// The deck page's and the sidebar's decisions. Pure.
@@ -92,6 +88,13 @@ nonisolated enum DeckPage {
     static func addingOne(_ deck: Deck, _ card: DeckCardToAdd, game: GameDefinition) -> Deck {
         DeckRules.addingOne(deck, cardKey: card.cardKey, name: card.name,
                             section: addSection(game: game, format: game.format(deck.format), kind: card.kind))
+    }
+
+    /// The cards of a deck made by a card page's "New Deck…": the card's one copy in its default section of `format`, so
+    /// the deck and the card are one library change (`UserLibrary.addDeck(…cards:)`).
+    static func newDeckCards(_ card: DeckCardToAdd, format: String, game: GameDefinition) -> [DeckCard] {
+        [DeckCard(cardKey: card.cardKey, name: card.name,
+                  section: addSection(game: game, format: game.format(format), kind: card.kind), count: 1)]
     }
 
     /// One copy less of `card` over the deck: its default section first, then the format's order (`DeckRules.takingOne`).
@@ -134,22 +137,24 @@ nonisolated enum DeckPage {
     static func content(_ deck: Deck, game: GameDefinition, read: DeckRead?, joinFailed: Bool, catalogHasProducts: Bool,
                         catalogSettled: Bool, price: ([ProductRecord]) -> ShownPrice?) -> DeckContent {
         let keys = Set(deck.cards.map(\.cardKey))
-        func listed(_ read: DeckRead?, settled: Bool, note: String?) -> DeckContent {
+        // A card the join did not read (added since) has no printings in `read`: it shows as pending (no picture, no
+        // "missing") until the next join reads it.
+        func listed(_ read: DeckRead?, note: String?) -> DeckContent {
             let basics = read?.basics ?? [], kinds = read?.kinds ?? [:]
             let sections = DeckMaths.sections(deck, format: game.format(deck.format), game: game,
                                               printings: read?.printings ?? [:], ownedByCard: read?.ownedByCard ?? [:],
                                               isBasic: { basics.contains($0) }, kindOf: { kinds[$0] }, price: price)
-            return DeckContent(sections: sections, settled: settled, note: note, uncovered: keys.subtracting(read?.keys ?? []))
+            return DeckContent(sections: sections, note: note)
         }
         if joinFailed {
-            return read == nil ? listed(nil, settled: false, note: CollectionList.catalogUnreadable)
-                : listed(read, settled: false, note: CollectionList.catalogUnreadableKept)
+            return read == nil ? listed(nil, note: CollectionList.catalogUnreadable)
+                : listed(read, note: CollectionList.catalogUnreadableKept)
         }
         guard catalogHasProducts, let read else {
-            return listed(nil, settled: false, note: catalogSettled ? CollectionList.catalogEmpty : CollectionList.catalogDownloading)
+            return listed(nil, note: catalogSettled ? CollectionList.catalogEmpty : CollectionList.catalogDownloading)
         }
         let pending = !catalogSettled && deck.cards.contains { (read.printings[$0.cardKey] ?? []).isEmpty }
-        return listed(read, settled: catalogSettled, note: pending ? CollectionList.catalogDownloading : nil)
+        return listed(read, note: pending ? CollectionList.catalogDownloading : nil)
     }
 
     /// `deck`: the game's deck of the page's id (nil when the read folder has none). `canChange`: `UserLibrary.canChange`,
@@ -221,6 +226,15 @@ nonisolated enum DeckPage {
         default: "\(count) decks cannot be read."
         }
     }
+
+    /// The muted line at the top of a deck page whose file holds cards of it this build cannot read (final fix B8).
+    static func unreadableCardsText(_ count: Int) -> String? {
+        switch count {
+        case ..<1: nil
+        case 1: "1 card of this deck cannot be read."
+        default: "\(count) cards of this deck cannot be read."
+        }
+    }
 }
 
 /// Deck cards joined with the catalog (`CatalogJoin`). The deck page joins its deck's cards; the sidebar joins the cards
@@ -228,6 +242,14 @@ nonisolated enum DeckPage {
 typealias DeckJoin = CatalogJoin<DeckRead>
 
 extension CatalogJoin where Read == DeckRead {
+    /// The key of a deck join (the deck page's, the sidebar's): the lists' key and the Yu-Gi-Oh! index's identity, so a new
+    /// index (a first launch) reads the kinds again at once (final fix B7). Stored sections never change by themselves.
+    static func deckKey(game: String, model: AppModel) -> CollectionJoin {
+        var key = key(game: game, model: model)
+        key.ygoIndexVersion = model.ygoIndexVersion
+        return key
+    }
+
     /// The last read when it was made for `game`; else nil (the sidebar keeps one join across game switches).
     func read(game: String) -> DeckRead? { joined?.game == game ? read : nil }
 
@@ -302,6 +324,12 @@ final class DeckMemory {
             gameID = nil
         }
     }
+
+    /// The game's decks are now `ids`: the state of a deck that is gone (deleted here or elsewhere) is dropped at once,
+    /// so its search, pages and join do not outlive it (final fix B9).
+    func keep(decks ids: Set<String>) {
+        states = states.filter { ids.contains($0.key) }
+    }
 }
 
 /// One deck of the selected game (D8): the totals as the window's subtitle, the "Deck" menu and one search field; then per
@@ -321,9 +349,13 @@ struct DeckView: View {
         let listed = deck.flatMap { state.join.content($0, game: game) { prices.cheapest(game: gameID, productIDs: $0.map(\.productID)) } }
         let phase = DeckPage.phase(deck: deck, listed: listed, canChange: library.canChange(game: gameID),
                                    problem: library.problem(game: gameID))
-        let join = DeckJoin.key(game: gameID, model: model)
+        let join = DeckJoin.deckKey(game: gameID, model: model)
         let keys = Set(deck?.cards.map(\.cardKey) ?? [])
+        // Cards of the deck this build cannot read (kept in the file): one muted line under the totals (final fix B8).
+        let unreadable = phase == .list || phase == .empty
+            ? DeckPage.unreadableCardsText(library.unreadableCards(game: gameID, deck: state.deckID)) : nil
         content(phase, deck: deck, listed: listed, game: game)
+            .safeAreaInset(edge: .top, spacing: 0) { CatalogNote(text: unreadable, identifier: "deck-unreadable-cards") }
             .listScreen("deck", note: phase == .list ? listed?.note : nil)
             .navigationTitle(deck?.name ?? "Deck")
             .navigationSubtitle(subtitle(phase, listed: listed))
@@ -520,6 +552,8 @@ private struct DeckSectionBlock<Cell: View>: View {
                 Text("\(Text(section.section.name).foregroundStyle(Theme.text))\(Text(" · \(section.count)").foregroundStyle(Theme.muted))")
                     .font(Theme.deckSectionFont)
                     .monospacedDigit()
+                    // A long warning wraps; it never squeezes the title.
+                    .fixedSize()
                     .accessibilityIdentifier("deck-section-\(section.id)")
                 if let warning {
                     Text(warning)

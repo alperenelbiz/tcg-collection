@@ -943,6 +943,54 @@ struct AppModelTests {
         #expect(launched.importing?.fileName == "collection-riftbound.csv" && !launched.choosesCSVFile)
     }
 
+    /// Final fix B7: the Yu-Gi-Oh! index's identity is part of a deck join's key: when the index is replaced (it arrives on
+    /// a first launch), the deck page's and the sidebar's kinds are read again at once. Other list joins keep their key.
+    @MainActor @Test func aNewYGOIndexChangesTheDeckJoinsKey() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        let before = DeckJoin.deckKey(game: "yu-gi-oh", model: model)
+        let list = CatalogJoin<[CollectionEntry]>.key(game: "yu-gi-oh", model: model)
+        let version = model.ygoIndexVersion
+        model.ygoIndex = nil
+        #expect(model.ygoIndexVersion == version + 1)
+        #expect(DeckJoin.deckKey(game: "yu-gi-oh", model: model) != before)
+        #expect(CatalogJoin<[CollectionEntry]>.key(game: "yu-gi-oh", model: model) == list)
+    }
+
+    /// Final fix B5: Cmd+I (and a picked file) does nothing while another sheet of the window is open (New Deck, Rename,
+    /// the paste sheet, the folder sheet), so an import is never left pending behind it; once the sheet closes it works.
+    @MainActor @Test func anImportWaitsForNoOtherSheet() async throws {
+        let launched = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        await launched.start()
+        let file = fixtureURL("collection-riftbound.csv")
+        func tryImport() async {
+            launched.chooseCSVFile()
+            await launched.importCSV(from: file)
+        }
+        launched.showsNewDeck = true
+        await tryImport()
+        #expect(launched.importing == nil && !launched.choosesCSVFile)
+        launched.showsNewDeck = false
+        launched.renamingDeck = true
+        #expect(launched.showsSheet)
+        await tryImport()
+        #expect(launched.importing == nil && !launched.choosesCSVFile)
+        launched.renamingDeck = false
+        launched.pasteDeck(into: nil)
+        #expect(launched.pasting != nil)
+        await tryImport()
+        #expect(launched.importing == nil && !launched.choosesCSVFile)
+        launched.pasting = nil
+        launched.showsFolderSheet = true
+        await tryImport()
+        #expect(launched.importing == nil && !launched.choosesCSVFile)
+        launched.showsFolderSheet = false
+        launched.chooseCSVFile()
+        #expect(launched.choosesCSVFile)
+        launched.choosesCSVFile = false
+        await launched.importCSV(from: file)
+        #expect(launched.importing?.fileName == "collection-riftbound.csv")
+    }
+
     /// `-importCSV <path>` with `-store`: the launch opens the import of that file (DEBUG; the unit tests are Debug).
     @MainActor @Test func theImportFlagOpensTheImportAtLaunch() async throws {
         let file = fixtureURL("collection-riftbound.csv")

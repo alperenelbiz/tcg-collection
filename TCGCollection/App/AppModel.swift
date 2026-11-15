@@ -143,7 +143,11 @@ final class AppModel {
     let reader: CatalogStore
     let prices = PriceTable()
     let pictures: PictureStore
-    var ygoIndex: YGOPictureIndex?
+    var ygoIndex: YGOPictureIndex? {
+        didSet { ygoIndexVersion += 1 }
+    }
+    /// Goes up each time `ygoIndex` is replaced: part of a deck join's key (`DeckJoin.deckKey`, final fix B7).
+    private(set) var ygoIndexVersion = 0
     /// The game on screen, kept in `UserDefaults` (key `game`). `-game` wins at launch.
     var gameID: String {
         didSet {
@@ -209,16 +213,25 @@ final class AppModel {
     /// "New Deck…" of a card page's "Add to deck": the card the new deck gets one copy of after Create. Nil when the
     /// sidebar opened the sheet; cleared when the sheet closes.
     var newDeckCard: DeckCardToAdd?
+    /// A deck page's Rename sheet is open (`RenameDeckSheet` sets it while it shows).
+    var renamingDeck = false
     /// The paste the paste sheet shows (`PasteDeckSheet`); nil while no paste sheet is open.
     var pasting: PasteDeckModel?
+    /// Each game's names for a paste's unknown names, kept for the run per catalog version (final fix B1).
+    @ObservationIgnored private(set) lazy var pasteNames = PasteNames(container: reader.modelContainer)
     /// "Paste a deck…" of the New Deck sheet: the name and format typed there. The paste sheet opens with them once the New
     /// Deck sheet has closed (`openPendingPaste`).
     @ObservationIgnored var pendingPaste: (name: String, format: String)?
     /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet, the
-    /// New Deck sheet, the paste sheet): a dialog asked for meanwhile would not show (For Sale's Sold dialog does not open
-    /// again then).
+    /// New Deck sheet, the Rename sheet, the paste sheet): a dialog asked for meanwhile would not show (For Sale's Sold
+    /// dialog does not open again then).
     var showsSheet: Bool {
-        needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil || showsNewDeck || pasting != nil
+        choosesCSVFile || importing != nil || showsOtherSheet
+    }
+    /// A sheet open that is not the import's own (the file panel, the import sheet): an import does not start under it
+    /// (final fix B5).
+    private var showsOtherSheet: Bool {
+        needsUserFolder || showsFolderSheet || showsNewDeck || renamingDeck || pasting != nil
     }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
@@ -519,17 +532,18 @@ final class AppModel {
 
     // MARK: CSV import
 
-    /// "Import CSV…": opens the system's file panel. Not while a sheet of the window is open or a file is read.
+    /// "Import CSV…": opens the system's file panel. Not while a sheet of the window is open (`showsSheet`) or a file is
+    /// read, so an import is never left pending behind another sheet.
     func chooseCSVFile() {
-        guard canStartImport, !needsUserFolder, !showsFolderSheet else { return }
+        guard canStartImport, !choosesCSVFile else { return }
         choosesCSVFile = true
     }
 
-    /// One import at a time: none is open and no file is being read for one.
-    private var canStartImport: Bool { importing == nil && !readsImport }
+    /// One import at a time: none is open, no file is being read for one, and no other sheet is open.
+    private var canStartImport: Bool { importing == nil && !readsImport && !showsOtherSheet }
 
     /// Reads the picked file (security-scoped, off the main thread; it is never written) and opens the import sheet on it.
-    /// Ignored while another import is open or its file is still read.
+    /// Ignored while another import is open or its file is still read, and while another sheet is open.
     func importCSV(from url: URL) async {
         guard canStartImport else { return }
         readsImport = true
@@ -595,7 +609,9 @@ final class AppModel {
         pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, text: text, library: library,
                                  reader: reader,
                                  catalogSettled: { [weak self] game in self?.catalogSettled(game: game) ?? false },
-                                 ygoType: { [weak self] name in game?.pictures == .ygoprodeck ? self?.ygoType(cardName: name) : nil })
+                                 ygoType: { [weak self] name in game?.pictures == .ygoprodeck ? self?.ygoType(cardName: name) : nil },
+                                 names: pasteNames,
+                                 catalogVersion: { [weak self] in self?.catalogVersion ?? 0 })
     }
 
     /// The New Deck sheet has closed: the paste sheet it asked for opens now (two sheets never change places at once).

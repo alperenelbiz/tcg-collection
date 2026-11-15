@@ -66,12 +66,29 @@ nonisolated enum DeckPaste {
     }
 
     /// The card keys to look a written name up by, in order: the key of the whole name, then the key of its base name (a
-    /// bracket or a set code removed, `CardName.base`), when that differs. None for a name without a letter or digit.
+    /// bracket or a set code removed, `CardName.base`), when that differs. Then, for a name that starts with a lone `x`
+    /// (`4 x Ash Blossom…`, `DeckText`), the same two keys of the name without it: the `x` is the count's separator only
+    /// when the name with it matches no card (`3 X Dragon` is "X Dragon" when the catalog has it; final fix B3). None for
+    /// a name without a letter or digit.
     static func keys(for name: String, game: GameDefinition) -> [String] {
-        let whole = CardName.searchKey(name)
-        guard !whole.isEmpty else { return [] }
-        let base = CardName.searchKey(CardName.base(name, game: game, cardType: ""))
-        return base.isEmpty || base == whole ? [whole] : [whole, base]
+        func keys(_ name: String) -> [String] {
+            let whole = CardName.searchKey(name)
+            guard !whole.isEmpty else { return [] }
+            let base = CardName.searchKey(CardName.base(name, game: game, cardType: ""))
+            return base.isEmpty || base == whole ? [whole] : [whole, base]
+        }
+        var result = keys(name)
+        for key in withoutLoneX(name).map(keys) ?? [] where !result.contains(key) { result.append(key) }
+        return result
+    }
+
+    /// The name without a leading lone `x` or `X` and the white space after it (`x Ash Blossom` → `Ash Blossom`); nil when
+    /// the name does not start so, or nothing is left.
+    static func withoutLoneX(_ name: String) -> String? {
+        let trimmed = name.drop { $0.isWhitespace }
+        guard let x = trimmed.first, x == "x" || x == "X", trimmed.dropFirst().first?.isWhitespace == true else { return nil }
+        let rest = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? nil : rest
     }
 
     /// Every card line and unreadable line of `parsed`, in order, with its match and section:
@@ -124,14 +141,14 @@ nonisolated enum DeckPaste {
     /// the order of their first line, each sum at most 999.
     static func cards(_ lines: [PastedLine]) -> [DeckCard] {
         var cards: [DeckCard] = []
-        var index: [String: Int] = [:]
+        var index: [DeckCardKey: Int] = [:]
         for line in lines where line.count >= 1 {
             guard case .card(let cardKey, let name) = line.match else { continue }
             let card = DeckCard(cardKey: cardKey, name: name, section: line.section, count: min(line.count, DeckRules.maxCount))
-            if let i = index[card.id] {
+            if let i = index[card.key] {
                 cards[i].count = min(cards[i].count + card.count, DeckRules.maxCount)
             } else {
-                index[card.id] = cards.count
+                index[card.key] = cards.count
                 cards.append(card)
             }
         }
@@ -170,61 +187,72 @@ nonisolated enum DeckPaste {
     /// The names of one game's cards, ready to rank written names against, in memory (fix round 1 of task 7: the game's
     /// names are read once per paste, `CatalogStore.cardNames`). Pure; build and use it off the main thread.
     ///
-    /// `nearest` ranks in three steps: a cheap filter (the candidates that share a run of 3 letters with the written name,
-    /// letters only, folded; 2 letters for a name of 3 letters or fewer), of which the `preselected` that share the most
-    /// runs; then the edit distance on the folded names (first to the candidate's first words, as many as the written name
-    /// has, then to the whole candidate, then by name); at most `limit`, none further than half the written name's length.
+    /// `nearest` ranks in three steps: a cheap filter (the candidates that share a run of letters with the written name,
+    /// letters only, folded: runs of 3 letters, or of 2 for a written name of 5 letters or fewer, so `mixt` still meets
+    /// `Mist`; final fix B4), of which the `preselected` that share the largest part of their own runs (shared runs ÷ the
+    /// candidate's runs: a long name does not crowd out a short one); then the edit distance on the folded names (first
+    /// to the candidate's first words, as many as the written name has, then to the whole candidate, then by name); at
+    /// most `limit`, none further than half the written name's length.
     nonisolated struct NameIndex: Sendable {
         private struct Entry: Sendable {
             let suggestion: Suggestion
             /// The folded name (`CardName.searchKey`) as Unicode scalar values.
             let key: [UInt32]
-            /// The same without spaces: what the runs of letters are taken from.
-            let letters: [UInt32]
+            /// How many distinct runs of 2 and of 3 letters the name has.
+            let pairs: Int32
+            let triples: Int32
         }
 
         private let entries: [Entry]
-        /// Each run of 3 letters to the entries that have it.
-        private let runs: [UInt64: [Int32]]
+        /// Each run of 2 letters, and each run of 3, to the entries that have it.
+        private let pairRuns: [UInt64: [Int32]]
+        private let tripleRuns: [UInt64: [Int32]]
         /// How many candidates of the filter get an edit distance.
         static let preselected = 400
+        /// A written name of this many letters or fewer is filtered by runs of 2 letters.
+        static let shortName = 5
 
         init(_ names: [(cardKey: String, name: String)]) {
             var seen = Set<String>()
             var entries: [Entry] = []
-            var runs: [UInt64: [Int32]] = [:]
+            var pairRuns: [UInt64: [Int32]] = [:], tripleRuns: [UInt64: [Int32]] = [:]
             for (cardKey, name) in names where seen.insert(cardKey).inserted {
                 let key = Array(CardName.searchKey(name).unicodeScalars.map(\.value))
                 let letters = key.filter { $0 != 32 }
                 let index = Int32(entries.count)
-                for run in Set(Self.runs(letters, length: 3)) { runs[run, default: []].append(index) }
-                entries.append(Entry(suggestion: Suggestion(cardKey: cardKey, name: name), key: key, letters: letters))
+                let pairs = Set(Self.runs(letters, length: 2)), triples = Set(Self.runs(letters, length: 3))
+                for run in pairs { pairRuns[run, default: []].append(index) }
+                for run in triples { tripleRuns[run, default: []].append(index) }
+                entries.append(Entry(suggestion: Suggestion(cardKey: cardKey, name: name), key: key,
+                                     pairs: Int32(pairs.count), triples: Int32(triples.count)))
             }
             self.entries = entries
-            self.runs = runs
+            self.pairRuns = pairRuns
+            self.tripleRuns = tripleRuns
         }
 
         func nearest(_ text: String, limit: Int) -> [Suggestion] {
             let key = Array(CardName.searchKey(text).unicodeScalars.map(\.value))
             let letters = key.filter { $0 != 32 }
             guard !letters.isEmpty, limit > 0 else { return [] }
-            let candidates: [Int]
-            if letters.count <= 3 {
-                let wanted = Set(Self.runs(letters, length: 2))
-                candidates = entries.indices.filter { !wanted.isDisjoint(with: Self.runs(entries[$0].letters, length: 2)) }
-            } else {
-                var shared = [Int32](repeating: 0, count: entries.count)
-                var touched: [Int] = []
-                for run in Set(Self.runs(letters, length: 3)) {
-                    for entry in runs[run] ?? [] {
-                        let i = Int(entry)
-                        if shared[i] == 0 { touched.append(i) }
-                        shared[i] += 1
-                    }
+            let short = letters.count <= Self.shortName
+            let index = short ? pairRuns : tripleRuns
+            var shared = [Int32](repeating: 0, count: entries.count)
+            var touched: [Int] = []
+            for run in Set(Self.runs(letters, length: short ? 2 : 3)) {
+                for entry in index[run] ?? [] {
+                    let i = Int(entry)
+                    if shared[i] == 0 { touched.append(i) }
+                    shared[i] += 1
                 }
-                candidates = touched.sorted { shared[$0] != shared[$1] ? shared[$0] > shared[$1] : $0 < $1 }
-                    .prefix(Self.preselected).map { $0 }
             }
+            // The share of the candidate's own runs, compared without division: a/b > c/d ⇔ a·d > c·b.
+            func runs(_ i: Int) -> Int64 { Int64(short ? entries[i].pairs : entries[i].triples) }
+            let candidates = touched.sorted { a, b in
+                let left = Int64(shared[a]) * runs(b), right = Int64(shared[b]) * runs(a)
+                return left != right ? left > right : a < b
+            }
+            .prefix(Self.preselected)
             let words = key.split(separator: 32).count
             let most = key.count / 2
             let scored = candidates.compactMap { i -> (Suggestion, Int, Int)? in

@@ -19,7 +19,7 @@ nonisolated private struct RawList<Key: Hashable> {
 /// The raw JSON of one deck's cards: each parsed card's own object, in the order of the deck's cards as read, and the
 /// elements that could not be parsed, in their order.
 nonisolated private struct RawCards {
-    var objects: [(id: String, cardKey: String, object: [String: Any])] = []
+    var objects: [(key: DeckCardKey, object: [String: Any])] = []
     var unparseable: [Any] = []
 }
 
@@ -184,7 +184,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             ("forSale", try Self.objects(forSale.map { ($0, raw.forSale.objects[$0.key]) }, owned: SaleEntry.storedKeys,
                                          encoder: encoder) + raw.forSale.unparseable),
             ("sold", try Self.objects(soldPairs, owned: SoldRecord.storedKeys, encoder: encoder) + raw.soldUnparseable),
-            ("decks", try decks.map { try deckObject($0, encoder: encoder) } + raw.decks.unparseable),
+            ("decks", try decks.map { try deckObject($0, encoder: encoder) } + unparseableDecksKept),
         ]
         // A key the file did not have stays out while its list is empty.
         for (key, elements) in lists where !elements.isEmpty || raw.object[key] != nil {
@@ -193,6 +193,23 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         var out = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         out.append(0x0A)
         return out
+    }
+
+    /// The decks read that could not be parsed, minus each second deck of an id whose parsed deck was deleted since the
+    /// read: the duplicate goes with its deck, so a deleted deck cannot come back at the next read (final fix B9).
+    private var unparseableDecksKept: [Any] {
+        let deleted = Set(raw.decks.objects.keys).subtracting(decks.map(\.id))
+        guard !deleted.isEmpty else { return raw.decks.unparseable }
+        return raw.decks.unparseable.filter { element in
+            guard let id = (element as? [String: Any])?["id"] as? String else { return true }
+            return !deleted.contains(id)
+        }
+    }
+
+    /// How many cards of the deck `id` this build could not read (kept raw inside the deck, written back as read); 0 for a
+    /// deck without any, a deck added since the read, or no such deck. For the deck page's line (final fix B8).
+    func unreadableCards(deck id: String) -> Int {
+        decks.contains { $0.id == id } ? raw.deckCards[id]?.unparseable.count ?? 0 : 0
     }
 
     /// Pins a wanted card to one printing, or takes its pin away (`nil`; `ListRules.pinning`). A pin this build cannot
@@ -239,13 +256,13 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         guard var object = try Self.objects([(deck, raw.decks.objects[deck.id])], owned: Deck.storedKeys,
                                             encoder: encoder)[0] as? [String: Any] else { return [:] }
         let rawCards = raw.deckCards[deck.id] ?? RawCards()
-        var byID: [String: [String: Any]] = [:]
-        for card in rawCards.objects { byID[card.id] = card.object }
-        let current = Set(deck.cards.map(\.id))
-        var spare = rawCards.objects.filter { !current.contains($0.id) }
+        var byKey: [DeckCardKey: [String: Any]] = [:]
+        for card in rawCards.objects { byKey[card.key] = card.object }
+        let current = Set(deck.cards.map(\.key))
+        var spare = rawCards.objects.filter { !current.contains($0.key) }
         let pairs = deck.cards.map { card -> (DeckCard, [String: Any]?) in
-            if let own = byID[card.id] { return (card, own) }
-            guard let i = spare.firstIndex(where: { $0.cardKey == card.cardKey }) else { return (card, nil) }
+            if let own = byKey[card.key] { return (card, own) }
+            guard let i = spare.firstIndex(where: { $0.key.cardKey == card.cardKey }) else { return (card, nil) }
             return (card, spare.remove(at: i).object)
         }
         object["cards"] = try Self.objects(pairs, owned: DeckCard.storedKeys, encoder: encoder) + rawCards.unparseable
@@ -380,13 +397,13 @@ nonisolated struct GameUserFile: Sendable, Equatable {
               let active = optional(o["active"], else: false, as: Bool.self, read: boolean),
               let elements = optional(o["cards"], else: [], as: [Any].self) else { return nil }
         let cards = split(elements, deckCard)
-        let (clean, objects) = merged(cards.parsed, key: \.id, count: \.count) { first, later in
+        let (clean, objects) = merged(cards.parsed, key: \.key, count: \.count) { first, later in
             first.count += later.count
             if first.name.isEmpty { first.name = later.name }
         }
         let blank = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let deck = Deck(id: id, name: blank ? "Deck" : name, format: format, active: active, cards: clean)
-        let raw = RawCards(objects: clean.map { (id: $0.id, cardKey: $0.cardKey, object: objects[$0.id] ?? [:]) },
+        let raw = RawCards(objects: clean.map { (key: $0.key, object: objects[$0.key] ?? [:]) },
                            unparseable: cards.unparseable)
         return (deck, raw)
     }

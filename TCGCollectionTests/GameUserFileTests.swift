@@ -505,6 +505,35 @@ struct GameUserFileTests {
         #expect(try GameUserFile(data: try file.data()) == file)
     }
 
+    /// Final fix B8: the count of a deck's cards this build cannot read (kept raw inside it), for the deck page's line. It
+    /// holds through a change of the deck and is not written: the file's text keeps every raw card as it was.
+    @Test func aDecksUnreadableCardsAreCounted() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"constructed","cards":[{"name":"no key","section":"deck","count":1},"x",{"cardKey":"c","name":"C","section":"deck","count":1}]},{"id":"b","name":"B","cards":[]}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.unreadableCards(deck: "a") == 2)
+        #expect(file.unreadableCards(deck: "b") == 0 && file.unreadableCards(deck: "none") == 0)
+        file.decks[0] = DeckRules.setting(file.decks[0], count: 3, cardKey: "c", name: "", section: "deck")
+        #expect(file.unreadableCards(deck: "a") == 2)
+        let written = String(decoding: try file.data(), as: UTF8.self)
+        #expect(!written.contains("unreadable"))
+        let again = try GameUserFile(data: try file.data())
+        #expect(again.unreadableCards(deck: "a") == 2)
+    }
+
+    /// Final fix B9: a second deck of one id is kept raw; when the first deck of that id is deleted, the raw duplicate is
+    /// deleted with it, so the deleted deck cannot come back at the next read. Other raw decks stay.
+    @Test func aDeletedDecksRawDuplicateGoesWithIt() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","cards":[]},{"id":"b","name":"B","cards":[]},{"id":"a","name":"second A","cards":[]},{"name":"no id"},{"id":"b","name":"second B","cards":[]}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks.map(\.id) == ["a", "b"])
+        file.decks.removeAll { $0.id == "a" }
+        let text = String(decoding: try file.data(), as: UTF8.self)
+        #expect(!text.contains("second A") && !text.contains(#""A""#))
+        #expect(text.contains("second B") && text.contains("no id"))
+        let again = try GameUserFile(data: try file.data())
+        #expect(again.decks.map(\.id) == ["b"])
+    }
+
     @Test func decksOfTheWrongTypeRefuseTheFile() {
         #expect(throws: GameUserFileError.malformedList("decks")) { try GameUserFile(data: Data(#"{"decks":3}"#.utf8)) }
         #expect(throws: GameUserFileError.malformedList("decks")) { try GameUserFile(data: Data(#"{"decks":{"id":"a"}}"#.utf8)) }

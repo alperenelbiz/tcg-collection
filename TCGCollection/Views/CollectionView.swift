@@ -57,6 +57,9 @@ nonisolated struct CollectionJoin: Equatable {
     /// The game's catalog step has ended in this run (`AppModel.catalogSettled`): only then may a Set or Rarity choice
     /// go back to "All", and a product the join did not find read as not in the catalog any more (`content(rows:)`).
     let catalogSettled: Bool
+    /// A deck join's only (`DeckJoin.deckKey`, final fix B7): the Yu-Gi-Oh! index's identity (`AppModel.ygoIndexVersion`),
+    /// so the kinds follow a new index at once. 0 in the other lists' keys.
+    var ygoIndexVersion = 0
 }
 
 /// Where the cell of a product that is not in the catalog any more opens (Review Focus 4).

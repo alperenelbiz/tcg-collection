@@ -24,6 +24,15 @@ final class CatalogScreenState {
         text = search
     }
 
+    /// A search's result: the cards, and for a deck's search their printings, written together, so no frame shows the new
+    /// cards with their controls off. Printings that could not be read (nil) keep the last good read: an earlier read is
+    /// not overwritten, and the next appearance of the screen searches (and reads) again (final fix B9). An unchanged
+    /// value is not written, so nothing redraws on a return to the screen.
+    func show(_ shown: [CardSummary], printings: [String: [ProductRecord]]?) {
+        if let printings, deckPrintings != printings { deckPrintings = printings }
+        if cards != shown { cards = shown }
+    }
+
     /// How many of the three menus (Set, Rarity, Type) have a choice. The search text is not a filter.
     var filtersOn: Int { [filter.groupID != nil, filter.rarity != nil, filter.typeFacet != nil].filter { $0 }.count }
 
@@ -82,7 +91,9 @@ struct CatalogSearchView: View {
                     }
                 }
             }
-            .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion)) { await search() }
+            // A deck's search reads its cards' printings again when the Yu-Gi-Oh! index is replaced (final fix B7).
+            .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion,
+                                ygoIndexVersion: deckID == nil ? 0 : model.ygoIndexVersion)) { await search() }
             // The set list is cheap; the rarity and type lists come from `model.facets` (a file, P4).
             .task(id: model.filtersVersion) { await loadSets() }
     }
@@ -206,14 +217,13 @@ struct CatalogSearchView: View {
         guard !Task.isCancelled else { return }
         let shown = Array(found.prefix(Self.limit))
         // A deck's search: the printings of the cards shown, in one call for the whole result, off the main thread
-        // (`reader`), before the cells show, so a cell's kind is the card page's.
+        // (`reader`), before the cells show, so a cell's kind is the card page's. A failed read gives nil (`show`).
+        var printings: [String: [ProductRecord]]?
         if deckID != nil {
-            let printings = (try? await model.reader.printings(game: game, cardKeys: shown.map(\.id))) ?? [:]
+            printings = try? await model.reader.printings(game: game, cardKeys: shown.map(\.id))
             guard !Task.isCancelled else { return }
-            if state.deckPrintings != printings { state.deckPrintings = printings }
         }
-        // On a return to All cards the same search runs again: unchanged results are not written, so nothing redraws.
-        if state.cards != shown { state.cards = shown }
+        state.show(shown, printings: printings)
         state.hasMore = found.count > Self.limit
         state.catalogEmpty = empty
     }
@@ -285,6 +295,7 @@ private nonisolated struct SearchKey: Equatable {
     let text: String
     let filter: CardFilter
     let catalogVersion: Int
+    let ygoIndexVersion: Int
 }
 
 /// "Clear" in a toolbar, right of the filter menus, only while a filter is on (the caller leaves it out otherwise, not

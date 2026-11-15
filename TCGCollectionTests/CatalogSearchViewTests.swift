@@ -20,4 +20,18 @@ struct CatalogSearchViewTests {
         state.filter.typeFacet = "Unit"
         #expect(state.filtersOn == 1)
     }
+
+    /// Final fix B9: a deck's search writes its cards and their printings together; a failed printings read (nil) keeps
+    /// the last good read instead of emptying it (the controls would go off), and the next appearance reads again.
+    @Test func aSearchWritesCardsAndPrintingsTogetherAndKeepsAGoodRead() {
+        let state = CatalogScreenState(gameID: "riftbound", search: "")
+        let kaisa = product(id: 721337, name: "Kai'Sa, Rebel", cardType: "Champion Unit")
+        let card = CardSummary(id: "kai sa rebel", name: "Kai'Sa, Rebel", cover: kaisa, productIDs: [721337])
+        state.show([card], printings: ["kai sa rebel": [kaisa]])
+        #expect(state.cards == [card] && state.deckPrintings == ["kai sa rebel": [kaisa]])
+        state.show([card], printings: nil)                                    // the read failed
+        #expect(state.cards == [card] && state.deckPrintings == ["kai sa rebel": [kaisa]])
+        state.show([], printings: [:])
+        #expect(state.cards == [] && state.deckPrintings.isEmpty)
+    }
 }

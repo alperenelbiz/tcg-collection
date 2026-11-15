@@ -409,4 +409,21 @@ struct CatalogStoreTests {
         #expect(try await s.cardNames(game: "riftbound").map(\.cardKey) == ["calm rune", "dockside lock up", "kai sa rebel"])
         #expect(try await CatalogStore.inMemory().cardNames(game: "riftbound").isEmpty)
     }
+
+    /// Final fix B1: the names read in four key ranges at once (`CatalogStore.cardNames(game:container:)`, each range on a
+    /// throwaway store of its own) gives the same list as one read in key order: a key equal to a bound ("e", "k", "r")
+    /// is read once, in its range; a key below the first bound (a digit) and above the last too.
+    @Test func cardNamesInRangesAtOnceEqualOneRead() async throws {
+        let s = try CatalogStore.inMemory()
+        let names = ["E", "Ea", "K", "Kai", "R", "Rune", "Zed", "7 Colored Fish", "Apple", "Dd", "Jj", "Qq"]
+        try await s.replaceProducts(of: 1, with: names.enumerated().map { product(id: $0.offset + 1, name: $0.element) }
+                                        + [product(id: 99, name: "Rune")], at: .now)
+        let whole = try await s.cardNames(game: "riftbound")
+        #expect(whole.map(\.cardKey) == ["7 colored fish", "apple", "dd", "e", "ea", "jj", "k", "kai", "qq", "r", "rune", "zed"])
+        let ranged = try await CatalogStore.cardNames(game: "riftbound", container: s.modelContainer)
+        #expect(ranged.map(\.cardKey) == whole.map(\.cardKey))
+        #expect(ranged.map(\.name) == whole.map(\.name))
+        #expect(try await s.cardNames(game: "riftbound", after: "e", through: "k").map(\.cardKey) == ["ea", "jj", "k"])
+        #expect(try await CatalogStore.cardNames(game: "yu-gi-oh", container: s.modelContainer).isEmpty)
+    }
 }

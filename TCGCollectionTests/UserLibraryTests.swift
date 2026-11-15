@@ -1113,6 +1113,21 @@ struct UserLibraryTests {
         #expect(lib2.unreadableDecks(game: "riftbound") == 3)
     }
 
+    /// Final fix B8: the library says how many cards of a deck this build cannot read; 0 for a deck without any, a deck
+    /// that is not there, and a refused file.
+    @MainActor @Test func aDecksUnreadableCardsAreCountedByTheLibrary() async throws {
+        let dir = tempDir()
+        try Data(#"{"version":1,"decks":[{"id":"a","name":"A","format":"standard","active":false,"cards":[{"cardKey":"k","section":"main","count":"2"}]}]}"#.utf8)
+            .write(to: dir.appending(path: "riftbound.json"))
+        try Data(#"{"version":2,"decks":[{"id":"a","cards":[1]}]}"#.utf8).write(to: dir.appending(path: "cyberpunk.json"))
+        let lib = await deckLibrary(dir)
+        #expect(lib.unreadableCards(game: "riftbound", deck: "a") == 1)
+        #expect(lib.unreadableCards(game: "riftbound", deck: "b") == 0)
+        #expect(lib.unreadableCards(game: "cyberpunk", deck: "a") == 0)
+        lib.changeDeck(game: "riftbound", id: "a") { var d = $0; d.active = true; return d }
+        #expect(lib.unreadableCards(game: "riftbound", deck: "a") == 1)
+    }
+
     /// Review Focus 4: a reload that removes a deck (deleted on another device) bumps `version`, and the deck is gone.
     @MainActor @Test func aReloadThatRemovesADeckBumpsTheVersion() async throws {
         let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")

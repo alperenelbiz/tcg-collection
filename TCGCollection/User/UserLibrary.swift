@@ -129,6 +129,12 @@ final class UserLibrary {
         refused[game] == nil && files[game] != nil ? unreadableDeckCounts[game] ?? 0 : 0
     }
 
+    /// The cards of a deck that this build cannot read (kept inside the deck in the file, not listed; final fix B8). 0 for
+    /// a deck without any, a deck that is not there, and a game with no file or a refused one.
+    func unreadableCards(game: String, deck id: String) -> Int {
+        refused[game] == nil ? files[game]?.unreadableCards(deck: id) ?? 0 : 0
+    }
+
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
     }

@@ -88,6 +88,17 @@ struct DeckMathsTests {
         #expect(DeckMaths.missingCopies(theDeck, printings: printings, ownedByCard: [:], isBasic: isBasic) == 0)
     }
 
+    /// Final fix B6: one basic rule with the kind: the deciding printing (`CardKinds.decidingPrinting`, the first with a
+    /// card type) says whether a card is basic, not the first printing.
+    @Test func theDecidingPrintingSaysWhetherACardIsBasic() {
+        let untyped = product(id: 10, game: "magic-the-gathering", name: "Plains Promo Sheet")
+        let typed = product(id: 11, game: "magic-the-gathering", name: "Plains", cardType: "Basic Land — Plains")
+        #expect(DeckMaths.isBasic(game: magic, printings: ["plains": [untyped, typed]])("plains"))
+        let bear = product(id: 12, game: "magic-the-gathering", name: "Bear", cardType: "Creature — Bear")
+        let island = product(id: 13, game: "magic-the-gathering", name: "Island")
+        #expect(!DeckMaths.isBasic(game: magic, printings: ["bear": [island, bear]])("bear"))
+    }
+
     // MARK: sections and groups
 
     @Test func everySectionOfTheFormatIsListedWithItsCount() {
@@ -159,13 +170,14 @@ struct DeckMathsTests {
         DeckMaths.warnings(deck, format: game.format(deck.format), isBasic: isBasic, nameOf: { names[$0] ?? $0 })
     }
 
-    /// Yu-Gi-Oh!'s Main Deck holds 40–60 cards: under or over gives the range; inside gives nothing.
+    /// Yu-Gi-Oh!'s Main Deck holds 40–60 cards: under gives the range ("needs …"), over gives the maximum ("at most …",
+    /// final fix B2); inside gives nothing.
     @Test func aSectionUnderOrOverItsRangeWarns() {
         let fillers = (1...13).map { card("c\($0)", "main", 3) }       // 39 cards, 3 copies each
         #expect(warnings(deck(fillers), game: yugioh)["main"] == "needs 40–60 cards")
         #expect(warnings(deck(fillers + [card("x", "main", 1)]), game: yugioh)["main"] == nil)
         let sixtyOne = (1...20).map { card("c\($0)", "main", 3) } + [card("x", "main", 1)]
-        #expect(warnings(deck(sixtyOne), game: yugioh)["main"] == "needs 40–60 cards")
+        #expect(warnings(deck(sixtyOne), game: yugioh)["main"] == "at most 60 cards")
     }
 
     @Test func aSectionWithOnlyAMaximumOrMinimumWarns() {
@@ -175,12 +187,15 @@ struct DeckMathsTests {
         #expect(warnings(deck(fiftyNine, format: "constructed"), game: magic)["deck"] == "needs at least 60 cards")
     }
 
-    /// Riftbound's Legend is exactly 1: none or two warn "needs 1 card"; the Battlefields exactly 3 warn "needs 3 cards".
+    /// Riftbound's Legend is exactly 1: none warns "needs 1 card", two or nine "at most 1 card" (final fix B2); the
+    /// Battlefields exactly 3: one warns "needs 3 cards", four "at most 3 cards".
     @Test func anExactSectionWarnsWithItsNumber() {
         #expect(warnings(deck([]), game: riftbound)["legend"] == "needs 1 card")
-        #expect(warnings(deck([card("l1", "legend", 1), card("l2", "legend", 1)]), game: riftbound)["legend"] == "needs 1 card")
+        #expect(warnings(deck([card("l1", "legend", 1), card("l2", "legend", 1)]), game: riftbound)["legend"] == "at most 1 card")
+        #expect(warnings(deck([card("l1", "legend", 9)]), game: riftbound)["legend"] == "at most 1 card")
         #expect(warnings(deck([card("l1", "legend", 1)]), game: riftbound)["legend"] == nil)
         #expect(warnings(deck([card("b", "battlefields", 1)]), game: riftbound)["battlefields"] == "needs 3 cards")
+        #expect(warnings(deck([card("b", "battlefields", 4)]), game: riftbound)["battlefields"] == "at most 3 cards")
     }
 
     @Test func aSectionWithoutNumbersNeverWarns() {
@@ -236,6 +251,12 @@ struct DeckMathsTests {
         #expect(empty["deck"] == "Commander deck: needs 100 cards · more than 1 copy: Sol Ring")
         let legal = deck([card("cmd", "commander", 1), card("x", "deck", 99)], format: "commander")
         #expect(warnings(legal, game: magic, isBasic: { $0 == "x" }).isEmpty)
+        // Final fix B2: over a maximum says which way, for a section's range and for a total.
+        let over = deck([card("c1", "commander", 1), card("c2", "commander", 1), card("c3", "commander", 1),
+                         card("x", "deck", 98)], format: "commander")
+        let overResult = warnings(over, game: magic, isBasic: { $0 == "x" })
+        #expect(overResult["commander"] == "at most 2 cards")
+        #expect(overResult["deck"] == "Commander deck: at most 100 cards")
     }
 
     /// Fix round 1: the copy warning stands on the first section, in the format's order, that holds a card over the limit.

@@ -23,6 +23,12 @@ import Testing
     }
 }
 
+/// Counts the names reads of a test's `PasteNames`.
+private actor ReadCount {
+    private(set) var count = 0
+    func add() { count += 1 }
+}
+
 /// `"<cardKey>|<section>|<count>"` per card, in the deck's order.
 private func shown(_ deck: Deck?) -> [String] { deck?.cards.map { "\($0.cardKey)|\($0.section)|\($0.count)" } ?? [] }
 
@@ -220,6 +226,69 @@ struct PasteDeckModelTests {
         let model = pasting("1 Stardust Dragon", library: library, reader: try await filledStore())
         #expect(model.problem != nil && !model.canRead)
         #expect(model.problem == library.problem(game: "yu-gi-oh"))
+    }
+
+    /// Final fix A1: `apply()` works once per sheet (a double click, Return plus a click): one library change, one deck,
+    /// every count once; `canApply` is false after it. The same for a paste into a deck.
+    @Test func applyWorksOnce() async throws {
+        let (library, _) = try await library()
+        let model = pasting("2 Stardust Dragon", library: library, reader: try await filledStore())
+        await model.read()
+        let before = library.version
+        #expect(model.apply() == "new")
+        #expect(!model.canApply && model.apply() == nil)
+        #expect(library.version == before + 1)
+        #expect(library.decks(game: "yu-gi-oh").count == 1)
+        #expect(shown(library.deck(game: "yu-gi-oh", id: "new")) == ["stardust dragon|extra|2"])
+
+        let (other, _) = try await self.library(Self.windDeck)
+        let adding = pasting("2 Stardust Dragon", deck: "yg1", library: other, reader: try await filledStore())
+        await adding.read()
+        let start = other.version
+        #expect(adding.apply() == "yg1")
+        #expect(!adding.canApply && adding.apply() == nil)
+        #expect(other.version == start + 1)
+        #expect(shown(other.deck(game: "yu-gi-oh", id: "yg1")) == ["swiftwind panther warrior|main|1", "stardust dragon|extra|2"])
+    }
+
+    /// Final fix B3: `3 X Dragon` is the card "X Dragon" when the catalog has it (the name as written first); `4 x Wyvern`
+    /// is 4 Wyvern, with the "as written" note, since no card is named "X Wyvern". `2x Dragon` is always 2 Dragon.
+    @Test func aLoneXIsASeparatorOnlyWhenTheNameWithItMatchesNoCard() async throws {
+        let store = try CatalogStore.inMemory()
+        try await store.replaceProducts(of: 1, with: [product(id: 1, game: "yu-gi-oh", name: "X Dragon", cardType: "Normal Monster"),
+                                                      product(id: 2, game: "yu-gi-oh", name: "Dragon", cardType: "Normal Monster"),
+                                                      product(id: 3, game: "yu-gi-oh", name: "Wyvern", cardType: "Normal Monster")],
+                                        at: Date(timeIntervalSince1970: 1_800_000_000))
+        let (library, _) = try await library()
+        let model = pasting("3 X Dragon\n4 x Wyvern\n2x Dragon\n1 x Wyvrn", library: library, reader: store)
+        await model.read()
+        #expect(model.lines.prefix(3).map(\.match) == [.card(cardKey: "x dragon", name: "X Dragon"),
+                                                        .card(cardKey: "wyvern", name: "Wyvern"), .card(cardKey: "dragon", name: "Dragon")])
+        #expect(model.unknownCount == 1)
+        #expect(model.lines.map(\.count) == [3, 4, 2, 1])
+        #expect(model.lines.map(\.note) == [nil, "as written: x Wyvern", nil, nil])
+        // The misspelt line's nearest names are ranked without its lone `x`.
+        #expect(model.suggestions(for: model.lines[3])?.first == Suggestion(cardKey: "wyvern", name: "Wyvern"))
+    }
+
+    /// Final fix B1: pastes share the model's names (`PasteNames`): a second paste with an unknown name, on the same catalog
+    /// version, does not read the game's names again.
+    @Test func aSecondPasteUsesTheNamesInMemory() async throws {
+        let (library, _) = try await library()
+        let reader = try await filledStore()
+        let reads = ReadCount()
+        let container = reader.modelContainer
+        let names = PasteNames { game in
+            await reads.add()
+            return try await CatalogStore.cardNames(game: game, container: container)
+        }
+        for _ in 0..<2 {
+            let model = PasteDeckModel(gameID: "yu-gi-oh", deckID: nil, text: "1 Stardust Dragn", library: library,
+                                       reader: reader, catalogSettled: { _ in true }, names: names, catalogVersion: { 7 })
+            await model.read()
+            #expect(model.suggestions(for: model.lines[0])?.first == Suggestion(cardKey: "stardust dragon", name: "Stardust Dragon"))
+        }
+        #expect(await reads.count == 1)
     }
 
     /// Back, a new text and Read again: the drops of the last table are gone.

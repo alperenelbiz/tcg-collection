@@ -440,18 +440,28 @@ actor CatalogStore: ModelActor {
     }
 
     /// Every card of `game` once, as (card key, a printing's card name), by key: what a paste ranks its unknown names
-    /// against (`DeckPaste.NameIndex`). A scan of the game's `(gameID, cardKey)` index in pages of `pageSize` rows, each
-    /// starting after the last key read, with only the two properties fetched. A long scan: run it on a throwaway store on
-    /// the container (`CatalogStore(modelContainer:)`), never on `reader` or the writer. Cancellation stops it between pages.
-    func cardNames(game: String, pageSize: Int = 2_000) throws -> [(cardKey: String, name: String)] {
+    /// against (`DeckPaste.NameIndex`). Only the keys in `(after, through]` (no upper end when `through` is nil): a scan
+    /// of the game's `(gameID, cardKey)` index in pages of `pageSize` rows, each starting after the last key read. A long
+    /// scan: run it on a throwaway store on the container (`CatalogStore(modelContainer:)`), never on `reader` or the
+    /// writer. Cancellation stops it between pages.
+    ///
+    /// SwiftData reads every column of each row (`propertiesToFetch` does not narrow the SQL, seen with
+    /// `-com.apple.CoreData.SQLDebug 1`): the time goes into making the row objects, not into SQLite (final fix B1).
+    func cardNames(game: String, after low: String = "", through high: String? = nil,
+                   pageSize: Int = 2_000) throws -> [(cardKey: String, name: String)] {
         var names: [(cardKey: String, name: String)] = []
-        var last = ""
+        var last = low
         while true {
             try Task.checkCancellation()
             let after = last
-            var descriptor = FetchDescriptor<CatalogProduct>(
-                predicate: #Predicate { $0.gameID == game && $0.cardKey > after },
-                sortBy: [SortDescriptor(\.cardKey, comparator: .lexical)])
+            var descriptor: FetchDescriptor<CatalogProduct>
+            if let high {
+                descriptor = FetchDescriptor(predicate: #Predicate { $0.gameID == game && $0.cardKey > after && $0.cardKey <= high },
+                                             sortBy: [SortDescriptor(\.cardKey, comparator: .lexical)])
+            } else {
+                descriptor = FetchDescriptor(predicate: #Predicate { $0.gameID == game && $0.cardKey > after },
+                                             sortBy: [SortDescriptor(\.cardKey, comparator: .lexical)])
+            }
             descriptor.fetchLimit = max(pageSize, 1)
             descriptor.propertiesToFetch = [\.cardKey, \.cardName]
             let page = try modelContext.fetch(descriptor)
@@ -460,6 +470,28 @@ actor CatalogStore: ModelActor {
             last = end.cardKey
         }
         return names
+    }
+
+    /// The upper ends of the key ranges `cardNames(game:container:)` reads at once (four ranges of about equal size for
+    /// English card names).
+    nonisolated static let nameRangeEnds = ["e", "k", "r"]
+
+    /// `cardNames(game:)` in four key ranges at once, each on a throwaway store of its own on `container` (its own
+    /// context and queue), joined in key order: the row objects are made on four cores. Measured on a copy of the real
+    /// catalog (Debug, Magic, 117,536 printings, 44,314 names): 1.8 s in one read, 0.8 s in four (final fix B1).
+    /// Cancellation stops every range.
+    nonisolated static func cardNames(game: String, container: ModelContainer) async throws -> [(cardKey: String, name: String)] {
+        let lows = [""] + nameRangeEnds
+        let highs: [String?] = nameRangeEnds + [nil]
+        return try await withThrowingTaskGroup(of: (Int, [(cardKey: String, name: String)]).self) { group in
+            for (i, low) in lows.enumerated() {
+                let high = highs[i]
+                group.addTask { (i, try await CatalogStore(modelContainer: container).cardNames(game: game, after: low, through: high)) }
+            }
+            var parts = Array(repeating: [(cardKey: String, name: String)](), count: lows.count)
+            for try await (i, part) in group { parts[i] = part }
+            return parts.flatMap { $0 }
+        }
     }
 
     func product(_ productID: Int) throws -> ProductRecord? {

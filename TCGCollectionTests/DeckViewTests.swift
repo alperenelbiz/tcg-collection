@@ -149,12 +149,13 @@ struct DeckViewTests {
         let runes = try #require(during.sections.first { $0.id == "runes" })
         #expect(DeckPage.countText(runes.groups[0].lines[0]) == "×12")         // basic: never missing
         #expect(during.note == CollectionList.catalogDownloading)
-        #expect(!during.settled)
 
         let settled = DeckPage.content(live, game: riftbound, read: joined, joinFailed: false, catalogHasProducts: true,
                                        catalogSettled: true, price: none)
-        #expect(settled.note == nil && settled.settled)
-        #expect(settled.uncovered == ["new card"])
+        #expect(settled.note == nil)
+        // A card the join did not read (added since) is pending: no picture, no "missing", until the next join.
+        let added = try #require(settled.sections.flatMap { $0.groups.flatMap(\.lines) }.first { $0.card.cardKey == "new card" })
+        #expect(added.shown == nil && DeckPage.countText(added) == "×1")
         #expect(DeckMaths.totals(settled.sections) == "20 cards · 1 missing · 1 without a price")
 
         // No product of the game: the cards alone, under their saved names.
@@ -226,8 +227,13 @@ struct DeckViewTests {
         #expect(memory.state(game: "riftbound", deck: "a") === a)
         memory.keep(game: "riftbound")
         #expect(memory.state(game: "riftbound", deck: "b") === b)
+        // Final fix B9: a deck that is gone loses its state at once; the others keep theirs.
+        memory.keep(decks: ["b"])
+        #expect(memory.state(game: "riftbound", deck: "b") === b)
+        let fresh = memory.state(game: "riftbound", deck: "a")
+        #expect(fresh !== a)
         memory.keep(game: "cyberpunk")
-        #expect(memory.state(game: "riftbound", deck: "a") !== a)
+        #expect(memory.state(game: "riftbound", deck: "a") !== fresh)
         #expect(memory.state(game: "cyberpunk", deck: "a") !== memory.state(game: "riftbound", deck: "a"))
     }
 
@@ -236,6 +242,14 @@ struct DeckViewTests {
         #expect(DeckPage.unreadableText(0) == nil)
         #expect(DeckPage.unreadableText(1) == "1 deck cannot be read.")
         #expect(DeckPage.unreadableText(2) == "2 decks cannot be read.")
+    }
+
+    /// Final fix B8: the muted line under a deck page's totals: nothing for 0, then "1 card of this deck cannot be read." /
+    /// "2 cards of this deck cannot be read.".
+    @Test func theUnreadableCardsLine() {
+        #expect(DeckPage.unreadableCardsText(0) == nil)
+        #expect(DeckPage.unreadableCardsText(1) == "1 card of this deck cannot be read.")
+        #expect(DeckPage.unreadableCardsText(2) == "2 cards of this deck cannot be read.")
     }
 
     // MARK: Adding cards (phase 3A task 6)
@@ -279,6 +293,24 @@ struct DeckViewTests {
         let taken = DeckPage.takingOne(DeckPage.takingOne(added, stardust, game: yugioh), stardust, game: yugioh)
         #expect(taken.cards == [card("stardust dragon", "side", 1)])
         #expect(DeckPage.takingOne(taken, stardust, game: yugioh).cards.isEmpty)
+    }
+
+    /// Final fix A3: a card page's "New Deck…" gives `addDeck` the card's one copy in its default section of the chosen
+    /// format (one library change), the same card `addingOne` adds to an empty deck of that format.
+    @Test func aCardPagesNewDeckStartsWithTheCardsOneCopy() async throws {
+        let stardust = DeckCardToAdd(cardKey: "stardust dragon", name: "Stardust Dragon",
+                                     kind: CardKind(group: "Monsters", flags: [CardKind.extraDeck]))
+        let cards = DeckPage.newDeckCards(stardust, format: "standard", game: yugioh)
+        #expect(cards == [card("stardust dragon", "extra", 1, name: "Stardust Dragon")])
+        #expect(cards == DeckPage.addingOne(deck([]), stardust, game: yugioh).cards)
+        let bear = DeckCardToAdd(cardKey: "bear", name: "Bear", kind: nil)
+        #expect(DeckPage.newDeckCards(bear, format: "constructed", game: magic).map(\.section) == ["deck"])
+        let library = UserLibrary(folder: tempDir(), watcher: nil, newID: { "n1" })
+        await library.load()
+        let before = library.version
+        #expect(library.addDeck(game: "yu-gi-oh", name: "", format: "standard", cards: cards) == "n1")
+        #expect(library.version == before + 1)
+        #expect(library.deck(game: "yu-gi-oh", id: "n1")?.cards == cards)
     }
 
     /// The card page's "Decks": one line per (deck, section) that holds the card, in deck order, then the format's section
