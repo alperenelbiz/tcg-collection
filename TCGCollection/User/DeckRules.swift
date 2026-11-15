@@ -27,6 +27,29 @@ nonisolated enum DeckRules {
         return deck
     }
 
+    /// The copies of a card over every section of the deck.
+    static func copies(_ deck: Deck, cardKey: String) -> Int {
+        deck.cards.filter { $0.cardKey == cardKey }.reduce(0) { $0 + $1.count }
+    }
+
+    /// One copy more of a card in `section` (`setting`: a new card is appended with `name`; the 999 clamp holds).
+    static func addingOne(_ deck: Deck, cardKey: String, name: String, section: String) -> Deck {
+        let now = deck.cards.first { $0.cardKey == cardKey && $0.section == section }?.count ?? 0
+        return setting(deck, count: now + 1, cardKey: cardKey, name: name, section: section)
+    }
+
+    /// One copy less of a card over the deck (the `−` of a search cell): off `defaultSection` when it holds the card, else
+    /// off the first section of `order` (the format's) that holds it, else off its first card in a section `order` lacks.
+    /// A card at 1 leaves that section; a card not in the deck changes nothing.
+    static func takingOne(_ deck: Deck, cardKey: String, defaultSection: String, order: [String]) -> Deck {
+        let held = deck.cards.filter { $0.cardKey == cardKey }
+        let sections = [defaultSection] + order.filter { $0 != defaultSection }
+        guard let card = sections.lazy.compactMap({ section in held.first { $0.section == section } }).first ?? held.first else {
+            return deck
+        }
+        return setting(deck, count: card.count - 1, cardKey: cardKey, name: card.name, section: card.section)
+    }
+
     /// Moves a card from one section to another. When the card is in the other section already, the copies are summed
     /// into that card (its place and name); otherwise the card keeps its place. Nothing changes for a card not in `from`.
     static func moving(_ deck: Deck, cardKey: String, from: String, to: String) -> Deck {

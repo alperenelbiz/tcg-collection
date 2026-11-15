@@ -47,7 +47,9 @@ final class CatalogMemory {
     }
 }
 
-/// The catalog of the selected game: search field, three filter menus, and a gallery of cards.
+/// The catalog of the selected game: search field, three filter menus, and a gallery of cards. All cards shows it as its
+/// root; a deck's "Add cards" pushes it on the deck's stack with the deck as its target (`deckID`, D10): the title "Add to
+/// <deck name>", and under every cell a `CountControl` with the deck's copies of the card over all its sections.
 struct CatalogSearchView: View {
     private static let limit = 300
     /// Placeholder cells while the first search runs: about one window of the gallery.
@@ -55,18 +57,17 @@ struct CatalogSearchView: View {
 
     @Environment(AppModel.self) private var model
     @Bindable var state: CatalogScreenState
+    /// The deck "Add cards" adds to; nil for All cards.
+    var deckID: String? = nil
     @State private var sets: [SetRecord] = []
     @State private var confirmReset = false
 
     var body: some View {
-        content
+        framed(content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { Theme.ground.ignoresSafeArea() }
-            .navigationTitle(model.game.name)
+            .background { Theme.ground.ignoresSafeArea() })
             .navigationSubtitle(subtitle)
             .searchable(text: $state.text)
-            .navigationDestination(for: CardSummary.self) { CardPageView(cardKey: $0.id, startProductID: nil) }
-            .navigationDestination(for: CardTarget.self) { CardPageView(cardKey: $0.cardKey, startProductID: $0.startProductID) }
             .toolbar {
                 ToolbarItemGroup {
                     FilterMenu(title: "Set", selection: $state.filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
@@ -80,6 +81,23 @@ struct CatalogSearchView: View {
             .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion)) { await search() }
             // The set list is cheap; the rarity and type lists come from `model.facets` (a file, P4).
             .task(id: model.filtersVersion) { await loadSets() }
+    }
+
+    /// All cards: the game's name as the title, and the pages its cells open. A deck's search: "Add to <deck name>" and the
+    /// identifier `deck-add-screen`; its cells open card pages through the deck's stack, which has their destination
+    /// (`listScreen`).
+    @ViewBuilder private func framed(_ view: some View) -> some View {
+        if let deckID {
+            view
+                .navigationTitle("Add to \(model.library.deck(game: state.gameID, id: deckID)?.name ?? "deck")")
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("deck-add-screen")
+        } else {
+            view
+                .navigationTitle(model.game.name)
+                .navigationDestination(for: CardSummary.self) { CardPageView(cardKey: $0.id, startProductID: nil) }
+                .navigationDestination(for: CardTarget.self) { CardPageView(cardKey: $0.cardKey, startProductID: $0.startProductID) }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -101,9 +119,13 @@ struct CatalogSearchView: View {
                           spacing: Theme.rowGap) {
                     if let cards = state.cards {
                         ForEach(cards) { card in
-                            NavigationLink(value: card) { CardCell(content: cellContent(card)) }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("card-cell-\(card.id)")
+                            if let deckID {
+                                DeckAddCell(gameID: state.gameID, deckID: deckID, card: card, content: cellContent(card))
+                            } else {
+                                NavigationLink(value: card) { CardCell(content: cellContent(card)) }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("card-cell-\(card.id)")
+                            }
                         }
                     } else {
                         // Loading: until the first search has ended, the final layout with flat `surface` blocks where
@@ -186,6 +208,47 @@ struct CatalogSearchView: View {
 
     private func loadSets() async {
         sets = (try? await model.reader.sets(game: model.gameID)) ?? []
+    }
+}
+
+/// A result cell of a deck's search (D10): the catalog's cell (a link to the card page on its cover printing, through the
+/// deck's stack), 8 pt, then a `CountControl` with the deck's copies of the card over all its sections. `+` adds one copy to
+/// the card's default section (`DeckPage.addingOne`) and is off at 999 or more there; `−` takes one off that section first,
+/// then off the others in the format's order (`DeckPage.takingOne`). Both are off while the game cannot change or the deck
+/// is gone.
+private struct DeckAddCell: View {
+    let gameID: String
+    let deckID: String
+    let card: CardSummary
+    let content: CellContent
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let library = model.library
+        let game = Games.game(gameID) ?? Games.all[0]
+        let deck = library.deck(game: gameID, id: deckID)
+        let adding = DeckCardToAdd(cardKey: card.id, name: card.name, kind: model.deckKind(game: game, printings: [card.cover]))
+        let total = deck.map { DeckRules.copies($0, cardKey: card.id) }
+        // `+` is off when the default section holds 999 or more: the control's maximum is over the whole deck.
+        let section = deck.map { DeckPage.addSection(game: game, format: game.format($0.format), kind: adding.kind) }
+        let inSection = deck?.cards.first { $0.cardKey == card.id && $0.section == section }?.count ?? 0
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(value: CardTarget(gameID: gameID, cardKey: card.id, startProductID: card.cover.productID)) {
+                CardCell(content: content)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("card-cell-\(card.id)")
+            HStack(spacing: 8) {
+                CountControl(count: library.canChange(game: gameID) ? total : nil, label: card.name,
+                             maximum: (total ?? 0) - inSection + DeckRules.maxCount, prefix: "deck-add", key: card.id) { new in
+                    library.changeDeck(game: gameID, id: deckID) { deck in
+                        new > (total ?? 0) ? DeckPage.addingOne(deck, adding, game: game) : DeckPage.takingOne(deck, adding, game: game)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .disabled(deck == nil || !library.canChange(game: gameID))
+        }
     }
 }
 

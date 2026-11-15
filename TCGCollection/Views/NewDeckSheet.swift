@@ -2,16 +2,21 @@ import SwiftUI
 
 /// "New Deck…" in the sidebar: a name (pre-filled with "Deck", made unique among the game's decks), a format picker for a
 /// game with more than one format, "Create" (default) and "Cancel". Create adds the deck, not active (A14), and opens its
-/// page. A blank name becomes a unique "Deck" (`UserLibrary.addDeck`).
+/// page. A blank name becomes a unique "Deck" (`UserLibrary.addDeck`). Opened from a card page's "Add to deck" (`adding`),
+/// Create adds that card's one copy to the new deck instead (its default section in the chosen format), and the card page
+/// stays on show.
 struct NewDeckSheet: View {
     let gameID: String
+    /// The card a card page's "New Deck…" adds to the new deck; nil from the sidebar.
+    let adding: DeckCardToAdd?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var format: String
 
-    init(gameID: String, deckNames: [String]) {
+    init(gameID: String, deckNames: [String], adding: DeckCardToAdd? = nil) {
         self.gameID = gameID
+        self.adding = adding
         _name = State(initialValue: DeckRules.uniqueName("Deck", among: deckNames))
         _format = State(initialValue: Games.game(gameID)?.formats.first?.id ?? "")
     }
@@ -29,7 +34,11 @@ struct NewDeckSheet: View {
         } confirmed: {
             guard let id = model.library.addDeck(game: gameID, name: name, format: format) else { return }
             dismiss()
-            model.showRoot(of: .deck(id))
+            if let adding, let game = Games.game(gameID) {
+                model.library.changeDeck(game: gameID, id: id) { DeckPage.addingOne($0, adding, game: game) }
+            } else {
+                model.showRoot(of: .deck(id))
+            }
         } cancelled: {
             dismiss()
         }

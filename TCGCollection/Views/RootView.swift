@@ -80,8 +80,9 @@ struct RootView: View {
             case .failure(let error): model.importFailed(error)
             }
         }
-        .sheet(isPresented: $model.showsNewDeck) {
-            NewDeckSheet(gameID: model.gameID, deckNames: model.library.decks(game: model.gameID).map(\.name))
+        .sheet(isPresented: $model.showsNewDeck, onDismiss: { model.newDeckCard = nil }) {
+            NewDeckSheet(gameID: model.gameID, deckNames: model.library.decks(game: model.gameID).map(\.name),
+                         adding: model.newDeckCard)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }

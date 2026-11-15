@@ -236,4 +236,65 @@ struct DeckViewTests {
         #expect(DeckPage.unreadableText(1) == "1 deck cannot be read.")
         #expect(DeckPage.unreadableText(2) == "2 decks cannot be read.")
     }
+
+    // MARK: Adding cards (phase 3A task 6)
+
+    /// D9, D10: `+` and "Add to deck" add to the card's default section in the deck's format: its kind from its first
+    /// printing with a card type, the YGOPRODeck type first for Yu-Gi-Oh! (A15).
+    @Test func theSectionAnAddedCardGoesTo() {
+        let cyberpunk = Games.game("cyberpunk")!
+        func section(_ game: GameDefinition, _ format: String, _ printings: [ProductRecord], ygo: String? = nil) -> String {
+            DeckPage.addSection(game: game, format: game.format(format),
+                                kind: DeckPage.kind(game: game, printings: printings, ygoType: { _ in ygo }))
+        }
+        let effect = product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon", cardType: "Effect Monster")
+        #expect(section(yugioh, "standard", [effect], ygo: "synchro") == "extra")             // the index first
+        #expect(section(yugioh, "standard", [effect]) == "main")
+        #expect(section(yugioh, "standard", [product(id: 2, game: "yu-gi-oh", name: "X", cardType: "Synchro/Effect Monster")]) == "extra")
+        #expect(section(yugioh, "standard", [product(id: 3, game: "yu-gi-oh", name: "Y", cardType: "Spell Card")]) == "main")
+        // The first printing with a card type decides.
+        #expect(section(yugioh, "standard", [product(id: 4, game: "yu-gi-oh", name: "Z"),
+                                             product(id: 5, game: "yu-gi-oh", name: "Z", cardType: "Link/Effect Monster")]) == "extra")
+        #expect(section(riftbound, "standard", [kaisa]) == "main")                            // never Champion (by hand)
+        #expect(section(riftbound, "standard", [rune]) == "runes")
+        #expect(section(magic, "commander", [product(id: 6, game: "magic-the-gathering", name: "Bear", cardType: "Creature — Bear")]) == "deck")
+        #expect(section(magic, "constructed", [product(id: 7, game: "magic-the-gathering", name: "Bolt", cardType: "Instant")]) == "deck")
+        #expect(section(cyberpunk, "standard", [product(id: 8, game: "cyberpunk", name: "Kerry", cardType: "Legend")]) == "legends")
+        // No printing: the format's first counted section that is not by hand only.
+        #expect(DeckPage.kind(game: yugioh, printings: [], ygoType: { _ in nil }) == nil)
+        #expect(DeckPage.addSection(game: yugioh, format: yugioh.format("standard"), kind: nil) == "main")
+        #expect(DeckPage.addSection(game: magic, format: magic.format("commander"), kind: nil) == "deck")
+    }
+
+    /// `+` adds one copy to the card's default section of the deck's format; `−` takes one off that section first, then off
+    /// the others in the format's order.
+    @Test func plusAndMinusOfACardFollowItsDefaultSection() {
+        let stardust = DeckCardToAdd(cardKey: "stardust dragon", name: "Stardust Dragon",
+                                     kind: DeckPage.kind(game: yugioh, printings: [product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon",
+                                                                                           cardType: "Synchro Monster")], ygoType: { _ in "synchro" }))
+        let start = deck([card("stardust dragon", "side", 1)])
+        let added = DeckPage.addingOne(DeckPage.addingOne(start, stardust, game: yugioh), stardust, game: yugioh)
+        #expect(added.cards == [card("stardust dragon", "side", 1), card("stardust dragon", "extra", 2, name: "Stardust Dragon")])
+        let taken = DeckPage.takingOne(DeckPage.takingOne(added, stardust, game: yugioh), stardust, game: yugioh)
+        #expect(taken.cards == [card("stardust dragon", "side", 1)])
+        #expect(DeckPage.takingOne(taken, stardust, game: yugioh).cards.isEmpty)
+    }
+
+    /// The card page's "Decks": one line per (deck, section) that holds the card, in deck order, then the format's section
+    /// order (a section the format lacks last); a deck without the card has no line.
+    @Test func theCardPageListsEachDeckAndSectionThatHoldsTheCard() {
+        let warrior = "swiftwind panther warrior"
+        let first = Deck(id: "a", name: "Wind", format: "standard", active: false,
+                         cards: [card(warrior, "side", 1), card("other", "main", 3), card(warrior, "main", 2)])
+        let none = Deck(id: "b", name: "Empty", format: "standard", active: false, cards: [card("other", "main", 1)])
+        let second = Deck(id: "c", name: "Second", format: "standard", active: true,
+                          cards: [card(warrior, "maybe", 4), card(warrior, "extra", 1)])
+        let lines = DeckPage.cardLines(decks: [first, none, second], cardKey: warrior, game: yugioh)
+        #expect(lines == [DeckCardLine(deckID: "a", deckName: "Wind", section: "main", sectionName: "Main Deck", count: 2),
+                          DeckCardLine(deckID: "a", deckName: "Wind", section: "side", sectionName: "Side Deck", count: 1),
+                          DeckCardLine(deckID: "c", deckName: "Second", section: "extra", sectionName: "Extra Deck", count: 1),
+                          DeckCardLine(deckID: "c", deckName: "Second", section: "maybe", sectionName: "maybe", count: 4)])
+        #expect(lines.map(\.id) == ["a-main", "a-side", "c-extra", "c-maybe"])
+        #expect(DeckPage.cardLines(decks: [none], cardKey: warrior, game: yugioh).isEmpty)
+    }
 }

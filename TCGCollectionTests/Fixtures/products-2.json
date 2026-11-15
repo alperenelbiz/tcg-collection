@@ -1,5 +1,5 @@
 {
- "totalItems": 4,
+ "totalItems": 5,
  "success": true,
  "errors": [],
  "results": [
@@ -182,6 +182,64 @@
      "name": "Description",
      "displayName": "Description",
      "value": "Cannot declare an attack unless a monster was Tributed this turn. During the Main Phase, if this card is on the field (Quick Effect): You can Tribute 1 other monster from your hand or field, then activate 1 of these effects;<br />• Special Summon 1 monster that mentions \"Dark Time Wizard\" from your hand or Deck, except \"Swiftwind Panther Warrior\".<br />• Send 1 Spell/Trap that mentions \"Dark Time Wizard\" from your Deck to the GY.<br />You can only use this effect of \"Swiftwind Panther Warrior\" once per turn."
+    }
+   ]
+  },
+  {
+   "productId": 719836,
+   "name": "Stardust Dragon",
+   "cleanName": "Stardust Dragon",
+   "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/719836_200w.jpg",
+   "categoryId": 2,
+   "groupId": 24815,
+   "url": "https://www.tcgplayer.com/product/719836/yugioh-the-duelist-genesis-stardust-dragon",
+   "modifiedOn": "2026-10-09T04:10:22.04",
+   "imageCount": 1,
+   "presaleInfo": {
+    "isPresale": false,
+    "releasedOn": "2007-11-14T00:00:00",
+    "note": null
+   },
+   "extendedData": [
+    {
+     "name": "Number",
+     "displayName": "Number",
+     "value": "TDGS-EN040"
+    },
+    {
+     "name": "Rarity",
+     "displayName": "Rarity",
+     "value": "Ultra Rare"
+    },
+    {
+     "name": "Attribute",
+     "displayName": "Attribute",
+     "value": "WIND"
+    },
+    {
+     "name": "MonsterType",
+     "displayName": "Monster Type",
+     "value": "Dragon"
+    },
+    {
+     "name": "Card Type",
+     "displayName": "Card Type",
+     "value": "Synchro Monster"
+    },
+    {
+     "name": "Attack",
+     "displayName": "Attack",
+     "value": "2500"
+    },
+    {
+     "name": "Defense",
+     "displayName": "Defense",
+     "value": "2000"
+    },
+    {
+     "name": "Description",
+     "displayName": "Description",
+     "value": "1 Tuner + 1+ non-Tuner monsters<br />When a card or effect is activated that would destroy a card(s) on the field (Quick Effect): You can Tribute this card; negate the activation, and if you do, destroy it. During the End Phase, if this effect was activated this turn (and was not negated): You can Special Summon this card from your GY."
     }
    ]
   }

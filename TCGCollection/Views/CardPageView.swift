@@ -110,8 +110,11 @@ struct CardPageView: View {
             RuleLine()
             // A new wanted entry saves the card's name (the title), not the printing's bracketed product name. What each
             // printing is names a pin on another printing.
+            // The "Decks" block is card-level: the same on every printing's page (the kind from all the printings).
             OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
-                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game)))
+                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game)),
+                          deckCard: DeckCardToAdd(cardKey: cardKey, name: shown.cardName,
+                                                  kind: model.deckKind(game: game, printings: printings)))
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -211,6 +214,8 @@ struct OwnedFinishes: View {
     /// The card of the page, for its Wanted line: its key, the name a new entry saves, and each of its printings as the pin
     /// line names it (by product id). Nil: no Wanted line (a printing that left the catalog).
     var wanted: (cardKey: String, name: String, printings: [Int: PinPrinting])? = nil
+    /// The card of the page, for its "Decks" block (`DeckLines`). Nil: no block (a printing that left the catalog).
+    var deckCard: DeckCardToAdd? = nil
 
     @Environment(AppModel.self) private var model
 
@@ -269,6 +274,10 @@ struct OwnedFinishes: View {
             if let wanted, let first = finishes.first {
                 WantedLine(gameID: gameID, cardKey: wanted.cardKey, name: wanted.name,
                            pin: PrintingKey(productID: productID, finish: first), printings: wanted.printings)
+                    .padding(.top, 6)
+            }
+            if let deckCard {
+                DeckLines(gameID: gameID, card: deckCard)
                     .padding(.top, 6)
             }
             if let locked { CountsLockedLine(text: locked) }
@@ -404,6 +413,87 @@ struct WantedLine: View {
         let library = model.library
         library.setWanted(library.wantedCount(game: gameID, cardKey: cardKey) + delta, game: gameID, cardKey: cardKey,
                           name: name)
+    }
+}
+
+/// A card's "Decks" block (D10), under its Wanted line: "Decks", then one line per (deck, section) that holds the card
+/// (`DeckPage.cardLines`: deck order, then the format's section order): the deck's name, the section's name in `muted`, a
+/// `CountControl` (`deck-line-…-<deckID>-<section>`; `−` at 1 takes the card out of that section, `+` is off at 999 or
+/// more); then the menu "Add to deck" (`card-add-to-deck`): every deck of the game (one copy to the card's default
+/// section, also for a deck that holds it already) and, after a divider, "New Deck…" (the New Deck sheet; after Create the
+/// card is added to the new deck). With no deck in the game, only the menu. Card-level: the same on every printing's page.
+/// While the game cannot change: no numbers (`—`), everything off; the page's locked line says why.
+struct DeckLines: View {
+    let gameID: String
+    let card: DeckCardToAdd
+
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let library = model.library
+        let locked = library.countsLocked(game: gameID) != nil
+        let game = Games.game(gameID) ?? Games.all[0]
+        let decks = library.decks(game: gameID)
+        let lines = DeckPage.cardLines(decks: decks, cardKey: card.cardKey, game: game)
+        VStack(alignment: .leading, spacing: 6) {
+            if !decks.isEmpty {
+                Text("Decks")
+                    .foregroundStyle(Theme.text)
+            }
+            if !lines.isEmpty {
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                    ForEach(lines) { line in
+                        GridRow {
+                            Text(line.deckName)
+                                .foregroundStyle(Theme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Text(line.sectionName)
+                                .foregroundStyle(Theme.muted)
+                                .lineLimit(1)
+                                .fixedSize()
+                            CountControl(count: locked ? nil : line.count, label: "\(line.deckName), \(line.sectionName)",
+                                         maximum: DeckRules.maxCount, prefix: "deck-line", key: line.id) {
+                                step(by: $0 - line.count, line: line)
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("deck-line-\(line.id)")
+                    }
+                }
+            }
+            addMenu(decks, game: game)
+        }
+        .font(Theme.bodyFont)
+        .disabled(locked)
+    }
+
+    private func addMenu(_ decks: [Deck], game: GameDefinition) -> some View {
+        Menu("Add to deck") {
+            ForEach(decks) { deck in
+                Button(deck.name) {
+                    model.library.changeDeck(game: gameID, id: deck.id) { DeckPage.addingOne($0, card, game: game) }
+                }
+                .accessibilityIdentifier("card-add-to-deck-\(deck.id)")
+            }
+            if !decks.isEmpty { Divider() }
+            Button("New Deck…") {
+                model.newDeckCard = card
+                model.showsNewDeck = true
+            }
+            .accessibilityIdentifier("card-add-to-deck-new")
+        }
+        .fixedSize()
+        .accessibilityIdentifier("card-add-to-deck")
+    }
+
+    /// As on the deck page: the step goes onto the deck's current count of the card in that section, so two clicks before
+    /// the next render both count; 0 takes the card out of the section.
+    private func step(by delta: Int, line: DeckCardLine) {
+        model.library.changeDeck(game: gameID, id: line.deckID) { deck in
+            guard let now = deck.cards.first(where: { $0.cardKey == card.cardKey && $0.section == line.section }) else { return deck }
+            return DeckRules.setting(deck, count: now.count + delta, cardKey: card.cardKey, name: now.name, section: line.section)
+        }
     }
 }
 

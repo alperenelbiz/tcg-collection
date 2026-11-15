@@ -18,6 +18,33 @@ nonisolated struct DeckRead: Sendable, Equatable {
     var basics: Set<String>
 }
 
+/// One line of a card page's "Decks" (`DeckPage.cardLines`): a deck that holds the card, one of its sections, the copies
+/// there.
+nonisolated struct DeckCardLine: Equatable, Sendable, Identifiable {
+    let deckID: String
+    let deckName: String
+    let section: String
+    /// The format's name of the section; its id for a section the format lacks.
+    let sectionName: String
+    let count: Int
+
+    /// `<deckID>-<section>`, the suffix of the line's identifiers.
+    var id: String { "\(deckID)-\(section)" }
+}
+
+/// A card that a deck's search or a card page adds to a deck: its key, the name a new deck card saves (the card's name, the
+/// page title form, as Wanted saves it) and its kind (`DeckPage.kind`; nil without a printing).
+nonisolated struct DeckCardToAdd: Equatable, Sendable {
+    let cardKey: String
+    let name: String
+    let kind: CardKind?
+}
+
+/// What a deck's navigation stack pushes for "Add cards": the catalog search with that deck as its target.
+nonisolated struct DeckSearch: Hashable, Sendable {
+    let deckID: String
+}
+
 /// What the deck page shows.
 nonisolated enum DeckPhase: Equatable, Sendable {
     /// The folder is still read, or the first join of the deck runs.
@@ -49,13 +76,51 @@ nonisolated enum DeckPage {
     /// a card name; the caller gives one only for Yu-Gi-Oh!), the basic cards and the copies owned per card over `rows`.
     static func read(game: GameDefinition, printings: [String: [ProductRecord]], keys: Set<String>, rows: [CollectionRow],
                      ygoType: (String) -> String?) -> DeckRead {
-        let kinds = printings.compactMapValues { list -> CardKind? in
-            guard let first = list.first(where: { !$0.cardType.isEmpty }) ?? list.first else { return nil }
-            return game.kind(cardType: first.cardType, ygoType: ygoType(first.cardName))
-        }
+        let kinds = printings.compactMapValues { kind(game: game, printings: $0, ygoType: ygoType) }
         let isBasic = DeckMaths.isBasic(game: game, printings: printings)
         return DeckRead(printings: printings, keys: keys, ownedByCard: WantedList.ownedByCard(rows: rows, printings: printings),
                         kinds: kinds, basics: Set(printings.keys.filter(isBasic)))
+    }
+
+    /// A card's kind (D4) from its printings: the first printing with a card type (else the first), with the YGOPRODeck
+    /// type of its card name (`ygoType`, A15; the caller gives one only for Yu-Gi-Oh!). Nil without a printing.
+    static func kind(game: GameDefinition, printings: [ProductRecord], ygoType: (String) -> String?) -> CardKind? {
+        guard let first = printings.first(where: { !$0.cardType.isEmpty }) ?? printings.first else { return nil }
+        return game.kind(cardType: first.cardType, ygoType: ygoType(first.cardName))
+    }
+
+    /// The section a card is added to (D9, D10: `+` of a deck's search, "Add to deck" on a card page): its kind's default
+    /// section in `format`; a card of unknown kind goes where an `Other` card goes.
+    static func addSection(game: GameDefinition, format: DeckFormat, kind: CardKind?) -> String {
+        game.defaultSection(format: format, kind: kind ?? CardKind(group: CardKind.other, flags: []))
+    }
+
+    /// One copy more of `card` in its default section of the deck's format (`addSection`).
+    static func addingOne(_ deck: Deck, _ card: DeckCardToAdd, game: GameDefinition) -> Deck {
+        DeckRules.addingOne(deck, cardKey: card.cardKey, name: card.name,
+                            section: addSection(game: game, format: game.format(deck.format), kind: card.kind))
+    }
+
+    /// One copy less of `card` over the deck: its default section first, then the format's order (`DeckRules.takingOne`).
+    static func takingOne(_ deck: Deck, _ card: DeckCardToAdd, game: GameDefinition) -> Deck {
+        let format = game.format(deck.format)
+        return DeckRules.takingOne(deck, cardKey: card.cardKey, defaultSection: addSection(game: game, format: format, kind: card.kind),
+                                   order: format.sections.map(\.id))
+    }
+
+    /// The card page's "Decks" lines: one per (deck, section) that holds the card, in deck order, then in the order of the
+    /// deck's format (a section the format lacks after them, by its id, in the deck's order).
+    static func cardLines(decks: [Deck], cardKey: String, game: GameDefinition) -> [DeckCardLine] {
+        decks.flatMap { deck -> [DeckCardLine] in
+            let format = game.format(deck.format)
+            let order = Dictionary(format.sections.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+            let held = deck.cards.enumerated().filter { $0.element.cardKey == cardKey }
+            let sorted = held.sorted { (order[$0.element.section] ?? Int.max, $0.offset) < (order[$1.element.section] ?? Int.max, $1.offset) }
+            return sorted.map { _, card in
+                DeckCardLine(deckID: deck.id, deckName: deck.name, section: card.section,
+                             sectionName: format.section(card.section)?.name ?? card.section, count: card.count)
+            }
+        }
     }
 
     /// The deck's sections on the last join (`read`), with the Collection's catalog states (`WantedList.content`):
@@ -199,6 +264,8 @@ final class DeckScreenState {
     var text = ""
     var path = NavigationPath()
     let join = DeckJoin()
+    /// "Add cards": the catalog search pushed on this deck's stack (search text, filters, results), kept with the deck.
+    let search: CatalogScreenState
     /// "Rename…" is open.
     var renaming = false
     /// "Delete Deck…" asks.
@@ -207,6 +274,7 @@ final class DeckScreenState {
     init(gameID: String, deckID: String) {
         self.gameID = gameID
         self.deckID = deckID
+        search = CatalogScreenState(gameID: gameID, search: "")
     }
 }
 
@@ -259,7 +327,17 @@ struct DeckView: View {
             .navigationSubtitle(subtitle(phase, listed: listed))
             .searchable(text: $state.text)
             .toolbar {
-                ToolbarItem { deckMenu(deck, game: game, kinds: state.join.read?.kinds ?? [:]) }
+                ToolbarItemGroup {
+                    Button("Add cards") { openSearch() }
+                        .help("Add cards")
+                        .disabled(deck == nil || !library.canChange(game: gameID))
+                        .accessibilityIdentifier("deck-add-cards")
+                    deckMenu(deck, game: game, kinds: state.join.read?.kinds ?? [:])
+                }
+            }
+            .navigationDestination(for: DeckSearch.self) { _ in
+                CatalogSearchView(state: state.search, deckID: state.deckID)
+                    .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             }
             .task(id: join) {
                 if deck != nil { await state.join.run(join, cardKeys: keys, model: model) }
@@ -280,6 +358,13 @@ struct DeckView: View {
             } message: {
                 Text("Its cards stay in your collection.")
             }
+    }
+
+    /// "Add cards": the deck's search, pushed through the stack's kept path (`kept(on:in:)`), so it also works while the
+    /// deck shows its root after a switch made by code (New Deck's Create).
+    private func openSearch() {
+        let path = $state.path.kept(on: .deck(state.deckID), in: model)
+        path.wrappedValue.append(DeckSearch(deckID: state.deckID))
     }
 
     private func subtitle(_ phase: DeckPhase, listed: DeckContent?) -> String {
@@ -303,7 +388,10 @@ struct DeckView: View {
                     .accessibilityIdentifier("deck-open-collection")
             }
         case .empty:
-            EmptyMessage(sentence: "This deck has no cards yet.")
+            EmptyMessage(sentence: "This deck has no cards yet.") {
+                Button("Add cards") { openSearch() }
+                    .accessibilityIdentifier("deck-empty-add-cards")
+            }
         case .list:
             if let deck, let listed {
                 let shown = DeckPage.filtered(listed.sections, text: state.text)
@@ -472,5 +560,12 @@ private struct DeckCell: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(DeckPage.accessibilityText(line))
         }
+    }
+}
+
+extension AppModel {
+    /// A card's kind for decks (`DeckPage.kind`), with the YGOPRODeck type for Yu-Gi-Oh! only (Task 2).
+    func deckKind(game: GameDefinition, printings: [ProductRecord]) -> CardKind? {
+        DeckPage.kind(game: game, printings: printings) { game.pictures == .ygoprodeck ? self.ygoType(cardName: $0) : nil }
     }
 }

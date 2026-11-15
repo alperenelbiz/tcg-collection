@@ -38,7 +38,7 @@ struct CatalogStoreTests {
         let one = try await s.search(game: "yu-gi-oh", text: "", filter: .init(), limit: 1)
         #expect(one.count == 1)
         let all = try await s.search(game: "yu-gi-oh", text: "", filter: .init(), limit: 50)
-        #expect(all.map(\.printings).reduce(0, +) == 3)   // token + 2 printings of the warrior
+        #expect(all.map(\.printings).reduce(0, +) == 4)   // token + 2 printings of the warrior + Stardust Dragon
     }
 
     @Test func filtersNarrowTheResult() async throws {
@@ -47,7 +47,7 @@ struct CatalogStoreTests {
         #expect(try await s.search(game: "riftbound", text: "", filter: .init(groupID: 1), limit: 50).isEmpty)
         #expect(try await s.search(game: "yu-gi-oh", text: "", filter: .init(rarity: "Starlight Rare"), limit: 50).map(\.cover.productID) == [719835])
         #expect(try await s.typeFacets(game: "yu-gi-oh").contains("Token"))
-        #expect(try await s.rarities(game: "yu-gi-oh") == ["Starlight Rare", "Super Rare"])
+        #expect(try await s.rarities(game: "yu-gi-oh") == ["Starlight Rare", "Super Rare", "Ultra Rare"])
     }
 
     @Test func coverIsThePrintingFromTheNewestSet() async throws {

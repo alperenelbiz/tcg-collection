@@ -97,4 +97,48 @@ struct DeckRulesTests {
         #expect(DeckRules.uniqueName("Deck", among: ["Deck", "Deck 2", "Deck 3"]) == "Deck 4")
         #expect(DeckRules.uniqueName("Deck", among: ["Deck 2"]) == "Deck")
     }
+
+    // MARK: Adding and taking one copy (phase 3A task 6)
+
+    /// The copies of a card over every section of the deck.
+    @Test func copiesCountACardOverAllSections() {
+        let start = deck([card("bolt", "deck", 3), card("ring", "deck", 1), card("bolt", "sideboard", 2)])
+        #expect(DeckRules.copies(start, cardKey: "bolt") == 5)
+        #expect(DeckRules.copies(start, cardKey: "ring") == 1)
+        #expect(DeckRules.copies(start, cardKey: "none") == 0)
+    }
+
+    /// `+` of a search cell or "Add to deck": one copy more in the section, a new card appended with its name; the 999
+    /// clamp holds.
+    @Test func addingOneAddsACopyToTheSection() {
+        let start = deck([card("bolt", "deck", 3)])
+        #expect(DeckRules.addingOne(start, cardKey: "bolt", name: "Bolt", section: "deck").cards == [card("bolt", "deck", 4)])
+        #expect(DeckRules.addingOne(start, cardKey: "bolt", name: "Bolt", section: "sideboard").cards
+                == [card("bolt", "deck", 3), card("bolt", "sideboard", 1, name: "Bolt")])
+        #expect(DeckRules.addingOne(start, cardKey: "ring", name: "The Ring", section: "deck").cards
+                == [card("bolt", "deck", 3), card("ring", "deck", 1, name: "The Ring")])
+        #expect(DeckRules.addingOne(deck([card("bolt", "deck", 999)]), cardKey: "bolt", name: "Bolt", section: "deck")
+            .cards.map(\.count) == [999])
+    }
+
+    /// `−` of a search cell: one copy off the default section first, then off the other sections in the format's order,
+    /// then off a section the format lacks; a card at 1 leaves its section; a card not in the deck changes nothing.
+    @Test func takingOneTakesFromTheDefaultSectionFirst() {
+        let order = ["main", "extra", "side"]
+        let start = deck([card("x", "side", 1), card("x", "extra", 2), card("x", "main", 1), card("y", "main", 1)], format: "standard")
+        let first = DeckRules.takingOne(start, cardKey: "x", defaultSection: "main", order: order)
+        #expect(first.cards == [card("x", "side", 1), card("x", "extra", 2), card("y", "main", 1)])
+        let second = DeckRules.takingOne(first, cardKey: "x", defaultSection: "main", order: order)
+        #expect(second.cards == [card("x", "side", 1), card("x", "extra", 1), card("y", "main", 1)])
+        let third = DeckRules.takingOne(second, cardKey: "x", defaultSection: "main", order: order)
+        #expect(third.cards == [card("x", "side", 1), card("y", "main", 1)])
+        let fourth = DeckRules.takingOne(third, cardKey: "x", defaultSection: "main", order: order)
+        #expect(fourth.cards == [card("y", "main", 1)])
+        #expect(DeckRules.takingOne(fourth, cardKey: "x", defaultSection: "main", order: order) == fourth)
+        // A section the format lacks (a file written elsewhere) comes after the format's sections.
+        let odd = deck([card("x", "maybe", 1), card("x", "side", 1)], format: "standard")
+        #expect(DeckRules.takingOne(odd, cardKey: "x", defaultSection: "main", order: order).cards == [card("x", "maybe", 1)])
+        #expect(DeckRules.takingOne(deck([card("x", "maybe", 2)]), cardKey: "x", defaultSection: "main", order: order).cards
+                == [card("x", "maybe", 1)])
+    }
 }

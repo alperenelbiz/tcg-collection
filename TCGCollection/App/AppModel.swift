@@ -204,8 +204,11 @@ final class AppModel {
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
     var importing: ImportModel?
-    /// "New Deck…" in the sidebar asked for its sheet (`NewDeckSheet`).
+    /// "New Deck…" (the sidebar, or a card page's "Add to deck") asked for its sheet (`NewDeckSheet`).
     var showsNewDeck = false
+    /// "New Deck…" of a card page's "Add to deck": the card the new deck gets one copy of after Create. Nil when the
+    /// sidebar opened the sheet; cleared when the sheet closes.
+    var newDeckCard: DeckCardToAdd?
     /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet, the
     /// New Deck sheet): a dialog asked for meanwhile would not show (For Sale's Sold dialog does not open again then).
     var showsSheet: Bool { needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil || showsNewDeck }

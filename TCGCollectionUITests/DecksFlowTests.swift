@@ -335,4 +335,151 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards == ["kai sa rebel|main|1"] },
                       "\(String(describing: try? storedDecks(game: "riftbound")))")
     }
+
+    // MARK: Adding cards (phase 3A task 6)
+
+    /// Opens the deck's search with "Add cards" (the toolbar's, or the empty deck's) and searches `text`: the cell of
+    /// `cardKey` with its count control.
+    private func openSearch(_ app: XCUIApplication, button: String, text: String, cardKey: String,
+                            file: StaticString = #filePath, line: UInt = #line) {
+        let add = element(app, button)
+        XCTAssertTrue(add.waitForExistence(timeout: 20), "no \(button)", file: file, line: line)
+        XCTAssertTrue(waitUntil { add.isEnabled }, "\(button) stays off", file: file, line: line)
+        add.click()
+        XCTAssertTrue(element(app, "deck-add-screen").waitForExistence(timeout: 10), "no search", file: file, line: line)
+        let field = searchField(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), file: file, line: line)
+        field.click()
+        field.typeText(text)
+        XCTAssertTrue(element(app, "deck-add-plus-\(cardKey)").waitForExistence(timeout: 10), "no cell \(cardKey)",
+                      file: file, line: line)
+    }
+
+    /// The element `identifier` of a card page, scrolled into the window (the "Decks" block is below the 450 pt window).
+    private func revealOnCardPage(_ app: XCUIApplication, _ identifier: String, file: StaticString = #filePath,
+                                  line: UInt = #line) -> XCUIElement {
+        let target = element(app, identifier), page = element(app, "card-page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "no card page", file: file, line: line)
+        for _ in 0..<15 {
+            if target.exists, target.isHittable { return target }
+            page.scroll(byDeltaX: 0, deltaY: -120)
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(identifier) is not in the window", file: file, line: line)
+        return target
+    }
+
+    /// D10: the empty deck's "Add cards" → the deck's search ("Add to Rockers") → a card → `+` twice, `−` once, `+` once:
+    /// the deck's count of the card follows; Back: the cell is in its default section with `×2`; the file agrees and saves
+    /// the card's name.
+    func testAddCardsFromTheDecksSearch() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb5"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1, "decks": [{"id": "rb5", "name": "Rockers", "format": "standard", "active": false, "cards": []}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-add-cards").waitForExistence(timeout: 20), "no Add cards in the toolbar")
+        shot("decks-19-empty-deck-add-cards")
+        let key = "dockside lock up"
+        openSearch(app, button: "deck-empty-add-cards", text: "dockside", cardKey: key)
+        XCTAssertTrue(waitUntil { self.title.hasPrefix("Add to Rockers") }, title)
+        let value = element(app, "deck-add-value-\(key)")
+        XCTAssertEqual(text(value), "0")
+        XCTAssertFalse(element(app, "deck-add-minus-\(key)").isEnabled, "− is on at 0")
+        element(app, "deck-add-plus-\(key)").click()
+        element(app, "deck-add-plus-\(key)").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "2" }, text(value))
+        element(app, "deck-add-minus-\(key)").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "1" }, text(value))
+        element(app, "deck-add-plus-\(key)").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "2" }, text(value))
+        shot("decks-20-deck-search")
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards == ["\(key)|main|2"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+        let stored = try XCTUnwrap(((try storedUserFile(game: "riftbound"))?["decks"] as? [[String: Any]])?.first?["cards"]
+            as? [[String: Any]])
+        XCTAssertEqual(stored.first?["name"] as? String, "Dockside Lock-Up")
+
+        app.toolbars.buttons["Back"].click()
+        let cell = element(app, "deck-cell-\(key)-main")
+        XCTAssertTrue(cell.waitForExistence(timeout: 10), "no deck cell after Back")
+        XCTAssertTrue(waitUntil { cell.label.hasPrefix("Dockside Lock-Up, ×2") }, cell.label)
+        XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 2")
+        shot("decks-21-deck-after-search")
+    }
+
+    /// D4, A15: Stardust Dragon (YGOPRODeck `synchro`, TCGplayer "Synchro Monster") added from the deck's search lands in
+    /// the Extra Deck, not the Main Deck.
+    func testAnExtraDeckCardGoesToTheExtraDeck() throws {
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg2"]) { _ in
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "decks": [{"id": "yg2", "name": "Synchro", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "swiftwind panther warrior", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-cell-swiftwind panther warrior-main").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))                       // the Yu-Gi-Oh! index is read
+        let key = "stardust dragon"
+        openSearch(app, button: "deck-add-cards", text: "stardust", cardKey: key)
+        element(app, "deck-add-plus-\(key)").click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-add-value-\(key)")) == "1" })
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards
+                == ["swiftwind panther warrior|main|1", "\(key)|extra|1"] },
+                      "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
+        app.toolbars.buttons["Back"].click()
+        let cell = reveal(app, "deck-cell-\(key)-extra")
+        XCTAssertTrue(cell.label.hasPrefix("Stardust Dragon, ×1"), cell.label)
+        XCTAssertEqual(text(element(app, "deck-section-extra")), "Extra Deck · 1")
+        XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 1")
+        shot("decks-22-extra-deck")
+    }
+
+    /// D10: All cards → a card → "Add to deck" ▸ a deck: the page's "Decks" line with 1; its `+`; "New Deck…" → Create: a
+    /// line of the new deck, and the card page stays; the deck page shows the cell.
+    func testAddToDeckFromACardPage() throws {
+        let app = try launch(game: "riftbound") { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1, "decks": [{"id": "rb6", "name": "Gear", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let key = "dockside lock up"
+        let cell = element(app, "card-cell-\(key)")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        cell.click()
+        let menu = revealOnCardPage(app, "card-add-to-deck")
+        XCTAssertFalse(element(app, "deck-line-rb6-main").exists, "a line for a deck without the card")
+        menu.click()
+        let gear = app.menuItems["Gear"].firstMatch
+        XCTAssertTrue(gear.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["New Deck…"].firstMatch.exists)
+        shot("decks-23-add-to-deck-menu")
+        gear.click()
+        let value = element(app, "deck-line-value-rb6-main")
+        XCTAssertTrue(value.waitForExistence(timeout: 10), "no deck line after Add to deck")
+        XCTAssertEqual(text(value), "1")
+        revealOnCardPage(app, "deck-line-plus-rb6-main").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "2" }, text(value))
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards
+                == ["kai sa rebel|main|1", "\(key)|main|2"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+
+        revealOnCardPage(app, "card-add-to-deck").click()
+        app.menuItems["New Deck…"].firstMatch.click()
+        let sheet = element(app, "new-deck-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        element(app, "new-deck-create").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        XCTAssertTrue(element(app, "card-page").exists, "Create left the card page")
+        var decks: [StoredDeck] = []
+        XCTAssertTrue(waitUntil { decks = (try? self.storedDecks(game: "riftbound")) ?? []; return decks.count == 2 })
+        let newID = try XCTUnwrap(decks.last?.id)
+        XCTAssertEqual(decks.last, StoredDeck(id: newID, name: "Deck", format: "standard", active: false, cards: ["\(key)|main|1"]))
+        let newLine = revealOnCardPage(app, "deck-line-value-\(newID)-main")
+        XCTAssertEqual(text(newLine), "1")
+        shot("decks-24-card-page-deck-lines")
+
+        element(app, "sidebar-deck-rb6").click()
+        let deckCell = reveal(app, "deck-cell-\(key)-main")
+        XCTAssertTrue(deckCell.label.hasPrefix("Dockside Lock-Up, ×2"), deckCell.label)
+    }
 }

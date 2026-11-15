@@ -15,6 +15,7 @@ import Testing
 //   719829 Token: Joey and Red-Eyes Black Dragon
 //   719834 Swiftwind Panther Warrior (Effect Monster)
 //   719835 Swiftwind Panther Warrior (Starlight Rare)
+//   719836 Stardust Dragon (Synchro Monster, TDGS-EN040; added in phase 3A task 6 for the Extra Deck, its id made up)
 // products-89.json (Riftbound, set 24819):
 //   711362 Radiance - Booster Pack (sealed)
 //   721334 Dockside Lock-Up
@@ -98,6 +99,7 @@ struct ProductParserTests {
         #expect(cards.first { $0.productID == 719829 }?.typeFacets == ["Token"])
         #expect(cards.first { $0.productID == 719834 }?.typeFacets == ["Monster"])
         #expect(cards.first { $0.productID == 719835 }?.cardName == "Swiftwind Panther Warrior")
+        #expect(cards.first { $0.productID == 719836 }?.typeFacets == ["Monster"])
     }
 
     @Test func riftboundKeepsRunesAndDropsThePack() throws {
