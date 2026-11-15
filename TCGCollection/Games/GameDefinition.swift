@@ -63,6 +63,8 @@ nonisolated struct GameDefinition: Sendable, Identifiable, Hashable {
     let playset: Int
     /// The `Product Line` values of a TCGplayer CSV that belong to this game.
     let productLines: [String]
+    /// Deck formats, groups, default sections and card kinds (phase 3A); `DeckFormat.swift`.
+    var deck: DeckDefinition = .none
 
     static func == (a: GameDefinition, b: GameDefinition) -> Bool { a.id == b.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -123,7 +125,7 @@ nonisolated enum Games {
                            .flatMap { [$0, "Snow-Covered \($0)"] }.map(CardName.searchKey)),
                        basicTypeWords: ["Basic"], altArtBasicsAreNormal: false,
                        typeSuffixes: [], excludedSetPrefixes: ["Art Series:"], playset: 4,
-                       productLines: ["Magic", "Magic: The Gathering"]),
+                       productLines: ["Magic", "Magic: The Gathering"], deck: GameDecks.magic),
         GameDefinition(id: "yu-gi-oh", name: "Yu-Gi-Oh!", categoryID: 2,
                        typeField: "Card Type", textField: "Description", pictures: .ygoprodeck,
                        keptBrackets: ["Skill Card"], wholeNames: [],
@@ -132,7 +134,7 @@ nonisolated enum Games {
                                StatField("ATK", "Attack"), StatField("DEF", "Defense"), StatField("Link", "LinkRating")],
                        basicNames: [], basicTypeWords: [], altArtBasicsAreNormal: false,
                        typeSuffixes: [TypeSuffix(typeWord: "Skill", bracket: "Skill Card")],
-                       excludedSetPrefixes: [], playset: 3, productLines: ["YuGiOh"]),
+                       excludedSetPrefixes: [], playset: 3, productLines: ["YuGiOh"], deck: GameDecks.yugioh),
         GameDefinition(id: "riftbound", name: "Riftbound", categoryID: 89,
                        typeField: "Card Type", textField: "Description", pictures: .tcgplayer,
                        keptBrackets: [], wholeNames: [],
@@ -144,7 +146,8 @@ nonisolated enum Games {
                        basicTypeWords: [], altArtBasicsAreNormal: true,
                        typeSuffixes: [], excludedSetPrefixes: [], playset: 3,
                        productLines: ["Riftbound: League of Legends Trading Card Game",
-                                      "Riftbound League of Legends Trading Card Game"]),
+                                      "Riftbound League of Legends Trading Card Game"],
+                       deck: GameDecks.riftbound),
         GameDefinition(id: "cyberpunk", name: "Cyberpunk TCG", categoryID: 92,
                        typeField: "CardType", textField: "Description", pictures: .tcgplayer,
                        keptBrackets: [], wholeNames: [],
@@ -152,7 +155,8 @@ nonisolated enum Games {
                        stats: [StatField("Color", "Color"), StatField("Cost", "Cost"), StatField("Power", "Power"),
                                StatField("RAM", "RAM"), StatField("Eddies", "Eddies", format: .yesNo)],
                        basicNames: [], basicTypeWords: [], altArtBasicsAreNormal: false,
-                       typeSuffixes: [], excludedSetPrefixes: [], playset: 3, productLines: ["Cyberpunk TCG"]),
+                       typeSuffixes: [], excludedSetPrefixes: [], playset: 3, productLines: ["Cyberpunk TCG"],
+                       deck: GameDecks.cyberpunk),
     ]
 
     static func game(_ id: String) -> GameDefinition? { all.first { $0.id == id } }
