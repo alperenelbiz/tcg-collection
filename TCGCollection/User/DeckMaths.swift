@@ -193,13 +193,14 @@ nonisolated enum DeckMaths {
         return [head, "\(missing) missing", tail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// `40–60 cards`, `at least 40 cards`, `at most 15 cards`, `1 card`, `100 cards`; nil without a bound.
+    /// A size the deck needs says so: `needs 40–60 cards`, `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`; a
+    /// maximum alone: `at most 15 cards`; nil without a bound.
     private static func boundText(min: Int?, max: Int?) -> String? {
         func cards(_ n: Int) -> String { n == 1 ? "1 card" : "\(n) cards" }
         switch (min, max) {
-        case let (low?, high?) where low == high: return cards(low)
-        case let (low?, high?): return "\(low)–\(high) cards"
-        case let (low?, nil): return "at least \(cards(low))"
+        case let (low?, high?) where low == high: return "needs \(cards(low))"
+        case let (low?, high?): return "needs \(low)–\(high) cards"
+        case let (low?, nil): return "needs at least \(cards(low))"
         case let (nil, high?): return "at most \(cards(high))"
         case (nil, nil): return nil
         }
@@ -214,7 +215,7 @@ nonisolated enum DeckMaths {
     /// Section id → warning text (rule checks warn, never block). On one section, in this order, joined by " · ":
     /// - its own bound, when its count breaks it;
     /// - each total (`DeckFormat.totals`) that the count of its sections breaks, on the last of its sections the format
-    ///   has, prefixed by the total's name when it differs from that section's (`Commander deck: 100 cards`);
+    ///   has, prefixed by the total's name when it differs from that section's (`Commander deck: needs 100 cards`);
     /// - the copy limit (when the format has one): `more than 3 copies: A, B, C and 2 more`, the cards over the limit by
     ///   name (basics exempt). A card's copies count over the format's counted sections together plus every section the
     ///   format does not know (a section from elsewhere has no size bound and no total, but the limit is per card). The

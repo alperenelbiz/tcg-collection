@@ -298,12 +298,10 @@ struct DeckView: View {
         case .unavailable:
             Color.clear
         case .gone:
-            EmptyMessage(sentence: "This deck was removed.") {
+            EmptyMessage(sentence: "This deck was removed.", identifier: "deck-gone") {
                 Button("Open the collection") { model.showRoot(of: .collection) }
                     .accessibilityIdentifier("deck-open-collection")
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("deck-gone")
         case .empty:
             EmptyMessage(sentence: "This deck has no cards yet.")
         case .list:
@@ -343,8 +341,9 @@ struct DeckView: View {
             DeckCell(gameID: state.gameID, line: line)
                 .accessibilityIdentifier("deck-cell-\(suffix)")
             HStack(spacing: 8) {
+                // `+` is off at 999 or more (the clamp never lowers a count; `−` always works).
                 CountControl(count: card.count, label: "\(line.name), \(format.section(card.section)?.name ?? card.section)",
-                             prefix: "deck-cell", key: suffix) { step(by: $0 - card.count, card: card) }
+                             maximum: DeckRules.maxCount, prefix: "deck-cell", key: suffix) { step(by: $0 - card.count, card: card) }
                 Spacer(minLength: 0)
             }
             .disabled(!canChange)

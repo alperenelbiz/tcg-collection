@@ -119,9 +119,9 @@ struct DeckViewTests {
     /// bound shows.
     @Test func aWarningShowsOnlyOnADeckWithCards() {
         let format = riftbound.format("standard")
-        let legend = DeckSectionView(section: format.sections[0], count: 0, groups: [], warning: "1 card")
+        let legend = DeckSectionView(section: format.sections[0], count: 0, groups: [], warning: "needs 1 card")
         #expect(DeckPage.warning(legend, deckHasCards: false) == nil)
-        #expect(DeckPage.warning(legend, deckHasCards: true) == "1 card")
+        #expect(DeckPage.warning(legend, deckHasCards: true) == "needs 1 card")
         let fine = DeckSectionView(section: format.sections[0], count: 1, groups: [], warning: nil)
         #expect(DeckPage.warning(fine, deckHasCards: true) == nil)
     }

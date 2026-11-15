@@ -172,8 +172,24 @@ private struct Sidebar: View {
     }
 
     var body: some View {
+        // The status area has its own room under the list: the list scrolls above it, so with many decks in a short
+        // window nothing is drawn over its last rows.
+        VStack(spacing: 0) {
+            list
+                #if DEBUG && os(macOS)
+                .capturableSidebar()
+                #endif
+            VStack(alignment: .leading, spacing: 0) {
+                // On a list screen these lines are in the screen itself.
+                if !model.screen.isList { LibraryLines(inSidebar: true) }
+                StatusLine(status: model.status, notice: model.statusNotice)
+            }
+        }
+    }
+
+    private var list: some View {
         @Bindable var model = model
-        List(selection: $selection) {
+        return List(selection: $selection) {
             Picker("Game", selection: $model.gameID) {
                 ForEach(Games.all) { game in
                     Text(game.name).tag(game.id)
@@ -208,16 +224,6 @@ private struct Sidebar: View {
             await activeDecks.run(key, cardKeys: Set(active.flatMap { $0.cards.map(\.cardKey) }), model: model)
         }
         .onChange(of: model.screen) { _, new in selection = new }
-        .safeAreaInset(edge: .bottom) {
-            VStack(alignment: .leading, spacing: 0) {
-                // On a list screen these lines are in the screen itself.
-                if !model.screen.isList { LibraryLines(inSidebar: true) }
-                StatusLine(status: model.status, notice: model.statusNotice)
-            }
-        }
-        #if DEBUG && os(macOS)
-        .capturableSidebar()
-        #endif
     }
 
     /// D7: one row per deck of the game, in deck order, with its missing count (an active deck that misses copies), the

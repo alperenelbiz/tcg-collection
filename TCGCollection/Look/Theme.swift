@@ -168,8 +168,11 @@ struct RuleLine: View {
 
 /// An empty or failed screen: the title and toolbar stay; in the middle one sentence in `muted` and at most two
 /// buttons (`actions`). No picture, no icon in a circle.
+/// `identifier` goes on the sentence: a screen's own container (`listScreen`) takes the identifier of a container around
+/// the message, so the sentence is what a UI test can find.
 struct EmptyMessage<Actions: View>: View {
     let sentence: String
+    var identifier: String?
     @ViewBuilder var actions: Actions
 
     var body: some View {
@@ -177,6 +180,7 @@ struct EmptyMessage<Actions: View>: View {
             Text(sentence)
                 .font(Theme.bodyFont)
                 .foregroundStyle(Theme.muted)
+                .accessibilityIdentifier(identifier ?? "", isEnabled: identifier != nil)
             actions
         }
         .multilineTextAlignment(.center)

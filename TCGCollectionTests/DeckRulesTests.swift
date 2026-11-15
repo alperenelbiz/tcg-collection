@@ -40,6 +40,17 @@ struct DeckRulesTests {
         #expect(d.cards.map(\.count) == [999])
     }
 
+    /// Task 3 review, task 5 fix round 1: the clamp never lowers a count. A card already above 999 (a file written by
+    /// hand) keeps its count on a step up, and `−` takes exactly one copy off; it cannot rise further.
+    @Test func theClampNeverLowersACount() {
+        let big = deck([card("bolt", "deck", 1200)])
+        #expect(DeckRules.setting(big, count: 1201, cardKey: "bolt", name: "B", section: "deck").cards.map(\.count) == [1200])
+        #expect(DeckRules.setting(big, count: 1199, cardKey: "bolt", name: "B", section: "deck").cards.map(\.count) == [1199])
+        #expect(DeckRules.setting(big, count: 5000, cardKey: "bolt", name: "B", section: "deck").cards.map(\.count) == [1200])
+        let at = deck([card("bolt", "deck", 999)])
+        #expect(DeckRules.setting(at, count: 1000, cardKey: "bolt", name: "B", section: "deck").cards.map(\.count) == [999])
+    }
+
     @Test func movingChangesTheSectionAndSumsIntoACardThere() {
         let start = deck([card("bolt", "deck", 3), card("ring", "deck", 1), card("bolt", "sideboard", 2)])
         let moved = DeckRules.moving(start, cardKey: "ring", from: "deck", to: "sideboard")

@@ -17,13 +17,29 @@ final class DecksFlowTests: UITestCase {
     private func storedDecks(game: String) throws -> [StoredDeck] {
         guard let object = try storedUserFile(game: game) else { return [] }
         let decks = try XCTUnwrap(object["decks"] as? [[String: Any]], "no decks array")
-        return try decks.map { deck in
-            let cards = try XCTUnwrap(deck["cards"] as? [[String: Any]]).map { card in
-                "\(card["cardKey"] as? String ?? "")|\(card["section"] as? String ?? "")|\(card["count"] as? Int ?? -1)"
-            }
-            return StoredDeck(id: try XCTUnwrap(deck["id"] as? String), name: deck["name"] as? String ?? "",
-                              format: deck["format"] as? String ?? "", active: deck["active"] as? Bool ?? false, cards: cards)
+        // A deck this build cannot read (no id, no cards array) is kept in the file as written: not one of ours.
+        return decks.compactMap { deck in
+            guard let id = deck["id"] as? String, let cards = deck["cards"] as? [[String: Any]] else { return nil }
+            return StoredDeck(id: id, name: deck["name"] as? String ?? "", format: deck["format"] as? String ?? "",
+                              active: deck["active"] as? Bool ?? false, cards: cards.map { card in
+                                  "\(card["cardKey"] as? String ?? "")|\(card["section"] as? String ?? "")|\(card["count"] as? Int ?? -1)"
+                              })
         }
+    }
+
+    /// The element `identifier` of the deck page, scrolled into the window: a group's cells are in a lazy grid, made only
+    /// near the window (450 pt high in the tests), and XCUITest does not scroll to a click.
+    private func reveal(_ app: XCUIApplication, _ identifier: String, file: StaticString = #filePath,
+                        line: UInt = #line) -> XCUIElement {
+        // The page's container: XCUITest does not find the scroll view by its own identifier (`deck-gallery`).
+        let target = element(app, identifier), gallery = element(app, "deck-screen")
+        XCTAssertTrue(gallery.waitForExistence(timeout: 10), "no deck page", file: file, line: line)
+        for _ in 0..<15 {
+            if target.exists, target.isHittable { return target }
+            gallery.scroll(byDeltaX: 0, deltaY: -120)
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(identifier) is not in the window", file: file, line: line)
+        return target
     }
 
     /// The sidebar's deck rows, not their counts (`sidebar-deck-missing-…`) and not `sidebar-decks-unreadable`.
@@ -48,6 +64,7 @@ final class DecksFlowTests: UITestCase {
                     "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2},
                               {"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2},
                               {"cardKey": "calm rune", "name": "Calm Rune", "section": "runes", "count": 12}]},
+                   {"id": "rb9", "name": "Second", "format": "standard", "active": false, "cards": []},
                    {"name": "no id"}]}
         """
 
@@ -97,26 +114,28 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(kaisa.waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntilSynced(app))
         XCTAssertTrue(waitUntil { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×2 · 1 missing, ") }, kaisa.label)
-        XCTAssertTrue(element(app, "deck-cell-dockside lock up-main").label.hasPrefix("Dockside Lock-Up, ×2, $5.12"),
-                      element(app, "deck-cell-dockside lock up-main").label)
         XCTAssertEqual(identifiersInOrder(sectionTitles(app)),
                        ["deck-section-legend", "deck-section-champion", "deck-section-main", "deck-section-runes",
                         "deck-section-battlefields", "deck-section-sideboard"])
         XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 4")
         XCTAssertEqual(text(element(app, "deck-section-legend")), "Legend · 0")
-        XCTAssertEqual(text(element(app, "deck-warning-legend")), "1 card")
-        XCTAssertEqual(text(element(app, "deck-warning-main")), "Main Deck with its Champion: at least 40 cards")
+        XCTAssertEqual(text(element(app, "deck-warning-legend")), "needs 1 card")
+        XCTAssertEqual(text(element(app, "deck-warning-main")), "Main Deck with its Champion: needs at least 40 cards")
         XCTAssertFalse(element(app, "deck-warning-runes").exists, "12 runes meet the bound")
         for heading in ["Units", "Gear", "Runes"] {
-            XCTAssertTrue(element(app, "deck-gallery").staticTexts[heading].exists, "no group heading \(heading)")
+            XCTAssertTrue(element(app, "deck-screen").staticTexts[heading].exists, "no group heading \(heading)")
         }
         XCTAssertTrue(waitUntil { self.title.contains("16 cards · 1 missing") }, title)
         XCTAssertEqual(text(element(app, "sidebar-decks-unreadable")), "1 deck cannot be read.")
         XCTAssertFalse(element(app, "sidebar-deck-missing-rb1").exists, "a deck that is not active shows a count")
+        // The status area has its own room: the sidebar's last row is above it, with two decks in the 450 pt window.
+        let allCards = element(app, "sidebar-all-cards"), status = app.staticTexts["status-line"]
+        XCTAssertTrue(allCards.frame.maxY <= status.frame.minY || !allCards.isHittable,
+                      "the status line is over All cards: \(allCards.frame) \(status.frame)")
         shot("decks-04-riftbound-deck-top")
-        let rune = element(app, "deck-cell-calm rune-runes")
-        element(app, "deck-gallery").scroll(byDeltaX: 0, deltaY: -400)
-        XCTAssertTrue(rune.waitForExistence(timeout: 5))
+        let dockside = reveal(app, "deck-cell-dockside lock up-main")
+        XCTAssertTrue(dockside.label.hasPrefix("Dockside Lock-Up, ×2, $5.12"), dockside.label)
+        let rune = reveal(app, "deck-cell-calm rune-runes")
         XCTAssertTrue(rune.label.hasPrefix("Calm Rune, ×12, "), rune.label)      // basic: never missing
         shot("decks-05-riftbound-deck-runes")
     }
@@ -197,13 +216,17 @@ final class DecksFlowTests: UITestCase {
         }
         let warning = element(app, "deck-warning-main")
         XCTAssertTrue(warning.waitForExistence(timeout: 20))
-        XCTAssertTrue(waitUntil { self.text(warning) == "40–60 cards · more than 3 copies: Swiftwind Panther Warrior" }, text(warning))
+        XCTAssertTrue(waitUntil { self.text(warning) == "needs 40–60 cards · more than 3 copies: Swiftwind Panther Warrior" }, text(warning))
         XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 3")
         shot("decks-11-warnings")
-        let plus = element(app, "deck-cell-plus-swiftwind panther warrior-main")
+        let plus = reveal(app, "deck-cell-plus-swiftwind panther warrior-main")
         XCTAssertTrue(plus.isEnabled)
+        let value = element(app, "deck-cell-value-swiftwind panther warrior-main")
+        let clicked = Date()
         plus.click()
-        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-cell-value-swiftwind panther warrior-main")) == "4" })
+        XCTAssertTrue(waitUntil { self.text(value) == "4" })
+        // Each deck click joins the page and the sidebar again: the time from the click to the new count, for the report.
+        print("deck plus click to count: \(Int(Date().timeIntervalSince(clicked) * 1000)) ms")
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards
                 == ["swiftwind panther warrior|main|4", "swiftwind panther warrior|side|1"] },
                       "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
@@ -223,7 +246,7 @@ final class DecksFlowTests: UITestCase {
             """)
         }
         XCTAssertTrue(element(app, "deck-cell-ajani resolute-commander").waitForExistence(timeout: 20))
-        XCTAssertEqual(text(element(app, "deck-warning-deck")), "Commander deck: 100 cards")
+        XCTAssertEqual(text(element(app, "deck-warning-deck")), "Commander deck: needs 100 cards")
 
         element(app, "deck-menu").click()
         app.menuItems["Rename…"].firstMatch.click()
@@ -247,13 +270,15 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(constructed.waitForExistence(timeout: 5))
         shot("decks-13-format-menu")
         constructed.click()
-        XCTAssertTrue(element(app, "deck-cell-ajani resolute-deck").waitForExistence(timeout: 10))
-        XCTAssertEqual(identifiersInOrder(sectionTitles(app)), ["deck-section-deck", "deck-section-sideboard"])
-        XCTAssertEqual(text(element(app, "deck-section-deck")), "Deck · 2")
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "magic-the-gathering"))
                 == [StoredDeck(id: "mg1", name: "Lifegain", format: "constructed", active: false,
                                cards: ["ajani resolute|deck|1", "bloodline recollector|deck|1"])] },
                       "\(String(describing: try? storedDecks(game: "magic-the-gathering")))")
+        XCTAssertTrue(waitUntil { self.identifiersInOrder(self.sectionTitles(app)) == ["deck-section-deck", "deck-section-sideboard"] },
+                      "\(identifiersInOrder(sectionTitles(app)))")
+        XCTAssertEqual(text(element(app, "deck-section-deck")), "Deck · 2")
+        XCTAssertTrue(element(app, "deck-cell-bloodline recollector-deck").waitForExistence(timeout: 10))
+        _ = reveal(app, "deck-cell-ajani resolute-deck")
         shot("decks-14-constructed")
 
         element(app, "deck-menu").click()
@@ -298,14 +323,14 @@ final class DecksFlowTests: UITestCase {
                                   {"cardKey": "vanished card", "name": "Vanished Card", "section": "main", "count": 1}]}]}
             """)
         }
-        let gone = element(app, "deck-cell-vanished card-main")
-        XCTAssertTrue(gone.waitForExistence(timeout: 20))
+        XCTAssertTrue(element(app, "deck-cell-kai sa rebel-main").waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntilSynced(app))
+        let gone = reveal(app, "deck-cell-vanished card-main")
         XCTAssertTrue(waitUntil { gone.label == "Vanished Card, ×1, no price" }, gone.label)
         XCTAssertFalse(element(app, "deck-catalog-note").exists, "a settled catalog still says it downloads")
         XCTAssertTrue(waitUntil { self.text(self.element(app, "sidebar-deck-missing-rb2")) == "1" })   // Kai'Sa only
         shot("decks-18-card-not-in-the-catalog")
-        element(app, "deck-cell-minus-vanished card-main").click()
+        reveal(app, "deck-cell-minus-vanished card-main").click()
         XCTAssertTrue(waitUntil { !gone.exists }, "− left the card")
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards == ["kai sa rebel|main|1"] },
                       "\(String(describing: try? storedDecks(game: "riftbound")))")

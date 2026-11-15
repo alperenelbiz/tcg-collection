@@ -11,12 +11,15 @@ nonisolated enum DeckRules {
         Deck(id: id, name: name, format: format, active: false, cards: [])
     }
 
-    /// Sets the count of one card in one section, clamped to `0...maxCount`. 0 removes the card; a new card is appended.
-    /// An existing card keeps its name.
+    /// Sets the count of one card in one section, clamped to `0...maxCount`, except that the clamp never lowers a count: a
+    /// card already above `maxCount` (a file written by hand) keeps its count at most, so `−` takes one copy off it. 0
+    /// removes the card; a new card is appended. An existing card keeps its name.
     static func setting(_ deck: Deck, count: Int, cardKey: String, name: String, section: String) -> Deck {
-        let count = min(max(count, 0), maxCount)
+        let index = deck.cards.firstIndex(where: { $0.cardKey == cardKey && $0.section == section })
+        let current = index.map { deck.cards[$0].count } ?? 0
+        let count = min(max(count, 0), max(maxCount, current))
         var deck = deck
-        if let i = deck.cards.firstIndex(where: { $0.cardKey == cardKey && $0.section == section }) {
+        if let i = index {
             if count == 0 { deck.cards.remove(at: i) } else { deck.cards[i].count = count }
         } else if count > 0 {
             deck.cards.append(DeckCard(cardKey: cardKey, name: name, section: section, count: count))
