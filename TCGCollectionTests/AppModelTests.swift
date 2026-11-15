@@ -497,6 +497,38 @@ struct AppModelTests {
         #expect(model(["app", "-store", root, "-screen", "wanted"]).screen == .wanted)
     }
 
+    /// Phase 3A: a deck screen is stored as `deck:<id>`. A stored or launched deck that is not in the game's file once the
+    /// folder is read opens the Collection; one that is there stays. A game switch leaves a deck screen for the Collection
+    /// (a deck belongs to one game).
+    @MainActor @Test func aDeckScreenIsRememberedAndFallsBackWhenItsDeckIsGone() async throws {
+        let root = tempRoot()
+        let user = AppPaths.userTestRoot(root)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data(#"{"version":1,"decks":[{"id":"kept","name":"K","format":"standard","active":false,"cards":[]}]}"#.utf8)
+            .write(to: user.appending(path: "riftbound.json"))
+        let first = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound"])
+        first.screen = .deck("kept")
+        let again = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound"])
+        #expect(again.screen == .deck("kept"))
+        await again.start()
+        #expect(again.screen == .deck("kept"))
+        again.gameID = "cyberpunk"
+        #expect(again.screen == .collection)
+
+        let launched = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "deck:gone"])
+        #expect(launched.screen == .deck("gone"))
+        await launched.start()
+        #expect(launched.screen == .collection)
+    }
+
+    /// The New Deck sheet is one of the app's sheets: For Sale's Sold dialog does not open again under it.
+    @MainActor @Test func theNewDeckSheetCountsAsASheet() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        #expect(!model.showsSheet)
+        model.showsNewDeck = true
+        #expect(model.showsSheet)
+    }
+
     /// `-card` opens a card page, which lives under All cards: the screen follows, whatever `-screen` says.
     @MainActor @Test func aLaunchCardShowsAllCards() async throws {
         let root = tempRoot()

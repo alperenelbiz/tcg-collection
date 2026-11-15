@@ -15,16 +15,50 @@ nonisolated enum Status: Equatable, Sendable {
     }
 }
 
-/// What the window shows, chosen in the sidebar. The raw value is the `-screen` flag's value and the stored one.
-nonisolated enum Screen: String, Hashable, Sendable {
+/// What the window shows, chosen in the sidebar. `storedValue` is the `-screen` flag's value and the stored one: the four
+/// screens of phase 2 keep their strings (`collection`, `wanted`, `for-sale`, `all-cards`), so a value an older build
+/// stored is still read; a deck is `deck:<id>` (its id in the game's file).
+nonisolated enum Screen: Hashable, Sendable {
     case collection
     case wanted
-    case forSale = "for-sale"
-    case allCards = "all-cards"
+    case forSale
+    case allCards
+    /// One deck of the game on screen, by its id.
+    case deck(String)
 
-    /// A list of the user's (the Collection, Wanted, For Sale): it shows the library's lines (a problem, a settled
+    private static let deckPrefix = "deck:"
+
+    init?(storedValue: String) {
+        switch storedValue {
+        case "collection": self = .collection
+        case "wanted": self = .wanted
+        case "for-sale": self = .forSale
+        case "all-cards": self = .allCards
+        case _ where storedValue.hasPrefix(Self.deckPrefix) && storedValue.count > Self.deckPrefix.count:
+            self = .deck(String(storedValue.dropFirst(Self.deckPrefix.count)))
+        default: return nil
+        }
+    }
+
+    var storedValue: String {
+        switch self {
+        case .collection: "collection"
+        case .wanted: "wanted"
+        case .forSale: "for-sale"
+        case .allCards: "all-cards"
+        case .deck(let id): Self.deckPrefix + id
+        }
+    }
+
+    /// A list of the user's (the Collection, Wanted, For Sale, a deck): it shows the library's lines (a problem, a settled
     /// conflict) itself, on the screen and its pages. On any other screen the sidebar shows them.
     var isList: Bool { self != .allCards }
+
+    /// `screen`, unless it is a deck that `deckIDs` (the game's decks, once the folder is read) lacks: then the Collection.
+    static func checked(_ screen: Screen, deckIDs: [String]) -> Screen {
+        guard case .deck(let id) = screen, !deckIDs.contains(id) else { return screen }
+        return .collection
+    }
 }
 
 nonisolated enum StatusText {
@@ -112,14 +146,18 @@ final class AppModel {
     var ygoIndex: YGOPictureIndex?
     /// The game on screen, kept in `UserDefaults` (key `game`). `-game` wins at launch.
     var gameID: String {
-        didSet { defaults.set(gameID, forKey: Self.gameKey) }
+        didSet {
+            defaults.set(gameID, forKey: Self.gameKey)
+            // A deck belongs to one game: another game opens the Collection.
+            if gameID != oldValue, case .deck = screen { screen = .collection }
+        }
     }
     var game: GameDefinition { Games.game(gameID) ?? Games.all[0] }
     /// The sidebar selection, kept in `UserDefaults` (key `screen`; with `-store`, the root's own). `-screen` wins at
     /// launch; a new root opens on the Collection. The sidebar sets it (a person's click: the screen comes back with the
     /// pages it kept); code switches with `showRoot(of:)`.
     var screen: Screen {
-        didSet { defaults.set(screen.rawValue, forKey: Self.screenKey) }
+        didSet { defaults.set(screen.storedValue, forKey: Self.screenKey) }
     }
     /// Screens that a switch made by code opened (`showRoot(of:)`) and whose pages have not changed since: they show their
     /// root, not the pages kept from an earlier visit (`Binding.kept(on:in:)`).
@@ -166,9 +204,11 @@ final class AppModel {
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
     var importing: ImportModel?
-    /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet): a
-    /// dialog asked for meanwhile would not show (For Sale's Sold dialog does not open again then).
-    var showsSheet: Bool { needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil }
+    /// "New Deck…" in the sidebar asked for its sheet (`NewDeckSheet`).
+    var showsNewDeck = false
+    /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet, the
+    /// New Deck sheet): a dialog asked for meanwhile would not show (For Sale's Sold dialog does not open again then).
+    var showsSheet: Bool { needsUserFolder || showsFolderSheet || choosesCSVFile || importing != nil || showsNewDeck }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
     /// until the status changes (the next sync line replaces it) or `noticeDuration` has passed. `status` itself is never
@@ -280,7 +320,7 @@ final class AppModel {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
         }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
-        screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(rawValue:)) ?? .collection
+        screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(storedValue:)) ?? .collection
         #if DEBUG
         launchPDF = options.launchPDF(isDebugBuild: Self.isDebugBuild)
         #endif
@@ -631,6 +671,9 @@ final class AppModel {
         }
         #endif
         await library.load()
+        // A stored or launched deck screen whose deck is not in the game's file opens the Collection.
+        let checked = Screen.checked(screen, deckIDs: library.decks(game: gameID).map(\.id))
+        if checked != screen { screen = checked }
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()

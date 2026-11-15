@@ -1094,6 +1094,25 @@ struct UserLibraryTests {
         #expect(lib.decks(game: "riftbound").map(\.id) == [id])
     }
 
+    /// Phase 3A task 5: the decks of a game's file this build cannot read (kept raw, not listed) are counted for the
+    /// sidebar's line; a change keeps them and their count; a refused file and a game with no file count none.
+    @MainActor @Test func unreadableDecksAreCounted() async throws {
+        let dir = tempDir()
+        try Data(#"{"version":1,"decks":[{"id":"a","name":"A","format":"standard","active":false,"cards":[]},{"name":"no id"},{"id":"b","name":"B","format":"standard","active":"yes","cards":[]},{"id":"a","name":"twice","format":"standard","active":false,"cards":[]}]}"#.utf8)
+            .write(to: dir.appending(path: "riftbound.json"))
+        try Data(#"{"version":2,"decks":[{"name":"x"}]}"#.utf8).write(to: dir.appending(path: "cyberpunk.json"))
+        let lib = await deckLibrary(dir)
+        #expect(lib.decks(game: "riftbound").map(\.id) == ["a"])
+        #expect(lib.unreadableDecks(game: "riftbound") == 3)
+        #expect(lib.unreadableDecks(game: "cyberpunk") == 0)
+        #expect(lib.unreadableDecks(game: "yu-gi-oh") == 0)
+        lib.changeDeck(game: "riftbound", id: "a") { var d = $0; d.active = true; return d }
+        #expect(lib.unreadableDecks(game: "riftbound") == 3)
+        await lib.flush()
+        let lib2 = await deckLibrary(dir)
+        #expect(lib2.unreadableDecks(game: "riftbound") == 3)
+    }
+
     /// Review Focus 4: a reload that removes a deck (deleted on another device) bumps `version`, and the deck is gone.
     @MainActor @Test func aReloadThatRemovesADeckBumpsTheVersion() async throws {
         let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")

@@ -3,7 +3,7 @@ import SwiftUI
 // The parts of a list screen (the Collection, Wanted, For Sale): its state memory, the join of the rows with the
 // catalog, and the shared views.
 
-/// The state of a list screen (the Collection, Wanted, For Sale) for one game, kept by `ScreenMemory`.
+/// The state of a list screen (the Collection, Wanted, For Sale; a deck's is `DeckScreenState`) for one game, kept by `ScreenMemory`.
 protocol GameScreenState: AnyObject {
     var gameID: String { get }
     init(gameID: String)
@@ -189,8 +189,10 @@ private struct CatalogNote: View {
     }
 }
 
-/// A gallery's grid (the cell rule): adaptive columns of at least `cellMinWidth`, the gaps and the outer margin.
+/// A gallery's grid (the cell rule): adaptive columns of at least `cellMinWidth`, the gaps and the outer margin. A grid
+/// that is one of several in a page (a deck's groups) has no margin of its own (`padded` false): the page has it.
 struct GalleryGrid<Cells: View>: View {
+    var padded = true
     @ViewBuilder let cells: Cells
 
     var body: some View {
@@ -198,7 +200,7 @@ struct GalleryGrid<Cells: View>: View {
             cells
         }
         .scrollTargetLayout()
-        .padding(Theme.margin)
+        .padding(padded ? Theme.margin : 0)
     }
 }
 

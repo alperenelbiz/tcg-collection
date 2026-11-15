@@ -22,8 +22,9 @@ nonisolated struct LaunchOptions: Sendable {
     /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
     /// it in a Release build and without `-store`.
     var askUserFolder = false
-    /// `-screen collection|wanted|for-sale|all-cards`: the sidebar selection of this launch, for tests and snapshots. Any
-    /// other value is ignored (the stored selection is used).
+    /// `-screen collection|wanted|for-sale|all-cards|deck:<id>`: the sidebar selection of this launch, for tests and
+    /// snapshots. Any other value is ignored (the stored selection is used); a deck the game's file lacks opens the
+    /// Collection once the folder is read.
     var screen: Screen?
     /// `-importCSV <path>` (DEBUG, with `-store`): the import sheet opens on this file at launch, for the UI tests. Read
     /// it through `launchImport`, which ignores it where it is not allowed.
@@ -73,7 +74,7 @@ nonisolated struct LaunchOptions: Sendable {
         fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
         writeDelay = value("-writeDelay").flatMap { Int($0) }
         askUserFolder = value("-askUserFolder") == "YES"
-        screen = value("-screen").flatMap(Screen.init(rawValue:))
+        screen = value("-screen").flatMap(Screen.init(storedValue:))
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
         importCSVDelay = value("-importCSVDelay").flatMap { Int($0) }
         exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }

@@ -33,6 +33,8 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-screen", "Wanted"]).screen == nil)
         #expect(LaunchOptions(arguments: ["app", "-screen", "sold"]).screen == nil)
         #expect(LaunchOptions(arguments: ["app"]).screen == nil)
+        #expect(LaunchOptions(arguments: ["app", "-screen", "deck:6F1A"]).screen == .deck("6F1A"))   // phase 3A
+        #expect(LaunchOptions(arguments: ["app", "-screen", "deck:"]).screen == nil)
     }
     @Test func theUserTestRootIsInTheStoreRoot() {
         #expect(AppPaths.userTestRoot(URL(fileURLWithPath: "/tmp/s")).path == "/tmp/s/user")

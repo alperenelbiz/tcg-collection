@@ -34,6 +34,9 @@ final class UserLibrary {
 
     /// Each game's file as read or changed here. No entry: the game has no file yet (or it is refused).
     private var files: [String: GameUserFile] = [:]
+    /// Per game, the decks of its file as read that this build cannot parse (kept whole, not listed). A change keeps them
+    /// (`GameUserFile` writes them back), so the count changes only with a read.
+    private var unreadableDeckCounts: [String: Int] = [:]
     /// Games whose file is not used in this run, with the sentence that says why.
     private var refused: [String: String] = [:]
     /// Games whose last write failed, with the sentence. Memory then holds a change the file does not have: a reload of
@@ -119,6 +122,12 @@ final class UserLibrary {
     func decks(game: String) -> [Deck] { shown(game).decks }
 
     func deck(game: String, id: String) -> Deck? { decks(game: game).first { $0.id == id } }
+
+    /// The decks of the game's file that this build cannot read (a key of the wrong type, no id, a second deck of one id):
+    /// kept in the file, not listed. 0 for a game with no file or a refused one.
+    func unreadableDecks(game: String) -> Int {
+        refused[game] == nil && files[game] != nil ? unreadableDeckCounts[game] ?? 0 : 0
+    }
 
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
@@ -358,6 +367,7 @@ final class UserLibrary {
         guard generation == loadGeneration, self.folder == folder else { return }
         watcher?.stop()
         files = [:]
+        unreadableDeckCounts = [:]
         refused = [:]
         writeFailures = [:]
         conflictFailures = [:]
@@ -398,6 +408,7 @@ final class UserLibrary {
         isLoaded = false
         loadGeneration += 1
         files = [:]
+        unreadableDeckCounts = [:]
         refused = [:]
         writeFailures = [:]
         conflictFailures = [:]
@@ -466,6 +477,7 @@ final class UserLibrary {
     /// Review Focus 2) is lowered in memory and said (`clampForSale`); the read writes nothing, and the file keeps it
     /// until the next change of the game writes the lowered list. A refused file is not shown, so not clamped.
     private func apply(_ result: GameRead, to game: String) {
+        unreadableDeckCounts[game] = result.unreadableDecks
         switch result.content {
         case .file(var file):
             let lost = clampForSale(&file)
@@ -519,6 +531,8 @@ final class UserLibrary {
         var content: Content
         var backup: URL?
         var conflictFailure: String?
+        /// The elements of the file's `decks` that `GameUserFile` did not parse.
+        var unreadableDecks = 0
     }
 
     /// Settles conflict versions, then reads and decodes one game file.
@@ -532,8 +546,15 @@ final class UserLibrary {
             conflictFailure = "Two devices changed \(name) and the older version could not be saved (\(error.localizedDescription))."
         }
         let content: GameRead.Content
+        var unreadableDecks = 0
         do {
-            if let data = try UserFiles.read(url) { content = .file(try GameUserFile(data: data)) } else { content = .missing }
+            if let data = try UserFiles.read(url) {
+                let file = try GameUserFile(data: data)
+                content = .file(file)
+                unreadableDecks = Self.deckElements(in: data) - file.decks.count
+            } else {
+                content = .missing
+            }
         } catch let error as UserFilesError {
             content = .refused(refusedText(name, error))
         } catch GameUserFileError.newerVersion {
@@ -541,7 +562,14 @@ final class UserLibrary {
         } catch {
             content = .refused(refusedText(name, .notRewritable(newerVersion: false)))
         }
-        return GameRead(content: content, backup: backup, conflictFailure: conflictFailure)
+        return GameRead(content: content, backup: backup, conflictFailure: conflictFailure,
+                        unreadableDecks: max(0, unreadableDecks))
+    }
+
+    /// The number of elements of the file's `decks` array (0 without one). Every element is either a parsed deck or a deck
+    /// `GameUserFile` keeps whole, so the difference to its parsed decks is the unreadable ones.
+    private nonisolated static func deckElements(in data: Data) -> Int {
+        ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["decks"] as? [Any])?.count ?? 0
     }
 
     /// The problem of a game file that is not used in this run.

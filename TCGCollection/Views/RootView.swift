@@ -12,6 +12,8 @@ struct RootView: View {
     @State private var wanted = WantedMemory()
     /// For Sale's search, sort, scroll position and pages, for the life of this window.
     @State private var forSale = ForSaleMemory()
+    /// Each deck page's search, pages and last join, for the life of this window.
+    @State private var decks = DeckMemory()
 
     var body: some View {
         @Bindable var model = model
@@ -44,6 +46,11 @@ struct RootView: View {
                              confirmRebuild: $confirmRebuild)
                     // Search text, filters and the open card page belong to one game.
                     .id(model.gameID)
+            case .deck(let id):
+                let state = decks.state(game: model.gameID, deck: id)
+                ListStack(path: Bindable(state).path.kept(on: .deck(id), in: model)) { DeckView(state: state) }
+                    // Each deck has its own stack.
+                    .id("\(model.gameID)|\(id)")
             }
         }
         // Every screen of the old game starts afresh, not only the one on show.
@@ -52,6 +59,7 @@ struct RootView: View {
             collection.keep(game: game)
             wanted.keep(game: game)
             forSale.keep(game: game)
+            decks.keep(game: game)
         }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
@@ -71,6 +79,11 @@ struct RootView: View {
             case .success(let url): Task { await model.importCSV(from: url) }
             case .failure(let error): model.importFailed(error)
             }
+        }
+        .sheet(isPresented: $model.showsNewDeck) {
+            NewDeckSheet(gameID: model.gameID, deckNames: model.library.decks(game: model.gameID).map(\.name))
+                .environment(model)
+                .preferredColorScheme(.dark)
         }
         .sheet(item: $model.importing) { importModel in
             ImportSheet(importModel: importModel)
@@ -133,7 +146,8 @@ extension Binding where Value == NavigationPath {
     }
 }
 
-/// A list screen (the Collection, Wanted, For Sale) and the pages pushed on it, in the screen's own navigation stack.
+/// A list screen (the Collection, Wanted, For Sale, a deck) and the pages pushed on it, in the screen's own navigation
+/// stack.
 private struct ListStack<Content: View>: View {
     @Binding var path: NavigationPath
     @ViewBuilder let content: Content
@@ -150,6 +164,8 @@ private struct Sidebar: View {
     /// Optional, as the split view wants it: on the iPhone, going back to the sidebar clears it. The screen itself stays
     /// in the model, which keeps it.
     @State private var selection: Screen?
+    /// The catalog read of every active deck of the game, for the rows' missing counts (A14, D7): one join for all rows.
+    @State private var activeDecks = DeckJoin()
 
     init(screen: Screen) {
         _selection = State(initialValue: screen)
@@ -177,12 +193,20 @@ private struct Sidebar: View {
                 row(.forSale, title: "For Sale", icon: "tag")
                     .accessibilityIdentifier("sidebar-for-sale")
             }
+            decksSection
             Section("Catalog") {
                 row(.allCards, title: "All cards", icon: "square.grid.2x2")
                     .accessibilityIdentifier("sidebar-all-cards")
             }
         }
         .onChange(of: selection) { _, new in if let new { model.screen = new } }
+        .task(id: DeckJoin.key(game: model.gameID, model: model)) {
+            let key = DeckJoin.key(game: model.gameID, model: model)
+            let active = model.library.decks(game: key.game).filter(\.active)
+            // Without an active deck no row shows a count: nothing to read.
+            guard !active.isEmpty else { return }
+            await activeDecks.run(key, cardKeys: Set(active.flatMap { $0.cards.map(\.cardKey) }), model: model)
+        }
         .onChange(of: model.screen) { _, new in selection = new }
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
@@ -194,6 +218,49 @@ private struct Sidebar: View {
         #if DEBUG && os(macOS)
         .capturableSidebar()
         #endif
+    }
+
+    /// D7: one row per deck of the game, in deck order, with its missing count (an active deck that misses copies), the
+    /// line for decks this build cannot read, then "New Deck…", a button, not a selectable row.
+    private var decksSection: some View {
+        let library = model.library, game = model.gameID
+        let read = activeDecks.read(game: game)
+        return Section("Decks") {
+            ForEach(library.decks(game: game)) { deck in
+                deckRow(deck, missing: DeckPage.sidebarCount(deck, read: read))
+            }
+            if let text = DeckPage.unreadableText(library.unreadableDecks(game: game)) {
+                Text(text)
+                    .font(Theme.labelFont)
+                    .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("sidebar-decks-unreadable")
+            }
+            Button { model.showsNewDeck = true } label: {
+                SidebarRow(title: "New Deck…", icon: "plus", selected: false, muted: true)
+            }
+            .buttonStyle(.plain)
+            .disabled(!library.canChange(game: game))
+            .accessibilityIdentifier("sidebar-new-deck")
+        }
+    }
+
+    /// A deck's row: as a Lists row, with the missing count as plain text at its trailing edge (no capsule, tabular digits).
+    private func deckRow(_ deck: Deck, missing: String?) -> some View {
+        let screen = Screen.deck(deck.id), selected = selection == screen
+        return HStack(spacing: 6) {
+            SidebarRow(title: deck.name, icon: "rectangle.stack", selected: selected)
+            Spacer(minLength: 4)
+            if let missing {
+                Text(missing)
+                    .monospacedDigit()
+                    .foregroundStyle(selected ? Theme.ground : Theme.muted)
+                    .accessibilityIdentifier("sidebar-deck-missing-\(deck.id)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar-deck-\(deck.id)")
+        .tag(screen)
+        .listRowBackground(selected ? SelectionFill() : nil)
     }
 
     /// A row of the list's selection. The selected one draws its own accent fill over the system's (grey without focus,
@@ -223,11 +290,13 @@ private struct SidebarRow: View {
     let title: String
     let icon: String
     let selected: Bool
+    /// "New Deck…": the title in `muted`.
+    var muted = false
 
     var body: some View {
         Label {
             Text(title)
-                .foregroundStyle(selected ? Theme.ground : Theme.text)
+                .foregroundStyle(selected ? Theme.ground : muted ? Theme.muted : Theme.text)
         } icon: {
             Image(systemName: icon)
                 .resizable()
