@@ -203,6 +203,8 @@ final class AppModel {
     /// The UTC day (`yyyy-MM-dd`) of the last catalog step that fetched at least one set. It outlives the store, so a
     /// store set aside or lost on that day does not lead to a second fetch of the same sets (`catalogHeld`).
     private nonisolated static let lastFetchDayKey = "lastCatalogFetchDay"
+    /// The UTC day of the last `cardinfo.php` request, made or failed: a failed refresh is not tried again that day.
+    private nonisolated static let lastYGOIndexAttemptDayKey = "lastYGOIndexAttemptDay"
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
@@ -816,7 +818,10 @@ final class AppModel {
 
     private func refreshYGOIndexIfNeeded(newSets: Int, now: Date) async -> String? {
         let writtenAt = (try? paths.ygoIndex.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        guard Self.needsYGOIndex(hasIndex: ygoIndex != nil, isCurrent: ygoIndex?.isCurrent ?? true, newSets: newSets, writtenAt: writtenAt, now: now) else { return nil }
+        let attemptedToday = defaults.string(forKey: Self.lastYGOIndexAttemptDayKey) == SyncPlan.utcDay(now)
+        guard Self.needsYGOIndex(hasIndex: ygoIndex != nil, isCurrent: ygoIndex?.isCurrent ?? true, newSets: newSets,
+                                 attemptedToday: attemptedToday, writtenAt: writtenAt, now: now) else { return nil }
+        defaults.set(SyncPlan.utcDay(now), forKey: Self.lastYGOIndexAttemptDayKey)   // before the request: a failure counts
         status = .syncing(StatusText.ygoIndex)
         do {
             ygoIndex = try await ygoLoader.refresh()
@@ -827,8 +832,11 @@ final class AppModel {
     }
 
     /// D9: fetch the index when there is none, or when the sync added a Yu-Gi-Oh! set and the index is not from today (UTC).
-    /// An index of an older version (no types, D14) is fetched once more, but also not twice in one UTC day.
-    nonisolated static func needsYGOIndex(hasIndex: Bool, isCurrent: Bool = true, newSets: Int, writtenAt: Date?, now: Date) -> Bool {
+    /// An index of an older version (no types, D14) is fetched once more. No request is made twice in one UTC day,
+    /// whatever else holds (`attemptedToday`: the last request of the day may have failed, so the file did not change).
+    nonisolated static func needsYGOIndex(hasIndex: Bool, isCurrent: Bool, newSets: Int, attemptedToday: Bool,
+                                          writtenAt: Date?, now: Date) -> Bool {
+        guard !attemptedToday else { return false }
         guard hasIndex else { return true }
         guard newSets > 0 || !isCurrent else { return false }
         guard let writtenAt else { return true }

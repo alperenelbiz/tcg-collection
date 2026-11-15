@@ -511,15 +511,39 @@ struct AppModelTests {
     @Test func theYuGiOhIndexIsFetchedWhenMissingOrAtMostOnceADayForNewSets() {   // D9
         let morning = TCGDate.date("2026-11-11T08:00:00")!, evening = TCGDate.date("2026-11-11T21:00:00")!
         let yesterday = TCGDate.date("2026-11-10T21:00:00")!
-        #expect(AppModel.needsYGOIndex(hasIndex: false, newSets: 0, writtenAt: nil, now: evening))
-        #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 0, writtenAt: yesterday, now: evening) == false)
-        #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: yesterday, now: evening))
-        #expect(AppModel.needsYGOIndex(hasIndex: true, newSets: 2, writtenAt: morning, now: evening) == false)
+        func needs(_ hasIndex: Bool, current: Bool = true, newSets: Int = 0, attempted: Bool = false, written: Date?) -> Bool {
+            AppModel.needsYGOIndex(hasIndex: hasIndex, isCurrent: current, newSets: newSets, attemptedToday: attempted,
+                                   writtenAt: written, now: evening)
+        }
+        #expect(needs(false, written: nil))
+        #expect(needs(true, written: yesterday) == false)
+        #expect(needs(true, newSets: 2, written: yesterday))
+        #expect(needs(true, newSets: 2, written: morning) == false)
         // An index of an older version (no types) is fetched once, not on the day it was written, and without new sets.
-        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: yesterday, now: evening))
-        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: morning, now: evening) == false)
-        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: false, newSets: 0, writtenAt: nil, now: evening))
-        #expect(AppModel.needsYGOIndex(hasIndex: true, isCurrent: true, newSets: 0, writtenAt: yesterday, now: evening) == false)
+        #expect(needs(true, current: false, written: yesterday))
+        #expect(needs(true, current: false, written: morning) == false)
+        #expect(needs(true, current: false, written: nil))
+        #expect(needs(true, current: true, written: yesterday) == false)
+        // A request already made today (it may have failed) forbids another, in every case.
+        #expect(needs(false, attempted: true, written: nil) == false)
+        #expect(needs(true, current: false, attempted: true, written: yesterday) == false)
+        #expect(needs(true, newSets: 3, attempted: true, written: yesterday) == false)
+    }
+
+    /// A failing `cardinfo.php` is asked once per UTC day: a second sync step the same day sends nothing.
+    @MainActor @Test func aFailedYuGiOhIndexRequestIsNotRepeatedTheSameDay() async throws {
+        let failing = FakeFetcher(body: Data(), status: 503)
+        let root = tempRoot()
+        let make = {
+            AppModel(options: .init(arguments: ["app", "-store", root.path]), catalogClient: self.fakeCatalog,
+                     archiveClient: self.fakeArchive, fetcher: failing, now: { Self.day1 })
+        }
+        let first = make()
+        await first.start()
+        #expect(await failing.calls == 1 && first.ygoIndex == nil)
+        await first.refresh(rebuild: false)
+        await make().start()                                                       // another launch, same root and day
+        #expect(await failing.calls == 1)
     }
 
     @MainActor @Test func theFilterListsAreWrittenAfterASyncAndReadAtTheNextLaunch() async throws {
