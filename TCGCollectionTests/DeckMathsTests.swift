@@ -199,7 +199,7 @@ struct DeckMathsTests {
         #expect(full["champion"] == nil)
     }
 
-    /// Copies over all counted sections together; the warning stands on the first counted section; basics are exempt;
+    /// Copies over all counted sections together; the warning stands on the first section holding the card; basics are exempt;
     /// a section that is not counted (Riftbound's Runes) does not count.
     @Test func theCopyLimitCountsTheCountedSectionsTogether() {
         let main = (1...13).map { card("c\($0)", "main", 3) } + [card("ash", "main", 2)]       // 41 cards
@@ -223,18 +223,83 @@ struct DeckMathsTests {
                 == "at least 60 cards · more than 4 copies: Avacyn, Bolt, Counterspell and 2 more")
     }
 
-    /// Commander: one copy over commander and deck (singleton) on the Commander section; the 100 on the Deck.
+    /// Commander: one copy over commander and deck (singleton), on the section that holds the card; the 100 on the Deck.
     @Test func commanderIsSingletonAndOneHundredCards() {
         let theDeck = deck([card("sol", "deck", 2), card("cmd", "commander", 1), card("x", "deck", 96)],
                            format: "commander")
         let result = warnings(theDeck, game: magic, isBasic: { $0 == "x" }, names: ["sol": "Sol Ring"])
-        #expect(result["commander"] == "more than 1 copy: Sol Ring")
-        #expect(result["deck"] == "Commander deck: 100 cards")
+        #expect(result["commander"] == nil)
+        #expect(result["deck"] == "Commander deck: 100 cards · more than 1 copy: Sol Ring")
         let empty = warnings(deck([card("sol", "deck", 2)], format: "commander"), game: magic,
                              names: ["sol": "Sol Ring"])
-        #expect(empty["commander"] == "1–2 cards · more than 1 copy: Sol Ring")
+        #expect(empty["commander"] == "1–2 cards")
+        #expect(empty["deck"] == "Commander deck: 100 cards · more than 1 copy: Sol Ring")
         let legal = deck([card("cmd", "commander", 1), card("x", "deck", 99)], format: "commander")
         #expect(warnings(legal, game: magic, isBasic: { $0 == "x" }).isEmpty)
+    }
+
+    /// Fix round 1: the copy warning stands on the first section, in the format's order, that holds a card over the limit.
+    @Test func theCopyWarningStandsOnTheFirstSectionHoldingACardOverTheLimit() {
+        let names = ["x": "Xolo"]
+        let rift = warnings(deck([card("x", "main", 4)]), game: riftbound, names: names)
+        #expect(rift["main"] == "Main Deck with its Champion: at least 40 cards · more than 3 copies: Xolo")
+        #expect(rift["champion"] == "1 card")
+        let ygo = warnings(deck([card("x", "main", 2), card("x", "side", 2)]), game: yugioh, names: names)
+        #expect(ygo["main"] == "40–60 cards · more than 3 copies: Xolo")
+        #expect(ygo["side"] == nil)
+        let sideOnly = warnings(deck([card("x", "side", 4)]), game: yugioh, names: names)
+        #expect(sideOnly["side"] == "more than 3 copies: Xolo")
+        #expect(sideOnly["main"] == "40–60 cards")
+        let commander = warnings(deck([card("x", "deck", 2)], format: "commander"), game: magic, names: names)
+        #expect(commander["deck"] == "Commander deck: 100 cards · more than 1 copy: Xolo")
+        #expect(commander["commander"] == "1–2 cards")
+    }
+
+    /// Fix round 1: a section the format does not know counts toward the copy limit (no size bound, no total).
+    @Test func aSectionTheFormatLacksCountsTowardTheCopyLimit() {
+        let main = (1...14).map { card("c\($0)", "main", 3) }                          // 42 cards
+        let result = warnings(deck(main + [card("x", "side2", 4)]), game: yugioh, names: ["x": "Xolo"])
+        #expect(result == ["side2": "more than 3 copies: Xolo"])
+        let split = warnings(deck(main + [card("x", "main", 2), card("x", "side2", 2)]), game: yugioh,
+                             names: ["x": "Xolo"])
+        #expect(split == ["main": "more than 3 copies: Xolo"])
+        // Cyberpunk's Side Deck is a known section that is not counted: it stays out.
+        let cyber = (1...14).map { card("c\($0)", "main", 3) } + [card("l", "legends", 3), card("x", "side", 4)]
+        #expect(warnings(deck(cyber), game: cyberpunk).isEmpty)
+    }
+
+    /// Fix round 1: two deck cards with one id are one line, their counts summed into the first.
+    @Test func twoDeckCardsWithOneIdAreOneLine() {
+        let printings = ["a": [product(id: 1, game: "yu-gi-oh", name: "A")]]
+        let theDeck = deck([card("a", "main", 2, name: "First"), card("a", "main", 2, name: "Second")])
+        let view = sections(theDeck, game: yugioh, printings: printings, owned: ["a": 1])
+        let all = lines(view[0])
+        #expect(all.count == 1)
+        #expect(all.first?.card.count == 4)
+        #expect(all.first?.card.name == "First")
+        #expect(all.first?.missing == 3)
+        #expect(view[0].count == 4)
+        #expect(DeckMaths.totals(view) == "4 cards · 3 missing · 1 without a price")
+        #expect(warnings(theDeck, game: yugioh, names: ["a": "A"])["main"] == "40–60 cards · more than 3 copies: A")
+    }
+
+    /// An empty deck warns under each minimum (the view decides not to show warnings for an empty deck): Yu-Gi-Oh! 1,
+    /// Magic Commander 2, Magic Constructed 1, Riftbound 5, Cyberpunk 2.
+    @Test func anEmptyDeckWarnsUnderEachMinimum() {
+        #expect(warnings(deck([]), game: yugioh) == ["main": "40–60 cards"])
+        #expect(warnings(deck([], format: "commander"), game: magic)
+                == ["commander": "1–2 cards", "deck": "Commander deck: 100 cards"])
+        #expect(warnings(deck([], format: "constructed"), game: magic) == ["deck": "at least 60 cards"])
+        #expect(warnings(deck([]), game: riftbound)
+                == ["legend": "1 card", "champion": "1 card", "main": "Main Deck with its Champion: at least 40 cards",
+                    "runes": "12 cards", "battlefields": "3 cards"])
+        #expect(warnings(deck([]), game: cyberpunk) == ["legends": "3 cards", "main": "40–50 cards"])
+    }
+
+    @Test func riftboundsSideboardHoldsAtMostTen() {
+        let side = (1...11).map { card("s\($0)", "sideboard", 1) }
+        #expect(warnings(deck(side), game: riftbound)["sideboard"] == "at most 10 cards")
+        #expect(warnings(deck(Array(side.prefix(10))), game: riftbound)["sideboard"] == nil)
     }
 
     // MARK: totals

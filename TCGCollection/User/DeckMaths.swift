@@ -67,6 +67,24 @@ nonisolated enum DeckMaths {
         return { basics.contains($0) }
     }
 
+    /// The deck with each `DeckCard.id` once: a later card of the same card key and section is summed into the first, so
+    /// every line id is unique and no copy counts twice.
+    static func merged(_ deck: Deck) -> Deck {
+        var cards: [DeckCard] = []
+        var index: [String: Int] = [:]
+        for card in deck.cards {
+            if let at = index[card.id] {
+                cards[at].count += card.count
+            } else {
+                index[card.id] = cards.count
+                cards.append(card)
+            }
+        }
+        var result = deck
+        result.cards = cards
+        return result
+    }
+
     /// Every section of the format in its order, then each section id the deck uses that the format lacks (a file written
     /// elsewhere), under its id and without bounds, so no card is hidden.
     private static func shownSections(_ deck: Deck, format: DeckFormat) -> [DeckSection] {
@@ -103,6 +121,7 @@ nonisolated enum DeckMaths {
     static func sections(_ deck: Deck, format: DeckFormat, game: GameDefinition, printings: [String: [ProductRecord]],
                          ownedByCard: [String: Int], isBasic: (String) -> Bool, kindOf: (String) -> CardKind?,
                          price: ([ProductRecord]) -> ShownPrice?) -> [DeckSectionView] {
+        let deck = merged(deck)
         let sections = shownSections(deck, format: format)
         let missing = missingByLine(deck, sections: sections, printings: printings, ownedByCard: ownedByCard,
                                     isBasic: isBasic)
@@ -134,8 +153,8 @@ nonisolated enum DeckMaths {
         guard !printings.isEmpty else {
             return DeckLine(card: card, shown: nil, kind: nil, isBasic: isBasic, owned: 0, missing: 0, price: nil)
         }
-        return DeckLine(card: card, shown: cheapestPrinting(printings, price: price), kind: kindOf(card.cardKey),
-                        isBasic: isBasic, owned: owned, missing: missing, price: price(printings))
+        return DeckLine(card: card, shown: CollectionRules.cheapestPrinting(printings) { price([$0]) },
+                        kind: kindOf(card.cardKey), isBasic: isBasic, owned: owned, missing: missing, price: price(printings))
     }
 
     /// Name, then card key, both ignoring case, then the deck's order.
@@ -145,15 +164,6 @@ nonisolated enum DeckMaths {
             if order != .orderedSame { return order == .orderedAscending }
         }
         return a.0 < b.0
-    }
-
-    /// The printing with the lowest price; a low price counts only when no printing has a market price; the first printing
-    /// on a tie and when none has a price.
-    private static func cheapestPrinting(_ printings: [ProductRecord],
-                                         price: ([ProductRecord]) -> ShownPrice?) -> ProductRecord? {
-        let priced = printings.compactMap { printing in price([printing]).map { (printing: printing, price: $0) } }
-        let market = priced.filter { !$0.price.isLow }
-        return (market.isEmpty ? priced : market).min { $0.price.amount < $1.price.amount }?.printing ?? printings.first
     }
 
     /// The deck's missing copies (D6): per card with a printing that is not basic, `max(0, use − owned)`.
@@ -205,10 +215,14 @@ nonisolated enum DeckMaths {
     /// - its own bound, when its count breaks it;
     /// - each total (`DeckFormat.totals`) that the count of its sections breaks, on the last of its sections the format
     ///   has, prefixed by the total's name when it differs from that section's (`Commander deck: 100 cards`);
-    /// - the copy limit, on the first counted section the format has: `more than 3 copies: A, B, C and 2 more`, the cards
-    ///   over the limit by name (basics exempt), over the counted sections together.
+    /// - the copy limit (when the format has one): `more than 3 copies: A, B, C and 2 more`, the cards over the limit by
+    ///   name (basics exempt). A card's copies count over the format's counted sections together plus every section the
+    ///   format does not know (a section from elsewhere has no size bound and no total, but the limit is per card). The
+    ///   warning stands on the first section, in the order of the deck page, that holds a card over the limit.
+    /// Two deck cards with one id count as one (`merged`).
     static func warnings(_ deck: Deck, format: DeckFormat, isBasic: (String) -> Bool,
                          nameOf: (String) -> String) -> [String: String] {
+        let deck = merged(deck)
         func count(_ ids: [String]) -> Int { deck.cards.filter { ids.contains($0.section) }.reduce(0) { $0 + $1.count } }
         var texts: [String: [String]] = [:]
         for section in format.sections where breaks(count([section.id]), min: section.min, max: section.max) {
@@ -220,13 +234,13 @@ nonisolated enum DeckMaths {
                   let text = boundText(min: total.min, max: total.max) else { continue }
             texts[last.id, default: []].append(total.name == last.name ? text : "\(total.name): \(text)")
         }
-        if let limit = format.copyLimit,
-           let first = format.countedSections.first(where: { format.section($0) != nil }) {
-            let counted = deck.cards.filter { format.countedSections.contains($0.section) }
+        if let limit = format.copyLimit {
+            let counted = deck.cards.filter { format.countedSections.contains($0.section) || format.section($0.section) == nil }
             let copies = counted.reduce(into: [String: Int]()) { $0[$1.cardKey, default: 0] += $1.count }
-            let over = copies.filter { $0.value > limit && !isBasic($0.key) }.keys.map(nameOf)
-                .sorted { $0.caseInsensitiveCompare($1) == .orderedAscending }
-            if !over.isEmpty {
+            let overKeys = Set(copies.filter { $0.value > limit && !isBasic($0.key) }.keys)
+            let over = overKeys.map(nameOf).sorted { $0.caseInsensitiveCompare($1) == .orderedAscending }
+            let holders = Set(counted.filter { overKeys.contains($0.cardKey) && $0.count > 0 }.map(\.section))
+            if !over.isEmpty, let first = shownSections(deck, format: format).first(where: { holders.contains($0.id) })?.id {
                 let named = over.prefix(3).joined(separator: ", ") + (over.count > 3 ? " and \(over.count - 3) more" : "")
                 texts[first, default: []].append("more than \(limit) \(limit == 1 ? "copy" : "copies"): \(named)")
             }

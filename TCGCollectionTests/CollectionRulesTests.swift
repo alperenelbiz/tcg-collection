@@ -54,4 +54,17 @@ struct CollectionRulesTests {
         #expect(PriceFilter.from5.matches(5)); #expect(!PriceFilter.from20.matches(19.99)); #expect(PriceFilter.from20.matches(20))
         #expect(!PriceFilter.under1.matches(nil)); #expect(!PriceFilter.from1.matches(nil)); #expect(PriceFilter.any.matches(nil))
     }
+
+    /// The cheapest printing: market prices first, a low price only when none has one; the first on a tie and when none
+    /// has a price; nil for no printing.
+    @Test func cheapestPrintingPrefersMarketPrices() {
+        let a = product(id: 1, name: "A"), b = product(id: 2, name: "A"), c = product(id: 3, name: "A")
+        let prices: [Int: ShownPrice] = [1: ShownPrice(amount: 4, isLow: false), 2: ShownPrice(amount: 1.5, isLow: false),
+                                         3: ShownPrice(amount: 0.5, isLow: true)]
+        #expect(CollectionRules.cheapestPrinting([a, b, c]) { prices[$0.productID] }?.productID == 2)
+        #expect(CollectionRules.cheapestPrinting([a, c]) { $0.productID == 3 ? prices[3] : nil }?.productID == 3)
+        #expect(CollectionRules.cheapestPrinting([a, b]) { _ in ShownPrice(amount: 1, isLow: false) }?.productID == 1)
+        #expect(CollectionRules.cheapestPrinting([b, a]) { _ in nil }?.productID == 2)
+        #expect(CollectionRules.cheapestPrinting([]) { _ in nil } == nil)
+    }
 }

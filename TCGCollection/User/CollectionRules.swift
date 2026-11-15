@@ -31,6 +31,15 @@ nonisolated enum CollectionRules {
         return result
     }
 
+    /// The printing with the lowest price (the rule of `PriceTable.cheapest`: a low price counts only when no printing has
+    /// a market price); the first one on a tie, and when no printing has a price (the newest: the card page's first). Wanted
+    /// and the deck page pick a card's shown printing with it.
+    static func cheapestPrinting(_ printings: [ProductRecord], price: (ProductRecord) -> ShownPrice?) -> ProductRecord? {
+        let priced = printings.compactMap { printing in price(printing).map { (printing: printing, price: $0) } }
+        let market = priced.filter { !$0.price.isLow }
+        return (market.isEmpty ? priced : market).min { $0.price.amount < $1.price.amount }?.printing ?? printings.first
+    }
+
     /// The finishes the card page offers for one product (B5): the price table's finishes in its order, or `Normal` when
     /// it has none; then each owned finish it does not list (a CSV's unusual `Printing`), in the order given.
     static func finishes(priced: [String], owned: [String]) -> [String] {

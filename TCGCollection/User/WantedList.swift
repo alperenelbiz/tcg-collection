@@ -106,17 +106,9 @@ nonisolated enum WantedList {
             var anyPrinting = entry
             anyPrinting.pinProductID = nil
             anyPrinting.pinFinish = nil
-            let cheapest = cheapestPrinting(list) { price(anyPrinting, [$0]) }
+            let cheapest = CollectionRules.cheapestPrinting(list) { price(anyPrinting, [$0]) }
             return WantedCard(entry: entry, shown: cheapest, price: list.isEmpty ? nil : price(anyPrinting, list), owned: owned)
         }
-    }
-
-    /// The printing with the lowest price, by the rule of `PriceTable.cheapest` (a low price counts only when no printing
-    /// has a market price); the first one on a tie, and when no printing has a price (the newest: the card page's first).
-    private static func cheapestPrinting(_ printings: [ProductRecord], price: (ProductRecord) -> ShownPrice?) -> ProductRecord? {
-        let priced = printings.compactMap { printing in price(printing).map { (printing: printing, price: $0) } }
-        let market = priced.filter { !$0.price.isLow }
-        return (market.isEmpty ? priced : market).min { $0.price.amount < $1.price.amount }?.printing ?? printings.first
     }
 
     /// The copies owned of each card of `printings`, over every printing and finish (`CollectionRules.copiesPerCard`). A
