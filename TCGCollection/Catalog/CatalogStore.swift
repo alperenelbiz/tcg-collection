@@ -439,46 +439,27 @@ actor CatalogStore: ModelActor {
         }
     }
 
-    /// The most distinct card keys one probe of `nearestNames` reads.
-    static let nearestCandidatesPerProbe = 1_000
-
-    /// The cards of `game` whose name is nearest to `text` (a pasted name the catalog does not know), nearest first, at
-    /// most `limit`, one per card (`DeckPaste.nearest`). The candidates are the cards with a word that starts with the
-    /// text's first word, or with its longest word (two probes; each reads cards whose key starts with the word, then cards
-    /// whose key has it after a space, through the `(gameID, cardKey)` index, in pages by key, at most
-    /// `nearestCandidatesPerProbe` distinct keys a probe). Ranked in memory. None for a text without a letter or digit.
-    func nearestNames(game: String, to text: String, limit: Int) throws -> [Suggestion] {
-        let words = CardName.searchKey(text).split(separator: " ").map(String.init)
-        guard let first = words.first, limit > 0 else { return [] }
-        let longest = words.reduce(first) { $1.count > $0.count ? $1 : $0 }
-        var names: [String: String] = [:]
-        for probe in [first, longest].reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } } {
-            var taken = 0
-            for spaced in [false, true] where taken < Self.nearestCandidatesPerProbe {
-                let term = spaced ? " " + probe : probe
-                var last = ""
-                paging: while true {
-                    let after = last
-                    var descriptor = FetchDescriptor<CatalogProduct>(
-                        predicate: #Predicate {
-                            $0.gameID == game && $0.cardKey > after
-                                && ((spaced && $0.cardKey.contains(term)) || (!spaced && $0.cardKey.starts(with: term)))
-                        },
-                        sortBy: [SortDescriptor(\.cardKey, comparator: .lexical)])
-                    descriptor.fetchLimit = 500
-                    descriptor.propertiesToFetch = [\.cardKey, \.cardName]
-                    let batch = try modelContext.fetch(descriptor)
-                    for row in batch where names[row.cardKey] == nil {
-                        names[row.cardKey] = row.cardName
-                        taken += 1
-                        if taken == Self.nearestCandidatesPerProbe { break paging }
-                    }
-                    guard batch.count == descriptor.fetchLimit, let end = batch.last else { break }
-                    last = end.cardKey
-                }
-            }
+    /// Every card of `game` once, as (card key, a printing's card name), by key: what a paste ranks its unknown names
+    /// against (`DeckPaste.NameIndex`). A scan of the game's `(gameID, cardKey)` index in pages of `pageSize` rows, each
+    /// starting after the last key read, with only the two properties fetched. A long scan: run it on a throwaway store on
+    /// the container (`CatalogStore(modelContainer:)`), never on `reader` or the writer. Cancellation stops it between pages.
+    func cardNames(game: String, pageSize: Int = 2_000) throws -> [(cardKey: String, name: String)] {
+        var names: [(cardKey: String, name: String)] = []
+        var last = ""
+        while true {
+            try Task.checkCancellation()
+            let after = last
+            var descriptor = FetchDescriptor<CatalogProduct>(
+                predicate: #Predicate { $0.gameID == game && $0.cardKey > after },
+                sortBy: [SortDescriptor(\.cardKey, comparator: .lexical)])
+            descriptor.fetchLimit = max(pageSize, 1)
+            descriptor.propertiesToFetch = [\.cardKey, \.cardName]
+            let page = try modelContext.fetch(descriptor)
+            for row in page where row.cardKey != names.last?.cardKey { names.append((row.cardKey, row.cardName)) }
+            guard page.count == descriptor.fetchLimit, let end = page.last else { break }
+            last = end.cardKey
         }
-        return DeckPaste.nearest(text, among: names.map { Suggestion(cardKey: $0.key, name: $0.value) }, limit: limit)
+        return names
     }
 
     func product(_ productID: Int) throws -> ProductRecord? {

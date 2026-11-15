@@ -1,4 +1,3 @@
-import AppKit
 import XCTest
 
 /// The click paths of the Decks sidebar section and the deck page (phase 3A task 5), on the fixture catalog. The fixture
@@ -524,18 +523,20 @@ final class DecksFlowTests: UITestCase {
         return #"{"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false, "cards": "# + list + "}]}"
     }
 
-    /// Puts `text` into the paste sheet's editor as a person does: the pasteboard, then Cmd+V. The runner writes the
-    /// general pasteboard and never reads it.
-    private func pasteText(_ app: XCUIApplication, _ text: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// `-pasteDeck <fixture>`: the paste sheet opens at launch with the fixture's text (fix round 1: the tests never write
+    /// the Mac's pasteboard).
+    private func pasteDeck(_ fixture: String) -> [String] {
+        ["-pasteDeck", Self.fixturesDirectory.appending(path: fixture).path]
+    }
+
+    /// The paste sheet that `-pasteDeck` opened, its editor holding the file's last line.
+    private func pasteSheet(_ app: XCUIApplication, lastLine: String, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+        let sheet = element(app, "paste-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20), "no paste sheet", file: file, line: line)
         let editor = element(app, "paste-text")
-        XCTAssertTrue(editor.waitForExistence(timeout: 10), "no text editor", file: file, line: line)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        editor.click()
-        editor.typeKey("v", modifierFlags: .command)
-        let last = text.split(separator: "\n").last.map(String.init) ?? ""
-        XCTAssertTrue(waitUntil { (editor.value as? String)?.contains(last) == true }, "the text was not pasted: \(String(describing: editor.value))",
-                      file: file, line: line)
+        XCTAssertTrue(waitUntil { (editor.value as? String)?.contains(lastLine) == true },
+                      "the editor does not hold the file: \(String(describing: editor.value))", file: file, line: line)
+        return sheet
     }
 
     /// "Read" once the fixture catalog is settled, then the table.
@@ -550,29 +551,35 @@ final class DecksFlowTests: UITestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'paste-unknown-' AND NOT (identifier == 'paste-unknown-count')"))
     }
 
-    /// Opens the paste sheet in create mode: "New Deck…" → "Paste a deck…".
-    private func openCreatePaste(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+    /// The sidebar's "New Deck…" → "Paste a deck…": the New Deck sheet closes, the paste sheet opens for a new deck with the
+    /// name typed there; Cancel writes nothing.
+    func testNewDeckOffersPasteADeck() throws {
+        let app = launch(game: "yu-gi-oh", extra: ["-screen", "collection"])
         let newDeck = element(app, "sidebar-new-deck")
-        XCTAssertTrue(newDeck.waitForExistence(timeout: 20), file: file, line: line)
-        XCTAssertTrue(waitUntil { newDeck.isEnabled }, "New Deck… stays off", file: file, line: line)
+        XCTAssertTrue(newDeck.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntil { newDeck.isEnabled }, "New Deck… stays off")
         newDeck.click()
         let paste = element(app, "new-deck-paste")
-        XCTAssertTrue(paste.waitForExistence(timeout: 5), "no Paste a deck…", file: file, line: line)
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "no Paste a deck…")
+        shot("paste-00-new-deck-sheet", of: element(app, "new-deck-sheet"))
         paste.click()
         let sheet = element(app, "paste-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no paste sheet", file: file, line: line)
-        XCTAssertTrue(waitUntil { !self.element(app, "new-deck-sheet").exists }, "the New Deck sheet stayed", file: file, line: line)
-        return sheet
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no paste sheet")
+        XCTAssertTrue(waitUntil { !self.element(app, "new-deck-sheet").exists }, "the New Deck sheet stayed")
+        XCTAssertEqual(element(app, "paste-name").value as? String, "Deck")
+        XCTAssertEqual(text(element(app, "paste-title")), "Paste a Deck")
+        XCTAssertFalse(element(app, "paste-read").isEnabled, "Read is on without text")
+        element(app, "paste-cancel").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        XCTAssertEqual(try storedDecks(game: "yu-gi-oh"), [])
     }
 
-    /// D11: "New Deck…" → "Paste a deck…" → the fixture text → Read: every card line, no unknown one, the sections the text
-    /// names → Create deck: the deck's page with its sections; the file agrees.
+    /// D11: the fixture text → Read: every card line, no unknown one, the sections the text names → Create deck: the deck's
+    /// page with its sections; the file agrees.
     func testPasteCreatesADeck() throws {
-        let app = launch(game: "yu-gi-oh", extra: ["-screen", "collection"])
-        let sheet = openCreatePaste(app)
+        let app = launch(game: "yu-gi-oh", extra: ["-screen", "collection"] + pasteDeck("deck-yugioh.txt"))
+        let sheet = pasteSheet(app, lastLine: "1 Token: Joey and Red-Eyes Black Dragon")
         XCTAssertEqual(element(app, "paste-name").value as? String, "Deck")
-        let deckText = try String(contentsOf: Self.fixturesDirectory.appending(path: "deck-yugioh.txt"), encoding: .utf8)
-        pasteText(app, deckText)
         shot("paste-01-text", of: sheet)
         read(app)
         XCTAssertEqual(text(element(app, "paste-summary")), "6 cards on 3 lines")
@@ -601,12 +608,11 @@ final class DecksFlowTests: UITestCase {
                                                   "token joey and red eyes black dragon|side|1"])])
     }
 
-    /// A misspelt name and a nonsense line: "Create deck" is off; the suggestion is picked, the other line dropped; then it
-    /// is on, and the deck has the fixed card and not the dropped one.
+    /// A misspelt name and a nonsense line: "Create deck" is off; the suggestion is picked (the row says what was written),
+    /// the other line dropped; then it is on, and the deck has the fixed card and not the dropped one.
     func testAnUnknownLineIsFixedOrDropped() throws {
-        let app = launch(game: "yu-gi-oh", extra: ["-screen", "collection"])
-        let sheet = openCreatePaste(app)
-        pasteText(app, "Main Deck:\n1 Swiftwind Panther Warrior\nExtra Deck:\n2 Stardust Dragn\n1 Qqq Zzz")
+        let app = launch(game: "yu-gi-oh", extra: ["-screen", "collection"] + pasteDeck("deck-misspelt.txt"))
+        let sheet = pasteSheet(app, lastLine: "1 Qqq Zzz")
         read(app)
         let create = element(app, "paste-apply")
         XCTAssertFalse(create.isEnabled, "Create deck is on with unknown lines")
@@ -620,10 +626,12 @@ final class DecksFlowTests: UITestCase {
         shot("paste-05-suggestions")
         suggestion.click()
         XCTAssertTrue(waitUntil { self.text(self.element(app, "paste-unknown-count")).hasPrefix("1 line not recognised") })
+        XCTAssertEqual(text(element(app, "paste-note-4")), "as written: Stardust Dragn")
         XCTAssertFalse(create.isEnabled)
         element(app, "paste-unknown-5").click()
         let drop = app.menuItems["Drop this line"].firstMatch
         XCTAssertTrue(drop.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["No near names in the catalog"].firstMatch.exists, "a nonsense line has suggestions")
         drop.click()
         XCTAssertTrue(waitUntil { create.isEnabled }, "Create deck stays off")
         XCTAssertEqual(text(element(app, "paste-summary")), "3 cards on 2 lines, 1 line dropped")
@@ -636,46 +644,39 @@ final class DecksFlowTests: UITestCase {
                       "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
     }
 
-    /// Review Focus 3: Cancel after the table writes nothing: the file's bytes are equal, and no deck is added. From the
-    /// empty deck's "Paste…".
+    /// Review Focus 3: Cancel after the table writes nothing: the file's bytes are equal, and no deck is added. On the empty
+    /// deck, which also offers "Paste…".
     func testPasteCancelWritesNothing() throws {
-        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"]) { _ in
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"] + pasteDeck("deck-misspelt.txt")) { _ in
             try self.writeUserFile(game: "yu-gi-oh", json: Self.windDeck(cards: false))
         }
         let file = try XCTUnwrap(root).appending(path: "user").appending(path: "yu-gi-oh.json")
         let before = try Data(contentsOf: file)
-        let paste = element(app, "deck-empty-paste")
-        XCTAssertTrue(paste.waitForExistence(timeout: 20), "no Paste… in the empty deck")
-        XCTAssertTrue(waitUntil { paste.isEnabled })
-        paste.click()
-        let sheet = element(app, "paste-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
-        XCTAssertTrue(text(element(app, "paste-title")) == "Paste into Wind", text(element(app, "paste-title")))
+        let sheet = pasteSheet(app, lastLine: "1 Qqq Zzz")
+        XCTAssertEqual(text(element(app, "paste-title")), "Paste into Wind")
         XCTAssertFalse(element(app, "paste-name").exists, "a name field when adding to a deck")
-        pasteText(app, "3 Stardust Dragon\n1 Qqq Zzz")
         read(app)
-        XCTAssertEqual(text(element(app, "paste-summary")), "3 cards on 1 line, 1 line not recognised")
+        XCTAssertEqual(text(element(app, "paste-summary")), "1 card on 1 line, 2 lines not recognised")
         element(app, "paste-cancel").click()
         XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
-        XCTAssertTrue(element(app, "deck-empty-paste").waitForExistence(timeout: 5), "the deck is not empty any more")
+        let emptyPaste = element(app, "deck-empty-paste")
+        XCTAssertTrue(emptyPaste.waitForExistence(timeout: 5), "the deck is not empty any more")
+        shot("paste-07-empty-deck")
         RunLoop.current.run(until: Date().addingTimeInterval(1))          // a queued write would land by now
         XCTAssertEqual(try Data(contentsOf: file), before, "Cancel wrote the file")
+        emptyPaste.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "the empty deck's Paste… opens no sheet")
+        element(app, "paste-cancel").click()
+        XCTAssertTrue(waitUntil { !sheet.exists })
     }
 
     /// "Paste…" in a deck page's toolbar adds counts to the cards already there; a card new to the deck goes to the
-    /// section its kind picks.
+    /// section its kind picks. (The sheet opens by `-pasteDeck` on the deck shown; the toolbar's button is checked after.)
     func testPasteAddsToADeck() throws {
-        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"]) { _ in
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"] + pasteDeck("deck-add.txt")) { _ in
             try self.writeUserFile(game: "yu-gi-oh", json: Self.windDeck())
         }
-        XCTAssertTrue(element(app, "deck-cell-swiftwind panther warrior-main").waitForExistence(timeout: 20))
-        let paste = element(app, "deck-paste")
-        XCTAssertTrue(waitUntil { paste.isEnabled })
-        shot("paste-07-deck-toolbar")
-        paste.click()
-        let sheet = element(app, "paste-sheet")
-        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
-        pasteText(app, "2 Swiftwind Panther Warrior\n1 Stardust Dragon")
+        let sheet = pasteSheet(app, lastLine: "1 Stardust Dragon")
         read(app)
         XCTAssertEqual(text(element(app, "paste-section-2")), "Extra Deck")
         let add = element(app, "paste-apply")
@@ -688,5 +689,11 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards
                 == ["swiftwind panther warrior|main|3", "stardust dragon|extra|1"] },
                       "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
+        let paste = element(app, "deck-paste")
+        XCTAssertTrue(waitUntil { paste.isEnabled })
+        shot("paste-09-deck-toolbar")
+        paste.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "the toolbar's Paste… opens no sheet")
+        XCTAssertEqual(text(element(app, "paste-title")), "Paste into Wind")
     }
 }

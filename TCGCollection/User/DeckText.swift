@@ -27,21 +27,32 @@ nonisolated enum DeckText {
         return raw.enumerated().map { DeckTextLine(number: $0.offset + 1, kind: kind(String($0.element))) }
     }
 
+    /// White space and a byte order mark (U+FEFF, at the text's start or a line's start).
+    private static let blank = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\u{FEFF}"))
+
     private static func kind(_ line: String) -> DeckTextLine.Kind {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = line.trimmingCharacters(in: blank)
         if trimmed.isEmpty || trimmed.hasPrefix("#") { return .note }
         if trimmed.hasSuffix(":") { return .section(String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces)) }
         return card(trimmed).map { .card(count: $0.count, name: $0.name) } ?? .unreadable(trimmed)
     }
 
-    /// Leading ASCII digits, an optional `x` glued to them, then white space and a name.
+    /// Leading ASCII digits, then an optional `x` (glued to them, or alone between white space: `4x Name`, `4 x Name`), then
+    /// white space and a name.
     private static func card(_ line: String) -> (count: Int, name: String)? {
         let digits = line.prefix { $0.isASCII && $0.isNumber }
         guard !digits.isEmpty, let count = Int(digits) else { return nil }
         var rest = line[digits.endIndex...]
-        if let x = rest.first, x == "x" || x == "X", rest.dropFirst().first?.isWhitespace == true { rest = rest.dropFirst() }
+        let spaced = rest.drop { $0.isWhitespace }
+        if let x = spaced.first, x == "x" || x == "X", spaced.dropFirst().first?.isWhitespace == true { rest = spaced.dropFirst() }
         guard rest.first?.isWhitespace == true else { return nil }
         let name = rest.trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? nil : (count, name)
+    }
+
+    /// True for an unreadable line that starts with a count too large for `Int` and goes on with a name.
+    static func hasTooLargeCount(_ line: String) -> Bool {
+        let digits = line.prefix { $0.isASCII && $0.isNumber }
+        return !digits.isEmpty && Int(digits) == nil && line[digits.endIndex...].first?.isWhitespace == true
     }
 }

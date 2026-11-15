@@ -7,6 +7,22 @@ import Testing
     var settled = true
 }
 
+/// Holds a read at its first step until `open()` (`PasteDeckModel.beforeLookup`).
+@MainActor private final class Gate {
+    private(set) var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func open() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// `"<cardKey>|<section>|<count>"` per card, in the deck's order.
 private func shown(_ deck: Deck?) -> [String] { deck?.cards.map { "\($0.cardKey)|\($0.section)|\($0.count)" } ?? [] }
 
@@ -69,14 +85,56 @@ struct PasteDeckModelTests {
         #expect(!pasting("  \n ", library: library, reader: try await filledStore()).canRead)   // no text
     }
 
-    /// A settled catalog without products of the game: the read ends with a sentence; Back returns to the text.
+    /// Fix round 1: a settled catalog without products of the game: "Read" is off and the sheet says the catalog is empty;
+    /// a read asked anyway stays on the text.
     @Test func anEmptyCatalogSaysSo() async throws {
         let (library, _) = try await library()
         let model = pasting("1 Stardust Dragon", library: library, reader: try CatalogStore.inMemory())
+        #expect(model.canRead)                                                  // not checked yet
+        await model.checkCatalog()
+        #expect(!model.canRead && model.catalogBlock == PasteDeckModel.catalogEmpty)
         await model.read()
-        #expect(model.step == .failed(PasteDeckModel.catalogEmpty))
-        model.back()
-        #expect(model.step == .text && model.canRead)
+        #expect(model.step == .text && model.lines.isEmpty)
+        let full = pasting("1 Stardust Dragon", library: library, reader: try await filledStore())
+        await full.checkCatalog()
+        #expect(full.canRead && full.catalogBlock == nil)
+    }
+
+    /// Fix round 1: Cancel, Back or the sheet going away during a read cancels it; it stores nothing and fails nothing.
+    @Test func aCancelledReadStoresNothing() async throws {
+        let (library, _) = try await library()
+        let model = pasting("1 Stardust Dragn\n1 Swiftwind Panther Warrior", library: library, reader: try await filledStore())
+        let gate = Gate()
+        model.beforeLookup = { await gate.wait() }
+        model.startRead()
+        while !gate.entered { await Task.yield() }
+        #expect(model.step == .reading)
+        model.cancelRead()
+        gate.open()
+        await model.readTask?.value
+        #expect(model.step == .text && model.lines.isEmpty)
+        model.beforeLookup = nil
+        model.startRead()
+        await model.readTask?.value
+        #expect(model.step == .table && model.lines.count == 2)
+    }
+
+    /// Fix round 1: creating a deck from a paste is one library change; a refused file gets no deck and nothing is written.
+    @Test func aPastedDeckIsAddedInOneChange() async throws {
+        let (library, folder) = try await library()
+        let before = library.version
+        let card = DeckCard(cardKey: "stardust dragon", name: "Stardust Dragon", section: "extra", count: 2)
+        #expect(library.addDeck(game: "yu-gi-oh", name: "Wind", format: "standard", cards: [card, card]) == "new")
+        #expect(library.version == before + 1)
+        #expect(shown(library.deck(game: "yu-gi-oh", id: "new")) == ["stardust dragon|extra|4"])
+        let refused = #"{"version": 99, "collection": []}"#
+        let (locked, lockedFolder) = try await self.library(refused)
+        #expect(locked.addDeck(game: "yu-gi-oh", name: "Wind", format: "standard", cards: [card]) == nil)
+        #expect(locked.decks(game: "yu-gi-oh").isEmpty)
+        await locked.flush()
+        #expect(try String(contentsOf: lockedFolder.appending(path: "yu-gi-oh.json"), encoding: .utf8) == refused)
+        await library.flush()
+        #expect(try GameUserFile(data: Data(contentsOf: folder.appending(path: "yu-gi-oh.json"))).decks.count == 1)
     }
 
     /// A misspelt name and a nonsense line: "Create deck" stays off until one is picked and the other dropped; the pick
@@ -97,6 +155,7 @@ struct PasteDeckModelTests {
         model.pick(offered[0], for: misspelt)
         #expect(model.lines[0].match == .card(cardKey: "stardust dragon", name: "Stardust Dragon"))
         #expect(model.lines[0].section == "extra")
+        #expect(model.lines[0].note == "as written: Stardust Dragn")
         #expect(model.unknownCount == 1 && !model.canApply)
         model.drop(model.lines[1])
         #expect(model.isDroppedByHand(model.lines[1]) && model.canApply)
@@ -128,6 +187,7 @@ struct PasteDeckModelTests {
         #expect(model.lines.map(\.section) == ["commander", "deck", "deck", "deck", "deck", "deck"])
         #expect(model.lines.last?.note == "no section Sideboard in Commander")
         #expect(model.lines[3].match == .card(cardKey: "stingcaster mage", name: "Stingcaster Mage"))   // the base name
+        #expect(model.lines[3].note == "as written: Stingcaster Mage (Borderless) (0329)")
         #expect(model.unknownCount == 1)                                        // Fire // Ice: not in the fixture
         model.format = "constructed"
         #expect(model.lines.map(\.section) == ["deck", "deck", "deck", "deck", "deck", "sideboard"])

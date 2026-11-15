@@ -31,7 +31,7 @@ final class PasteDeckModel: Identifiable {
     }
 
     nonisolated static let catalogUpdating = "The catalog is being updated. Paste when the update is done."
-    nonisolated static let catalogEmpty = "The catalog has no cards of this game yet. Paste when it has downloaded."
+    nonisolated static let catalogEmpty = "The catalog is empty. Paste when it has cards."
     nonisolated static let deckChanged = "This deck changed while the sheet was open."
     nonisolated static let deckGone = "This deck was removed."
     nonisolated static func unreadable(_ reason: String) -> String { "The catalog could not be read (\(reason))." }
@@ -68,6 +68,12 @@ final class PasteDeckModel: Identifiable {
     @ObservationIgnored private let ygoType: @MainActor (String) -> String?
     /// Each read takes the next number; only the latest one stores what it found.
     @ObservationIgnored private var reading = 0
+    /// The running read (`startRead`); Cancel, Back and the sheet going away cancel it (`cancelRead`).
+    @ObservationIgnored private(set) var readTask: Task<Void, Never>?
+    /// Whether the game's catalog has products (`checkCatalog`, and each read); nil until known.
+    private(set) var catalogHasProducts: Bool?
+    /// Tests only: runs on the main actor at the start of a read, so a test can act while a read is in progress.
+    @ObservationIgnored var beforeLookup: (@MainActor () async -> Void)?
     @ObservationIgnored private let log = Logger(subsystem: "TCGCollection2", category: "paste")
 
     init(gameID: String, deckID: String?, name: String = "", format: String = "", text: String = "", library: UserLibrary,
@@ -102,8 +108,19 @@ final class PasteDeckModel: Identifiable {
         library.canChange(game: gameID) ? nil : library.problem(game: gameID) ?? "Reading your collection…"
     }
 
-    /// Why "Read" is off although there is text: the game's catalog step is still to come or running.
-    var catalogBlock: String? { catalogSettled(gameID) ? nil : Self.catalogUpdating }
+    /// Why "Read" is off although there is text: the game's catalog step is still to come or running ("being updated"), or
+    /// the settled catalog has no products of the game ("empty"). Every name would be unknown.
+    var catalogBlock: String? {
+        guard catalogSettled(gameID) else { return Self.catalogUpdating }
+        return catalogHasProducts == false ? Self.catalogEmpty : nil
+    }
+
+    /// Reads whether the game's catalog has products (through `reader`). The sheet calls it when it opens and whenever the
+    /// catalog changes.
+    func checkCatalog() async {
+        guard let has = try? await reader.hasProducts(game: gameID) else { return }
+        catalogHasProducts = has
+    }
 
     var canRead: Bool {
         step == .text && problem == nil && catalogBlock == nil && currentFormat != nil
@@ -152,14 +169,32 @@ final class PasteDeckModel: Identifiable {
 
     // MARK: Reading
 
-    /// Parses the text, looks every written name up by its exact keys (one store call), the unknown names' nearest names
-    /// (one call each) and the cards of those (one call), then shows the table. A read that a later one overtook, or that
-    /// was cancelled, stores nothing.
+    /// "Read": starts `read` in a task the model keeps, so Cancel, Back and the sheet going away can cancel it.
+    func startRead() {
+        guard canRead else { return }
+        readTask?.cancel()
+        readTask = Task { await self.read() }
+    }
+
+    /// Cancels the running read: it stores nothing, and the sheet shows the text again.
+    func cancelRead() {
+        readTask?.cancel()
+        readTask = nil
+        reading += 1
+        if step == .reading { step = .text }
+    }
+
+    /// Parses the text, looks every written name up by its exact keys (one store call); when a name is unknown, reads the
+    /// game's names once (`CatalogStore.cardNames`, on a throwaway store on the container: a long scan never runs on
+    /// `reader`) and ranks every unknown name against them off the main thread (`DeckPaste.NameIndex`); then the cards of
+    /// the suggestions (one call), then shows the table. A read that a later one overtook, or that was cancelled, stores
+    /// nothing.
     func read() async {
         guard canRead, let game else { return }
         reading += 1
         let number = reading
         step = .reading
+        await beforeLookup?()
         let parsed = DeckText.parse(text)
         var names: [String: String] = [:], counted: Set<String> = []
         for line in parsed {
@@ -169,8 +204,13 @@ final class PasteDeckModel: Identifiable {
             if count > 0 { counted.insert(key) }
         }
         do {
-            guard try await reader.hasProducts(game: gameID) else {
-                if number == reading { step = .failed(Self.catalogEmpty) }
+            try Task.checkCancellation()
+            let hasProducts = try await reader.hasProducts(game: gameID)
+            guard hasProducts else {
+                if number == reading {
+                    catalogHasProducts = false
+                    step = .text
+                }
                 return
             }
             let keys = names.mapValues { DeckPaste.keys(for: $0, game: game) }
@@ -186,12 +226,15 @@ final class PasteDeckModel: Identifiable {
                 }
             }
             var suggestions: [String: [Suggestion]] = [:]
-            for (key, name) in names where found[key] == nil && counted.contains(key) {
+            let unknown = names.filter { found[$0.key] == nil && counted.contains($0.key) }
+            if !unknown.isEmpty {
                 try Task.checkCancellation()
-                suggestions[key] = try await reader.nearestNames(game: gameID, to: name, limit: 5)
+                let all = try await CatalogStore(modelContainer: reader.modelContainer).cardNames(game: gameID)
+                suggestions = try await Self.rank(unknown, among: all)
             }
             let offered = try await reader.cards(game: gameID, keys: Array(Set(suggestions.values.flatMap { $0.map(\.cardKey) })))
             guard number == reading, !Task.isCancelled else { return }
+            catalogHasProducts = true
             self.parsed = parsed
             self.found = found
             self.suggestions = suggestions
@@ -205,6 +248,18 @@ final class PasteDeckModel: Identifiable {
             guard number == reading, !(error is CancellationError), !Task.isCancelled else { return }
             step = .failed(Self.unreadable(error.localizedDescription))
         }
+    }
+
+    /// The nearest names (at most 5) of each unknown written name, by its key, off the main thread.
+    @concurrent private nonisolated static func rank(_ unknown: [String: String],
+                                                     among names: [(cardKey: String, name: String)]) async throws -> [String: [Suggestion]] {
+        let index = DeckPaste.NameIndex(names)
+        var ranked: [String: [Suggestion]] = [:]
+        for (key, name) in unknown {
+            try Task.checkCancellation()
+            ranked[key] = index.nearest(name, limit: 5)
+        }
+        return ranked
     }
 
     private func make(_ card: CatalogCard, game: GameDefinition) -> Found {
@@ -222,7 +277,7 @@ final class PasteDeckModel: Identifiable {
 
     /// Back to the text: the table is read again from it.
     func back() {
-        reading += 1
+        cancelRead()
         step = .text
     }
 
@@ -241,21 +296,15 @@ final class PasteDeckModel: Identifiable {
 
     // MARK: Applying
 
-    /// Writes the paste: for a new deck `addDeck` (not active, A14) then one `changeDeck`; for a deck, one `changeDeck` on
-    /// the deck as it is then. Each card is summed into the deck's card of its (card, section) (`DeckRules.adding`: no
+    /// Writes the paste in one library change: a new deck with its cards (`addDeck(…cards:)`, not active, A14); for a deck,
+    /// one `changeDeck` on the deck as it is then. Each card is summed into the deck's card of its (card, section) (`DeckRules.adding`: no
     /// count is lowered). Returns the deck's id; nil when nothing is written (`canApply` is false, or the library refused).
     @discardableResult
     func apply() -> String? {
         guard canApply else { return nil }
         let cards = cards
-        let id: String
-        if let deckID {
-            id = deckID
-        } else {
-            guard let added = library.addDeck(game: gameID, name: name, format: format) else { return nil }
-            id = added
-        }
-        library.changeDeck(game: gameID, id: id) { DeckRules.adding($0, cards) }
-        return id
+        guard let deckID else { return library.addDeck(game: gameID, name: name, format: format, cards: cards) }
+        library.changeDeck(game: gameID, id: deckID) { DeckRules.adding($0, cards) }
+        return deckID
     }
 }

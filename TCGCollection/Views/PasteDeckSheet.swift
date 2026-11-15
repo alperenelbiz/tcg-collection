@@ -31,6 +31,10 @@ struct PasteDeckSheet: View {
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("paste-sheet")
+        // Whether the catalog has cards of the game: when the sheet opens, and again when the catalog changes.
+        .task(id: "\(model.catalogSettled(game: paste.gameID))|\(model.catalogVersion)") { await paste.checkCatalog() }
+        // A read still running when the sheet goes away stores nothing.
+        .onDisappear { paste.cancelRead() }
     }
 
     private var deckName: String { paste.deck?.name ?? "this deck" }
@@ -217,30 +221,34 @@ struct PasteDeckSheet: View {
 
     private var buttons: some View {
         HStack {
-            Button("Cancel") { model.pasting = nil }
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("paste-cancel")
-            switch paste.step {
-            case .table, .failed:
+            Button("Cancel") {
+                paste.cancelRead()
+                model.pasting = nil
+            }
+            .keyboardShortcut(.cancelAction)
+            .accessibilityIdentifier("paste-cancel")
+            // A game that cannot change: its reason stands on top, and Cancel is the only button.
+            switch paste.problem == nil ? paste.step : nil {
+            case .table?, .failed?:
                 Button("Back") { paste.back() }
                     .accessibilityIdentifier("paste-back")
-            case .text, .reading:
+            case .text?, .reading?, nil:
                 EmptyView()
             }
             Spacer()
-            switch paste.step {
-            case .text, .reading:
+            switch paste.problem == nil ? paste.step : nil {
+            case .text?, .reading?:
                 // Return is a new line in the text editor, not Read.
-                Button("Read") { Task { await paste.read() } }
+                Button("Read") { paste.startRead() }
                     .sheetDefaultButton(onReturn: false)
                     .disabled(!paste.canRead)
                     .accessibilityIdentifier("paste-read")
-            case .table:
+            case .table?:
                 Button(paste.deckID == nil ? "Create deck" : "Add to \(deckName)") { apply() }
                     .sheetDefaultButton()
                     .disabled(!paste.canApply)
                     .accessibilityIdentifier("paste-apply")
-            case .failed:
+            case .failed?, nil:
                 EmptyView()
             }
         }

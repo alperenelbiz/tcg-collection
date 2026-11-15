@@ -1,6 +1,6 @@
 import Foundation
 
-/// A card the catalog offers for a name it does not know (`CatalogStore.nearestNames`).
+/// A card the catalog offers for a name it does not know (`DeckPaste.NameIndex.nearest`).
 nonisolated struct Suggestion: Sendable, Hashable {
     let cardKey: String
     let name: String
@@ -53,7 +53,7 @@ nonisolated enum DeckPaste {
         for (names, ids) in [(["main", "maindeck", "deck"], ["main", "deck"]), (["extra", "extradeck"], ["extra"]),
                              (["side", "sidedeck", "sideboard"], ["side", "sideboard"]),
                              (["commander", "commanders"], ["commander"]), (["legend", "legends"], ["legend", "legends"]),
-                             (["champion"], ["champion"]), (["rune", "runes"], ["runes"]),
+                             (["champion", "chosenchampion"], ["champion"]), (["rune", "runes"], ["runes"]),
                              (["battlefield", "battlefields"], ["battlefields"])] {
             for name in names { table[name] = ids }
         }
@@ -80,7 +80,8 @@ nonisolated enum DeckPaste {
     ///   Without a section line, or under one the format lacks, it goes to its kind's default section; under one the
     ///   format lacks the line says so. An unknown card goes where a card of unknown kind goes.
     /// - A count of 0 is dropped ("0 copies"); a count over 999 is kept as written and saved as 999 ("saved as 999").
-    /// - A line without a count is shown, dropped ("no count").
+    /// - A line without a count is shown, dropped ("no count"; "the count is too large" for a count over `Int`).
+    /// - A card whose key is not the written name's (a base-name match, a pick) says "as written: <text>".
     static func lines(_ parsed: [DeckTextLine], format: DeckFormat,
                       known: (String) -> (cardKey: String, name: String, kind: CardKind)?,
                       suggest: (String) -> [Suggestion], game: GameDefinition) -> [PastedLine] {
@@ -93,11 +94,14 @@ nonisolated enum DeckPaste {
             case .section(let name):
                 named = (name, sectionID(named: name, in: format))
             case .unreadable(let text):
-                result.append(PastedLine(number: line.number, text: text, count: 0, match: .dropped, section: "", note: "no count"))
+                let note = DeckText.hasTooLargeCount(text) ? "the count is too large" : "no count"
+                result.append(PastedLine(number: line.number, text: text, count: 0, match: .dropped, section: "", note: note))
             case .card(let count, let name):
                 let card = known(name)
                 let kind = card?.kind ?? CardKind(group: CardKind.other, flags: [])
                 var notes: [String] = []
+                // Matched by the base name or a pick: the row shows the catalog's name, and this says what was written.
+                if let card, card.cardKey != CardName.searchKey(name) { notes.append("as written: \(name)") }
                 if count == 0 { notes.append("0 copies") }
                 if count > DeckRules.maxCount { notes.append("saved as \(DeckRules.maxCount)") }
                 let section: String
@@ -158,26 +162,93 @@ nonisolated enum DeckPaste {
 
     // MARK: Nearest names
 
-    /// At most `limit` of `candidates`, one per card key, nearest to `text` first. Both are compared folded
-    /// (`CardName.searchKey`): first by the edit distance from the text to the candidate's first words (as many words as
-    /// the text has: "Ash Blosom" is 1 from "Ash Blossom & Joyous Spring"), then by the distance to the whole candidate,
-    /// then by name. None for a text without a letter or digit.
+    /// At most `limit` of `candidates` nearest to `text` (`NameIndex.nearest`).
     static func nearest(_ text: String, among candidates: [Suggestion], limit: Int) -> [Suggestion] {
-        let key = Array(CardName.searchKey(text))
-        guard !key.isEmpty, limit > 0 else { return [] }
-        let words = key.split(separator: " ").count
-        var seen = Set<String>()
-        let scored = candidates.compactMap { candidate -> (Suggestion, Int, Int)? in
-            guard seen.insert(candidate.cardKey).inserted else { return nil }
-            let folded = CardName.searchKey(candidate.name)
-            let start = folded.split(separator: " ").prefix(words).joined(separator: " ")
-            return (candidate, distance(key, Array(start)), distance(key, Array(folded)))
-        }
-        return scored.sorted { ($0.1, $0.2, $0.0.name) < ($1.1, $1.2, $1.0.name) }.prefix(limit).map(\.0)
+        NameIndex(candidates.map { ($0.cardKey, $0.name) }).nearest(text, limit: limit)
     }
 
-    /// The Levenshtein distance: insertions, deletions and substitutions of one character each.
-    static func distance(_ a: [Character], _ b: [Character]) -> Int {
+    /// The names of one game's cards, ready to rank written names against, in memory (fix round 1 of task 7: the game's
+    /// names are read once per paste, `CatalogStore.cardNames`). Pure; build and use it off the main thread.
+    ///
+    /// `nearest` ranks in three steps: a cheap filter (the candidates that share a run of 3 letters with the written name,
+    /// letters only, folded; 2 letters for a name of 3 letters or fewer), of which the `preselected` that share the most
+    /// runs; then the edit distance on the folded names (first to the candidate's first words, as many as the written name
+    /// has, then to the whole candidate, then by name); at most `limit`, none further than half the written name's length.
+    nonisolated struct NameIndex: Sendable {
+        private struct Entry: Sendable {
+            let suggestion: Suggestion
+            /// The folded name (`CardName.searchKey`) as Unicode scalar values.
+            let key: [UInt32]
+            /// The same without spaces: what the runs of letters are taken from.
+            let letters: [UInt32]
+        }
+
+        private let entries: [Entry]
+        /// Each run of 3 letters to the entries that have it.
+        private let runs: [UInt64: [Int32]]
+        /// How many candidates of the filter get an edit distance.
+        static let preselected = 400
+
+        init(_ names: [(cardKey: String, name: String)]) {
+            var seen = Set<String>()
+            var entries: [Entry] = []
+            var runs: [UInt64: [Int32]] = [:]
+            for (cardKey, name) in names where seen.insert(cardKey).inserted {
+                let key = Array(CardName.searchKey(name).unicodeScalars.map(\.value))
+                let letters = key.filter { $0 != 32 }
+                let index = Int32(entries.count)
+                for run in Set(Self.runs(letters, length: 3)) { runs[run, default: []].append(index) }
+                entries.append(Entry(suggestion: Suggestion(cardKey: cardKey, name: name), key: key, letters: letters))
+            }
+            self.entries = entries
+            self.runs = runs
+        }
+
+        func nearest(_ text: String, limit: Int) -> [Suggestion] {
+            let key = Array(CardName.searchKey(text).unicodeScalars.map(\.value))
+            let letters = key.filter { $0 != 32 }
+            guard !letters.isEmpty, limit > 0 else { return [] }
+            let candidates: [Int]
+            if letters.count <= 3 {
+                let wanted = Set(Self.runs(letters, length: 2))
+                candidates = entries.indices.filter { !wanted.isDisjoint(with: Self.runs(entries[$0].letters, length: 2)) }
+            } else {
+                var shared = [Int32](repeating: 0, count: entries.count)
+                var touched: [Int] = []
+                for run in Set(Self.runs(letters, length: 3)) {
+                    for entry in runs[run] ?? [] {
+                        let i = Int(entry)
+                        if shared[i] == 0 { touched.append(i) }
+                        shared[i] += 1
+                    }
+                }
+                candidates = touched.sorted { shared[$0] != shared[$1] ? shared[$0] > shared[$1] : $0 < $1 }
+                    .prefix(Self.preselected).map { $0 }
+            }
+            let words = key.split(separator: 32).count
+            let most = key.count / 2
+            let scored = candidates.compactMap { i -> (Suggestion, Int, Int)? in
+                let entry = entries[i]
+                let start = Array(entry.key.split(separator: 32, omittingEmptySubsequences: true).prefix(words)
+                    .joined(separator: [32]))
+                let first = DeckPaste.distance(key, start)
+                guard first <= most else { return nil }
+                return (entry.suggestion, first, DeckPaste.distance(key, entry.key))
+            }
+            return scored.sorted { ($0.1, $0.2, $0.0.name) < ($1.1, $1.2, $1.0.name) }.prefix(limit).map(\.0)
+        }
+
+        /// Every run of `length` letters, packed into one number (21 bits a letter).
+        private static func runs(_ letters: [UInt32], length: Int) -> [UInt64] {
+            guard letters.count >= length else { return [] }
+            return (0...(letters.count - length)).map { start in
+                (start..<start + length).reduce(UInt64(0)) { $0 << 21 | UInt64(letters[$1]) }
+            }
+        }
+    }
+
+    /// The Levenshtein distance: insertions, deletions and substitutions of one element each.
+    static func distance(_ a: [UInt32], _ b: [UInt32]) -> Int {
         if a.isEmpty { return b.count }
         if b.isEmpty { return a.count }
         var previous = Array(0...b.count)

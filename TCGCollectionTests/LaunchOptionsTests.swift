@@ -79,6 +79,23 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]).launchImport(isDebugBuild: true) == nil)
     }
 
+    /// Phase 3A task 7, fix round 1: `-pasteDeck <path>` is honoured only in a Debug build with `-store` and a readable
+    /// file; otherwise it is ignored (fails closed).
+    @Test func thePasteFlagNeedsADebugBuildAStoreAndAReadableFile() throws {
+        let file = tempDir().appending(path: "deck.txt")
+        try Data("1 Calm Rune".utf8).write(to: file)
+        let withStore = LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-pasteDeck", file.path])
+        #expect(withStore.pasteDeck?.path == file.path)
+        #expect(withStore.launchPaste(isDebugBuild: true)?.path == file.path)
+        #expect(withStore.launchPaste(isDebugBuild: false) == nil)
+        #expect(LaunchOptions(arguments: ["app", "-pasteDeck", file.path]).launchPaste(isDebugBuild: true) == nil)
+        #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-pasteDeck", file.path + ".gone"])
+                    .launchPaste(isDebugBuild: true) == nil)
+        #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s", "-pasteDeck", tempDir().path])
+                    .launchPaste(isDebugBuild: true) == nil)                         // a folder
+        #expect(LaunchOptions(arguments: ["app", "-store", "/tmp/s"]).launchPaste(isDebugBuild: true) == nil)
+    }
+
     /// `-importCSVDelay <milliseconds>` (DEBUG, with `-importCSV`): the import starts that long after the launch, so a UI
     /// test can open a page first (fix round 2). Not a number: ignored.
     @Test func theImportCanWait() {

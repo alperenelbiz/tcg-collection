@@ -61,7 +61,7 @@ struct DeckPasteTests {
         let rift = riftbound.formats[0]
         for (name, id) in [("Legend", "legend"), ("Legends", "legend"), ("Champion", "champion"), ("Main Deck", "main"),
                            ("Rune", "runes"), ("Runes", "runes"), ("Battlefield", "battlefields"), ("Battlefields", "battlefields"),
-                           ("Sideboard", "sideboard"), ("Side Deck", "sideboard")] {
+                           ("Sideboard", "sideboard"), ("Side Deck", "sideboard"), ("Chosen Champion", "champion")] {
             #expect(DeckPaste.sectionID(named: name, in: rift) == id, "\(name)")
         }
         #expect(DeckPaste.sectionID(named: "Legend", in: cyberpunk.formats[0]) == "legends")
@@ -119,15 +119,58 @@ struct DeckPasteTests {
             Issue.record("not unknown: \(shown)")
             return
         }
-        #expect(suggestions.count == 5)
+        #expect((1...5).contains(suggestions.count))
         #expect(suggestions.first?.name == "Ash Blossom & Joyous Spring")
         #expect(shown.first?.section == "main")
         #expect(DeckPaste.nearest("", among: candidates, limit: 5).isEmpty)
         #expect(DeckPaste.nearest("Ash Blosom", among: candidates, limit: 0).isEmpty)
         // One per card key; equal distances by name.
-        let twice = DeckPaste.nearest("Cat", among: [Suggestion(cardKey: "cot", name: "Cot"), Suggestion(cardKey: "bat", name: "Bat"),
-                                                     Suggestion(cardKey: "bat", name: "Bat")], limit: 5)
-        #expect(twice.map(\.name) == ["Bat", "Cot"])
+        let twice = DeckPaste.nearest("Cat", among: [Suggestion(cardKey: "cast", name: "Cast"), Suggestion(cardKey: "cart", name: "Cart"),
+                                                     Suggestion(cardKey: "cart", name: "Cart")], limit: 5)
+        #expect(twice.map(\.name) == ["Cart", "Cast"])
+    }
+
+    /// Fix round 1: the ranking of one written name against the game's names (`DeckPaste.NameIndex`).
+    @Test func nearestNamesForCommonTypos() {
+        let names = ["Raigeki", "Raigeki Break", "Kuriboh", "Mirror Force", "Mirror Wall", "Dark Magician", "Dark Magician Girl",
+                     "Dark Hole", "Pot of Greed", "Monster Reborn", "Ash Blossom & Joyous Spring", "Magic Cylinder"]
+        let index = DeckPaste.NameIndex(names.map { (CardName.searchKey($0), $0) })
+        #expect(index.nearest("raigecki", limit: 5).first?.name == "Raigeki")             // a one-word typo
+        #expect(index.nearest("Kurriboh", limit: 5).first?.name == "Kuriboh")             // an extra letter
+        #expect(index.nearest("Mirorr Force", limit: 5).first?.name == "Mirror Force")    // a transposition
+        #expect(index.nearest("Drak Magician", limit: 5).first?.name == "Dark Magician")  // a typo in the first word
+        #expect(index.nearest("Pot of Gred", limit: 5).first?.name == "Pot of Greed")     // a missing letter
+        #expect(index.nearest("Dark Magician Girl Alt Art", limit: 5).first?.name == "Dark Magician Girl")   // an extra word
+        #expect(index.nearest("Qqq Zzz", limit: 5).isEmpty)                               // nonsense: none
+        #expect(index.nearest("Xylophone Wombat", limit: 5).isEmpty)
+        #expect(index.nearest("Mirror", limit: 5).count <= 5)
+        #expect(index.nearest("", limit: 5).isEmpty && index.nearest("raigeki", limit: 0).isEmpty)
+    }
+
+    /// Fix round 1: 40,000 names and 30 unknown lines are ranked within a bound measured on this Mac (Debug build).
+    @Test func rankingFortyThousandNamesForThirtyLinesIsFast() {
+        var seed: UInt64 = 42
+        func next() -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int(truncatingIfNeeded: seed >> 33)
+        }
+        let syllables = ["ka", "ri", "bo", "dra", "gon", "mir", "ror", "for", "ce", "ash", "blo", "som", "dark", "ma", "gi", "cian",
+                         "pot", "gre", "ed", "ra", "ge", "ki", "lu", "na", "sol", "tor", "vex", "zan", "quel", "phi"]
+        func word() -> String { (0..<(2 + next() % 3)).map { _ in syllables[next() % syllables.count] }.joined().capitalized }
+        let names = (0..<40_000).map { _ in (0..<(1 + next() % 4)).map { _ in word() }.joined(separator: " ") }
+        let texts = (0..<30).map { i -> String in
+            var name = Array(names[(i * 1_327) % names.count])
+            name.remove(at: name.count / 2)                                          // a missing letter
+            return String(name)
+        }
+        let clock = ContinuousClock(), start = clock.now
+        let index = DeckPaste.NameIndex(names.map { (CardName.searchKey($0), $0) })
+        let built = clock.now - start
+        let found = texts.map { index.nearest($0, limit: 5) }
+        let total = clock.now - start
+        print("NameIndex: 40,000 names built in \(built), 30 lines ranked in \(total - built), total \(total)")
+        #expect(found.allSatisfy { !$0.isEmpty })
+        #expect(total < .seconds(5))
     }
 
     @Test func theSameCardOnTwoLinesIsShownTwiceAndSummedByCards() {
@@ -156,6 +199,19 @@ struct DeckPasteTests {
         #expect(shown.map(\.count) == [1200, 600, 600])
         #expect(shown.map(\.note) == ["saved as 999", nil, nil])
         #expect(DeckPaste.cards(shown).map(\.count) == [999, 999])
+    }
+
+    /// Fix round 1: a line matched by its base name (or by a pick) says what was written.
+    @Test func aMatchOtherThanTheWrittenNameSaysWhatWasWritten() {
+        let shown = lines("1 Stingcaster Mage (Borderless) (0329)\n1 stingcaster MAGE", game: magic, format: commander, cards: magicCards)
+        #expect(shown.map(\.note) == [nil, nil])                 // the test catalog knows the written key: no base step
+        let base = DeckPaste.lines(DeckText.parse("1 Stingcaster Mage (Borderless) (0329)\n1 stingcaster MAGE"),
+                                   format: commander,
+                                   known: { _ in ("stingcaster mage", "Stingcaster Mage", CardKind(group: "Creatures", flags: [])) },
+                                   suggest: { _ in [] }, game: magic)
+        #expect(base.map(\.note) == ["as written: Stingcaster Mage (Borderless) (0329)", nil])
+        #expect(DeckPaste.lines(DeckText.parse("99999999999999999999999 Card"), format: commander, known: { _ in nil },
+                                suggest: { _ in [] }, game: magic).map(\.note) == ["the count is too large"])
     }
 
     @Test func anUnreadableLineIsShownDropped() {
@@ -201,7 +257,8 @@ struct DeckPasteTests {
         #expect(line(12)?.match == .dropped && line(12)?.note == "0 copies")
         #expect(line(13)?.note == nil)
         #expect(line(15) == PastedLine(number: 15, text: "Ajani Resolute", count: 0, match: .dropped, section: "", note: "no count"))
-        if case .unknown(let suggestions)? = line(16)?.match { #expect(!suggestions.isEmpty && suggestions.count <= 5) } else {
+        // Fix round 1: no catalog name is near "Made-up Card 01": no suggestion rather than nonsense ones.
+        if case .unknown(let suggestions)? = line(16)?.match { #expect(suggestions.isEmpty) } else {
             Issue.record("line 16 is not unknown")
         }
         #expect(line(107)?.section == "deck" && line(107)?.note == "no section Maybeboard in Commander")

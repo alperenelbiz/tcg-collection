@@ -396,22 +396,17 @@ struct CatalogStoreTests {
         #expect(try await s.cards(game: "riftbound", keys: ["twin"])["twin"]?.cardType == "Unit")
     }
 
-    /// The nearest names of a text in one game: distinct cards, nearest first, at most `limit`; a typo in the first word
-    /// is found through the longest word; an empty text has none.
-    @Test func nearestNamesRankByDistanceInTheGame() async throws {
+    /// Fix round 1: every card of one game once, as (card key, name), by key, read in pages (the paste ranks its unknown
+    /// names against them in memory).
+    @Test func cardNamesOfOneGameDistinctAndPaged() async throws {
         let s = try await filledStore()
-        let names = ["Ash Blossom & Joyous Spring", "Ash Hound", "Ash Barrage", "Ashen Rider", "Blossom Bombardment", "Ash Zealot", "Flash"]
-        try await s.replaceProducts(of: 98, with: names.enumerated().map { product(id: 9100 + $0.offset, game: "yu-gi-oh", groupID: 98, name: $0.element) }
-            + [product(id: 9200, game: "yu-gi-oh", groupID: 98, name: "Ash Blossom & Joyous Spring (Secret Rare)")], at: .now)
-        try await s.replaceProducts(of: 97, with: [product(id: 9300, groupID: 97, name: "Ash Blosom")], at: .now)   // Riftbound
-        let found = try await s.nearestNames(game: "yu-gi-oh", to: "Ash Blosom", limit: 5)
-        #expect(found.first == Suggestion(cardKey: "ash blossom joyous spring", name: "Ash Blossom & Joyous Spring"))
-        #expect(found.count == 5 && Set(found.map(\.cardKey)).count == 5)
-        #expect(!found.contains { $0.cardKey == "ash blosom" })
-        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Ahs Blossom", limit: 5).first?.name == "Ash Blossom & Joyous Spring")
-        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Ash Blosom", limit: 2).count == 2)
-        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "", limit: 5).isEmpty)
-        #expect(try await s.nearestNames(game: "yu-gi-oh", to: " , ", limit: 5).isEmpty)
-        #expect(try await s.nearestNames(game: "yu-gi-oh", to: "Qqq Zzz", limit: 5).isEmpty)
+        let expected: [String] = ["stardust dragon", "swiftwind panther warrior", "token joey and red eyes black dragon"]
+        for page in [1, 2, 500] {
+            let names = try await s.cardNames(game: "yu-gi-oh", pageSize: page)
+            #expect(names.map(\.cardKey) == expected, "page \(page)")           // two printings of the warrior: one entry
+            #expect(names.map(\.name) == ["Stardust Dragon", "Swiftwind Panther Warrior", "Token: Joey and Red-Eyes Black Dragon"])
+        }
+        #expect(try await s.cardNames(game: "riftbound").map(\.cardKey) == ["calm rune", "dockside lock up", "kai sa rebel"])
+        #expect(try await CatalogStore.inMemory().cardNames(game: "riftbound").isEmpty)
     }
 }

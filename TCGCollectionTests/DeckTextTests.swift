@@ -48,6 +48,9 @@ struct DeckTextTests {
         #expect(kinds("4X Stingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
         #expect(kinds("  2   Calm Rune  ") == [.card(count: 2, name: "Calm Rune")])
         #expect(kinds("3 Xyz Dragon") == [.card(count: 3, name: "Xyz Dragon")])
+        // Fix round 1: an `x` alone between the count and the name is a separator, as in `4x`.
+        #expect(kinds("4 x Stingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
+        #expect(kinds("4 X\tStingcaster Mage") == [.card(count: 4, name: "Stingcaster Mage")])
         // Kept as written: the sheet marks 0 as dropped, and caps nothing here.
         #expect(kinds("0 Bloodline Recollector") == [.card(count: 0, name: "Bloodline Recollector")])
         #expect(kinds("500 Stingcaster Mage") == [.card(count: 500, name: "Stingcaster Mage")])
@@ -60,6 +63,14 @@ struct DeckTextTests {
         #expect(kinds("4x") == [.unreadable("4x")])
         #expect(kinds("x4 Card") == [.unreadable("x4 Card")])
         #expect(kinds("99999999999999999999999 Card") == [.unreadable("99999999999999999999999 Card")])
+    }
+
+    /// Fix round 1: a byte order mark at the text's start or at a line's start is not part of the line; a count too large
+    /// for `Int` is said as such.
+    @Test func aByteOrderMarkIsStrippedAndACountTooLargeIsSaid() {
+        #expect(kinds("\u{FEFF}Main Deck:\n\u{FEFF}2 Calm Rune\n\u{FEFF}") == [.section("Main Deck"), .card(count: 2, name: "Calm Rune"), .note])
+        #expect(DeckText.hasTooLargeCount("99999999999999999999999 Card"))
+        #expect(!DeckText.hasTooLargeCount("Card") && !DeckText.hasTooLargeCount("12"))
     }
 
     @Test func notesAndBlankLines() {

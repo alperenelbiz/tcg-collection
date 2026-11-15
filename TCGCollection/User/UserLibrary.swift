@@ -225,15 +225,17 @@ final class UserLibrary {
     /// Refused as `setCount` is (nil). Appends a new deck that is not active (A14) and returns its id. An empty or blank
     /// name becomes "Deck" made unique among the game's deck names; a name another deck has is kept (the id tells them
     /// apart).
+    /// `cards` (a paste) are summed into the new deck in the same change (`DeckRules.adding`): one write, and a refused
+    /// change leaves no deck.
     @discardableResult
-    func addDeck(game: String, name: String, format: String) -> String? {
+    func addDeck(game: String, name: String, format: String, cards: [DeckCard] = []) -> String? {
         let id = newID()
         var added = false
         change(game) { file in
             guard !file.decks.contains(where: { $0.id == id }) else { return }
             let blank = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             let shownName = blank ? DeckRules.uniqueName("Deck", among: file.decks.map(\.name)) : name
-            file.decks.append(DeckRules.new(name: shownName, format: format, id: id))
+            file.decks.append(DeckRules.adding(DeckRules.new(name: shownName, format: format, id: id), cards))
             added = true
         }
         return added ? id : nil

@@ -32,6 +32,10 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-importCSVDelay <milliseconds>` (DEBUG, with `-importCSV`): the import sheet opens that long after the launch, so a
     /// UI test can open a page before it.
     var importCSVDelay: Int?
+    /// `-pasteDeck <path>` (DEBUG, with `-store`, a readable file): the paste sheet opens at launch with the file's text, on
+    /// the deck of `-screen deck:<id>` when the game has it, else for a new deck. For the UI tests, which must not write the
+    /// Mac's pasteboard. Read it through `launchPaste`, which ignores it where it is not allowed.
+    var pasteDeck: URL?
     /// `-exportPDF <path>` (DEBUG, with `-store` and `-screen wanted|for-sale`, a new `.pdf` file inside the root): that
     /// screen writes the PDF of its list there once it is read on a settled catalog with prices, for the UI tests, which
     /// do not drive the save panel. Read it through `launchPDF`, which ignores it where it is not allowed.
@@ -45,6 +49,16 @@ nonisolated struct LaunchOptions: Sendable {
     func launchImport(isDebugBuild: Bool) -> URL? {
         guard isDebugBuild, storeRoot != nil else { return nil }
         return importCSV
+    }
+
+    /// The file of `-pasteDeck` when this run may open it: a Debug build with `-store`, and a readable file (not a folder).
+    /// Otherwise nil: the flag is ignored (fails closed, as `-importCSV`).
+    func launchPaste(isDebugBuild: Bool) -> URL? {
+        guard isDebugBuild, storeRoot != nil, let file = pasteDeck else { return nil }
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isFolder), !isFolder.boolValue,
+              FileManager.default.isReadableFile(atPath: file.path) else { return nil }
+        return file
     }
 
     /// The PDF of `-exportPDF` when this run may write it: a Debug build with `-store`, `-screen wanted` or `for-sale`, and
@@ -78,6 +92,7 @@ nonisolated struct LaunchOptions: Sendable {
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
         importCSVDelay = value("-importCSVDelay").flatMap { Int($0) }
         exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }
+        pasteDeck = value("-pasteDeck").map { URL(fileURLWithPath: $0) }
         pictureDelay = value("-pictureDelay").flatMap { Int($0) }
     }
 }

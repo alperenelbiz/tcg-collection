@@ -589,10 +589,11 @@ final class AppModel {
 
     /// "Paste…" of a deck page (`deckID`), or "Paste a deck…" of the New Deck sheet (nil: a new deck with `name` and
     /// `format`): opens the paste sheet on the game shown. Not while another sheet is open.
-    func pasteDeck(into deckID: String?, name: String = "", format: String = "") {
+    func pasteDeck(into deckID: String?, name: String = "", format: String = "", text: String = "") {
         guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet else { return }
         let game = Games.game(gameID)
-        pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, library: library, reader: reader,
+        pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, text: text, library: library,
+                                 reader: reader,
                                  catalogSettled: { [weak self] game in self?.catalogSettled(game: game) ?? false },
                                  ygoType: { [weak self] name in game?.pictures == .ygoprodeck ? self?.ygoType(cardName: name) : nil })
     }
@@ -704,6 +705,12 @@ final class AppModel {
         // A stored or launched deck screen whose deck is not in the game's file opens the Collection.
         let checked = Screen.checked(screen, deckIDs: library.decks(game: gameID).map(\.id))
         if checked != screen { screen = checked }
+        #if DEBUG
+        // `-pasteDeck` (with `-store`): the paste sheet with the file's text, on the deck shown, else for a new deck.
+        if let file = options.launchPaste(isDebugBuild: Self.isDebugBuild), let text = try? String(contentsOf: file, encoding: .utf8) {
+            if case .deck(let id) = screen { pasteDeck(into: id, text: text) } else { pasteDeck(into: nil, name: DeckRules.uniqueName("Deck", among: library.decks(game: gameID).map(\.name)), text: text) }
+        }
+        #endif
         prices.load(paths: paths)
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()
