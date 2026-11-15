@@ -433,6 +433,38 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 1")
         shot("decks-22-extra-deck")
     }
+    /// Fix round 1: "New Deck…" from a card page, Cancel, then the sidebar's "New Deck…" → Create: the new deck is empty
+    /// (the cancelled sheet's card is not added to it), the page of a game without decks shows the "Decks" heading.
+    func testACancelledCardPageNewDeckLeavesNoCardForTheSidebarsNewDeck() throws {
+        let app = launch(game: "riftbound")
+        let cell = element(app, "card-cell-dockside lock up")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        cell.click()
+        revealOnCardPage(app, "card-add-to-deck").click()
+        XCTAssertTrue(element(app, "card-page").staticTexts["Decks"].exists, "no Decks heading in a game without decks")
+        let newDeck = app.menuItems["New Deck…"].firstMatch
+        XCTAssertTrue(newDeck.waitForExistence(timeout: 5))
+        newDeck.click()
+        let sheet = element(app, "new-deck-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        element(app, "new-deck-cancel").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+
+        let sidebarNewDeck = element(app, "sidebar-new-deck")
+        XCTAssertTrue(waitUntil { sidebarNewDeck.isEnabled })
+        sidebarNewDeck.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        XCTAssertTrue(element(app, "new-deck-paste").exists, "the sidebar's sheet lacks Paste a deck…: it took the card")
+        element(app, "new-deck-create").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10), "Create did not open the new deck")
+        var decks: [StoredDeck] = []
+        XCTAssertTrue(waitUntil { decks = (try? self.storedDecks(game: "riftbound")) ?? []; return decks.count == 1 },
+                      "\(decks)")
+        XCTAssertEqual(decks.first?.cards, [], "the new deck holds the cancelled card")
+        shot("decks-25-sidebar-new-deck-after-a-cancel")
+    }
+
 
     /// D10: All cards → a card → "Add to deck" ▸ a deck: the page's "Decks" line with 1; its `+`; "New Deck…" → Create: a
     /// line of the new deck, and the card page stays; the deck page shows the cell.

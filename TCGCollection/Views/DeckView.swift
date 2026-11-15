@@ -33,7 +33,7 @@ nonisolated struct DeckCardLine: Equatable, Sendable, Identifiable {
 }
 
 /// A card that a deck's search or a card page adds to a deck: its key, the name a new deck card saves (the card's name, the
-/// page title form, as Wanted saves it) and its kind (`DeckPage.kind`; nil without a printing).
+/// page title form, as Wanted saves it) and its kind (`CardKinds.deckKind`; nil without a printing).
 nonisolated struct DeckCardToAdd: Equatable, Sendable {
     let cardKey: String
     let name: String
@@ -76,17 +76,10 @@ nonisolated enum DeckPage {
     /// a card name; the caller gives one only for Yu-Gi-Oh!), the basic cards and the copies owned per card over `rows`.
     static func read(game: GameDefinition, printings: [String: [ProductRecord]], keys: Set<String>, rows: [CollectionRow],
                      ygoType: (String) -> String?) -> DeckRead {
-        let kinds = printings.compactMapValues { kind(game: game, printings: $0, ygoType: ygoType) }
+        let kinds = printings.compactMapValues { CardKinds.deckKind(game: game, printings: $0, ygoType: ygoType) }
         let isBasic = DeckMaths.isBasic(game: game, printings: printings)
         return DeckRead(printings: printings, keys: keys, ownedByCard: WantedList.ownedByCard(rows: rows, printings: printings),
                         kinds: kinds, basics: Set(printings.keys.filter(isBasic)))
-    }
-
-    /// A card's kind (D4) from its printings: the first printing with a card type (else the first), with the YGOPRODeck
-    /// type of its card name (`ygoType`, A15; the caller gives one only for Yu-Gi-Oh!). Nil without a printing.
-    static func kind(game: GameDefinition, printings: [ProductRecord], ygoType: (String) -> String?) -> CardKind? {
-        guard let first = printings.first(where: { !$0.cardType.isEmpty }) ?? printings.first else { return nil }
-        return game.kind(cardType: first.cardType, ygoType: ygoType(first.cardName))
     }
 
     /// The section a card is added to (D9, D10: `+` of a deck's search, "Add to deck" on a card page): its kind's default
@@ -106,6 +99,15 @@ nonisolated enum DeckPage {
         let format = game.format(deck.format)
         return DeckRules.takingOne(deck, cardKey: card.cardKey, defaultSection: addSection(game: game, format: format, kind: card.kind),
                                    order: format.sections.map(\.id))
+    }
+
+    /// A deck search cell's count control: the deck's copies of the card over all sections, and the count at which `+` is
+    /// off (`CountControl.maximum`): when the card's default section holds 999 or more, whatever the others hold.
+    static func searchCount(_ deck: Deck, _ card: DeckCardToAdd, game: GameDefinition) -> (copies: Int, plusLimit: Int) {
+        let section = addSection(game: game, format: game.format(deck.format), kind: card.kind)
+        let copies = DeckRules.copies(deck, cardKey: card.cardKey)
+        let inSection = deck.cards.first { $0.cardKey == card.cardKey && $0.section == section }?.count ?? 0
+        return (copies, copies - inSection + DeckRules.maxCount)
     }
 
     /// The card page's "Decks" lines: one per (deck, section) that holds the card, in deck order, then in the order of the
@@ -570,8 +572,9 @@ private struct DeckCell: View {
 }
 
 extension AppModel {
-    /// A card's kind for decks (`DeckPage.kind`), with the YGOPRODeck type for Yu-Gi-Oh! only (Task 2).
+    /// A card's kind for decks (`CardKinds.deckKind`: its first printing with a card type; for Yu-Gi-Oh! the YGOPRODeck
+    /// type of this model's index first).
     func deckKind(game: GameDefinition, printings: [ProductRecord]) -> CardKind? {
-        DeckPage.kind(game: game, printings: printings) { game.pictures == .ygoprodeck ? self.ygoType(cardName: $0) : nil }
+        CardKinds.deckKind(game: game, printings: printings) { self.ygoType(cardName: $0) }
     }
 }

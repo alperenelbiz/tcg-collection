@@ -208,7 +208,9 @@ final class PasteDeckModel: Identifiable {
     }
 
     private func make(_ card: CatalogCard, game: GameDefinition) -> Found {
-        Found(cardKey: card.cardKey, name: card.name, kind: game.kind(cardType: card.cardType, ygoType: ygoType(card.name)))
+        // The one kind rule of every deck place (`CardKinds.deckKind`); `CatalogStore.cards` chose the deciding printing.
+        Found(cardKey: card.cardKey, name: card.name,
+              kind: CardKinds.deckKind(game: game, cardType: card.cardType, cardName: card.name, ygoType: { self.ygoType($0) }))
     }
 
     /// The card of a written name: the read's match, else the user's pick for that name.

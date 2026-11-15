@@ -421,7 +421,7 @@ struct WantedLine: View {
 /// `CountControl` (`deck-line-…-<deckID>-<section>`; `−` at 1 takes the card out of that section, `+` is off at 999 or
 /// more); then the menu "Add to deck" (`card-add-to-deck`): every deck of the game (one copy to the card's default
 /// section, also for a deck that holds it already) and, after a divider, "New Deck…" (the New Deck sheet; after Create the
-/// card is added to the new deck). With no deck in the game, only the menu. Card-level: the same on every printing's page.
+/// card is added to the new deck). With no deck in the game, the heading and the menu. Card-level: the same on every printing's page.
 /// While the game cannot change: no numbers (`—`), everything off; the page's locked line says why.
 struct DeckLines: View {
     let gameID: String
@@ -436,10 +436,8 @@ struct DeckLines: View {
         let decks = library.decks(game: gameID)
         let lines = DeckPage.cardLines(decks: decks, cardKey: card.cardKey, game: game)
         VStack(alignment: .leading, spacing: 6) {
-            if !decks.isEmpty {
-                Text("Decks")
-                    .foregroundStyle(Theme.text)
-            }
+            Text("Decks")
+                .foregroundStyle(Theme.text)
             if !lines.isEmpty {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                     ForEach(lines) { line in

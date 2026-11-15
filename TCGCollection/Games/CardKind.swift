@@ -29,6 +29,26 @@ nonisolated enum CardKinds {
         text.split(whereSeparator: { separators.contains($0) }).map { $0.lowercased() }
     }
 
+    // MARK: One kind per card (phase 3A task 6, fix round 1)
+
+    /// The printing that decides a card's kind: the first in `printings` (the catalog's order, newest set first) with a
+    /// card type, else the first. Every place that adds or shows a deck card goes through it (`deckKind`, and
+    /// `CatalogStore.cards` for a paste), so a card lands in one section wherever it is added from.
+    static func decidingPrinting(_ printings: [ProductRecord]) -> ProductRecord? {
+        printings.first { !$0.cardType.isEmpty } ?? printings.first
+    }
+
+    /// A card's kind for decks (D4) from its printings (`decidingPrinting`); nil without a printing.
+    static func deckKind(game: GameDefinition, printings: [ProductRecord], ygoType: (String) -> String?) -> CardKind? {
+        decidingPrinting(printings).map { deckKind(game: game, cardType: $0.cardType, cardName: $0.cardName, ygoType: ygoType) }
+    }
+
+    /// A card's kind for decks from its deciding printing's card type and card name: for Yu-Gi-Oh! the YGOPRODeck type of
+    /// the name first (`ygoType`, A15); another game never asks for one.
+    static func deckKind(game: GameDefinition, cardType: String, cardName: String, ygoType: (String) -> String?) -> CardKind {
+        game.kind(cardType: cardType, ygoType: game.pictures == .ygoprodeck ? ygoType(cardName) : nil)
+    }
+
     private static let extraDeckWords: Set<String> = ["fusion", "synchro", "xyz", "link"]
 
     /// Yu-Gi-Oh!: the YGOPRODeck `frameType` (`effect`, `xyz_pendulum`, `spell`, …) when it is one this app knows (A15),

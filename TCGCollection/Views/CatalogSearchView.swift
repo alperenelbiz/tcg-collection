@@ -14,6 +14,10 @@ final class CatalogScreenState {
     var catalogEmpty = false
     /// The card at the top of the gallery.
     var scrolledTo: String?
+    /// A deck's search only: every printing of each card in `cards`, in the catalog's order (newest set first), read in
+    /// one batched call per search; a cell's kind comes from them (`CardKinds.deckKind`), not from its cover alone, which
+    /// a filter chose. A card without an entry has no kind yet: its count control is off.
+    var deckPrintings: [String: [ProductRecord]] = [:]
 
     init(gameID: String, search: String) {
         self.gameID = gameID
@@ -120,7 +124,8 @@ struct CatalogSearchView: View {
                     if let cards = state.cards {
                         ForEach(cards) { card in
                             if let deckID {
-                                DeckAddCell(gameID: state.gameID, deckID: deckID, card: card, content: cellContent(card))
+                                DeckAddCell(gameID: state.gameID, deckID: deckID, card: card, printings: state.deckPrintings[card.id],
+                                            content: cellContent(card))
                             } else {
                                 NavigationLink(value: card) { CardCell(content: cellContent(card)) }
                                     .buttonStyle(.plain)
@@ -200,6 +205,13 @@ struct CatalogSearchView: View {
         let empty = found.isEmpty ? (try? await model.reader.progress(game: game))?.fetched == 0 : false
         guard !Task.isCancelled else { return }
         let shown = Array(found.prefix(Self.limit))
+        // A deck's search: the printings of the cards shown, in one call for the whole result, off the main thread
+        // (`reader`), before the cells show, so a cell's kind is the card page's.
+        if deckID != nil {
+            let printings = (try? await model.reader.printings(game: game, cardKeys: shown.map(\.id))) ?? [:]
+            guard !Task.isCancelled else { return }
+            if state.deckPrintings != printings { state.deckPrintings = printings }
+        }
         // On a return to All cards the same search runs again: unchanged results are not written, so nothing redraws.
         if state.cards != shown { state.cards = shown }
         state.hasMore = found.count > Self.limit
@@ -213,13 +225,16 @@ struct CatalogSearchView: View {
 
 /// A result cell of a deck's search (D10): the catalog's cell (a link to the card page on its cover printing, through the
 /// deck's stack), 8 pt, then a `CountControl` with the deck's copies of the card over all its sections. `+` adds one copy to
-/// the card's default section (`DeckPage.addingOne`) and is off at 999 or more there; `−` takes one off that section first,
-/// then off the others in the format's order (`DeckPage.takingOne`). Both are off while the game cannot change or the deck
-/// is gone.
+/// the card's default section (`DeckPage.addingOne`) and is off at 999 or more there (`DeckPage.searchCount`); `−` takes one
+/// off that section first, then off the others in the format's order (`DeckPage.takingOne`). The card's kind comes from all
+/// its printings (`printings`, the search's batched read; `AppModel.deckKind`), as on its card page. Both are off while the
+/// printings are not read, the game cannot change, or the deck is gone.
 private struct DeckAddCell: View {
     let gameID: String
     let deckID: String
     let card: CardSummary
+    /// Every printing of the card, newest set first; nil until the search has read them.
+    let printings: [ProductRecord]?
     let content: CellContent
     @Environment(AppModel.self) private var model
 
@@ -227,11 +242,9 @@ private struct DeckAddCell: View {
         let library = model.library
         let game = Games.game(gameID) ?? Games.all[0]
         let deck = library.deck(game: gameID, id: deckID)
-        let adding = DeckCardToAdd(cardKey: card.id, name: card.name, kind: model.deckKind(game: game, printings: [card.cover]))
-        let total = deck.map { DeckRules.copies($0, cardKey: card.id) }
-        // `+` is off when the default section holds 999 or more: the control's maximum is over the whole deck.
-        let section = deck.map { DeckPage.addSection(game: game, format: game.format($0.format), kind: adding.kind) }
-        let inSection = deck?.cards.first { $0.cardKey == card.id && $0.section == section }?.count ?? 0
+        let adding = printings.map { DeckCardToAdd(cardKey: card.id, name: card.name, kind: model.deckKind(game: game, printings: $0)) }
+        let count = deck.flatMap { deck in adding.map { DeckPage.searchCount(deck, $0, game: game) } }
+        let usable = count != nil && library.canChange(game: gameID)
         VStack(alignment: .leading, spacing: 8) {
             NavigationLink(value: CardTarget(gameID: gameID, cardKey: card.id, startProductID: card.cover.productID)) {
                 CardCell(content: content)
@@ -239,15 +252,16 @@ private struct DeckAddCell: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("card-cell-\(card.id)")
             HStack(spacing: 8) {
-                CountControl(count: library.canChange(game: gameID) ? total : nil, label: card.name,
-                             maximum: (total ?? 0) - inSection + DeckRules.maxCount, prefix: "deck-add", key: card.id) { new in
+                CountControl(count: usable ? count?.copies : nil, label: card.name, maximum: count?.plusLimit,
+                             prefix: "deck-add", key: card.id) { new in
+                    guard let adding, let count else { return }
                     library.changeDeck(game: gameID, id: deckID) { deck in
-                        new > (total ?? 0) ? DeckPage.addingOne(deck, adding, game: game) : DeckPage.takingOne(deck, adding, game: game)
+                        new > count.copies ? DeckPage.addingOne(deck, adding, game: game) : DeckPage.takingOne(deck, adding, game: game)
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .disabled(deck == nil || !library.canChange(game: gameID))
+            .disabled(!usable)
         }
     }
 }

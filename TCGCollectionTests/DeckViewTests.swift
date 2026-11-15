@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TCGCollection2
 
@@ -245,7 +246,7 @@ struct DeckViewTests {
         let cyberpunk = Games.game("cyberpunk")!
         func section(_ game: GameDefinition, _ format: String, _ printings: [ProductRecord], ygo: String? = nil) -> String {
             DeckPage.addSection(game: game, format: game.format(format),
-                                kind: DeckPage.kind(game: game, printings: printings, ygoType: { _ in ygo }))
+                                kind: CardKinds.deckKind(game: game, printings: printings, ygoType: { _ in ygo }))
         }
         let effect = product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon", cardType: "Effect Monster")
         #expect(section(yugioh, "standard", [effect], ygo: "synchro") == "extra")             // the index first
@@ -261,7 +262,7 @@ struct DeckViewTests {
         #expect(section(magic, "constructed", [product(id: 7, game: "magic-the-gathering", name: "Bolt", cardType: "Instant")]) == "deck")
         #expect(section(cyberpunk, "standard", [product(id: 8, game: "cyberpunk", name: "Kerry", cardType: "Legend")]) == "legends")
         // No printing: the format's first counted section that is not by hand only.
-        #expect(DeckPage.kind(game: yugioh, printings: [], ygoType: { _ in nil }) == nil)
+        #expect(CardKinds.deckKind(game: yugioh, printings: [], ygoType: { _ in nil }) == nil)
         #expect(DeckPage.addSection(game: yugioh, format: yugioh.format("standard"), kind: nil) == "main")
         #expect(DeckPage.addSection(game: magic, format: magic.format("commander"), kind: nil) == "deck")
     }
@@ -270,7 +271,7 @@ struct DeckViewTests {
     /// the others in the format's order.
     @Test func plusAndMinusOfACardFollowItsDefaultSection() {
         let stardust = DeckCardToAdd(cardKey: "stardust dragon", name: "Stardust Dragon",
-                                     kind: DeckPage.kind(game: yugioh, printings: [product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon",
+                                     kind: CardKinds.deckKind(game: yugioh, printings: [product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon",
                                                                                            cardType: "Synchro Monster")], ygoType: { _ in "synchro" }))
         let start = deck([card("stardust dragon", "side", 1)])
         let added = DeckPage.addingOne(DeckPage.addingOne(start, stardust, game: yugioh), stardust, game: yugioh)
@@ -296,5 +297,50 @@ struct DeckViewTests {
                           DeckCardLine(deckID: "c", deckName: "Second", section: "maybe", sectionName: "maybe", count: 4)])
         #expect(lines.map(\.id) == ["a-main", "a-side", "c-extra", "c-maybe"])
         #expect(DeckPage.cardLines(decks: [none], cardKey: warrior, game: yugioh).isEmpty)
+    }
+
+    /// The search cell's `+` is off at 999 or more copies in the card's default section, whatever the other sections hold;
+    /// its count is the deck's copies over all sections.
+    @Test func theSearchCellsPlusStopsAt999InTheDefaultSection() {
+        let lockUp = DeckCardToAdd(cardKey: "dockside lock up", name: "Dockside Lock-Up",
+                                   kind: CardKinds.deckKind(game: riftbound, printings: [self.lockUp], ygoType: { _ in nil }))
+        let fine = DeckPage.searchCount(deck([card("dockside lock up", "main", 998), card("dockside lock up", "sideboard", 5)]),
+                                        lockUp, game: riftbound)
+        #expect(fine.copies == 1003 && fine.copies < fine.plusLimit)
+        let full = DeckPage.searchCount(deck([card("dockside lock up", "sideboard", 2), card("dockside lock up", "main", 999)]),
+                                        lockUp, game: riftbound)
+        #expect(full.copies == 1001 && full.copies >= full.plusLimit)
+        let above = DeckPage.searchCount(deck([card("dockside lock up", "main", 1200)]), lockUp, game: riftbound)
+        #expect(above.copies >= above.plusLimit)
+        let none = DeckPage.searchCount(deck([card("dockside lock up", "sideboard", 3)]), lockUp, game: riftbound)
+        #expect(none.copies == 3 && none.copies < none.plusLimit)
+    }
+
+    /// Fix round 1: the search cell and the card page read a card's printings through two store calls
+    /// (`printings(game:cardKeys:)` for a page of results, `printings(game:cardKey:)` for a page); a card whose newest
+    /// printing has no card type lands in the same section from both.
+    @Test func theSearchAndTheCardPageAddACardToTheSameSection() async throws {
+        let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
+        let store = try CatalogStore(url: url)
+        let older = Date(timeIntervalSince1970: 1_700_000_000), newer = Date(timeIntervalSince1970: 1_800_000_000)
+        try await store.upsertSets([SetRecord(groupID: 1, gameID: "yu-gi-oh", name: "Old", abbreviation: "", publishedOn: older),
+                                    SetRecord(groupID: 2, gameID: "yu-gi-oh", name: "New", abbreviation: "", publishedOn: newer)])
+        try await store.replaceProducts(of: 1, with: [product(id: 10, game: "yu-gi-oh", groupID: 1, name: "Stardust Dragon",
+                                                              number: "TDGS-EN040", rarity: "Ultra Rare", cardType: "Synchro Monster")], at: newer)
+        try await store.replaceProducts(of: 2, with: [product(id: 20, game: "yu-gi-oh", groupID: 2, name: "Stardust Dragon",
+                                                              number: "PROMO-EN001", rarity: "Promo")], at: newer)
+        let key = "stardust dragon"
+        let fromSearch = try await store.printings(game: "yu-gi-oh", cardKeys: [key])[key] ?? []
+        let fromPage = try await store.printings(game: "yu-gi-oh", cardKey: key)
+        #expect(fromSearch.first?.productID == 20)                         // the newest, untyped, is the cover
+        let none: (String) -> String? = { _ in nil }
+        let format = yugioh.format("standard")
+        let searchCard = DeckCardToAdd(cardKey: key, name: "Stardust Dragon",
+                                       kind: CardKinds.deckKind(game: yugioh, printings: fromSearch, ygoType: none))
+        let pageCard = DeckCardToAdd(cardKey: key, name: "Stardust Dragon",
+                                     kind: CardKinds.deckKind(game: yugioh, printings: fromPage, ygoType: none))
+        #expect(DeckPage.addSection(game: yugioh, format: format, kind: searchCard.kind) == "extra")
+        #expect(DeckPage.addingOne(deck([], format: "standard"), searchCard, game: yugioh)
+                == DeckPage.addingOne(deck([], format: "standard"), pageCard, game: yugioh))
     }
 }

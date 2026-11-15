@@ -162,4 +162,39 @@ struct CardKindTests {
                 == ["extraDeck", "legend", "rune", "battlefield", "champion", "land"])
         #expect(CardKind.other == "Other")
     }
+
+    // MARK: One kind per card for every deck place (phase 3A task 6, fix round 1)
+
+    /// `CardKinds.deckKind`: the first printing in the catalog's order with a card type decides; all untyped → the first
+    /// printing's (empty) type, so Other for a game without YGOPRODeck types; Yu-Gi-Oh! takes its YGOPRODeck type first,
+    /// another game never asks for one.
+    @Test func oneKindPerCardFromItsFirstTypedPrinting() {
+        let none: (String) -> String? = { _ in nil }
+        // The cover (newest) has no card type; an older printing has one.
+        let promo = product(id: 1, game: "yu-gi-oh", name: "Stardust Dragon")
+        let old = product(id: 2, game: "yu-gi-oh", name: "Stardust Dragon", cardType: "Synchro Monster")
+        #expect(CardKinds.deckKind(game: yugioh, printings: [promo, old], ygoType: none)?.flags == [CardKind.extraDeck])
+        let rune = product(id: 3, name: "Calm Rune (R02a)", cardType: "Rune")
+        #expect(CardKinds.deckKind(game: riftbound, printings: [product(id: 4, name: "Calm Rune (R02b)"), rune], ygoType: none)
+                == riftbound.kind(cardType: "Rune", ygoType: nil))
+        // Every printing untyped: Other, which goes to the format's first counted section that is not by hand only.
+        let untyped = CardKinds.deckKind(game: riftbound, printings: [product(id: 5, name: "X"), product(id: 6, name: "X")],
+                                         ygoType: none)
+        #expect(untyped == CardKind(group: CardKind.other, flags: []))
+        #expect(riftbound.defaultSection(format: riftbound.format("standard"), kind: untyped!) == "main")
+        #expect(CardKinds.deckKind(game: riftbound, printings: [], ygoType: none) == nil)
+        // Yu-Gi-Oh!: the YGOPRODeck type of the card name first, with or without a typed printing.
+        var asked: [String] = []
+        let synchro: (String) -> String? = { asked.append($0); return "synchro" }
+        let effect = product(id: 7, game: "yu-gi-oh", name: "Y", cardType: "Effect Monster")
+        #expect(CardKinds.deckKind(game: yugioh, printings: [effect], ygoType: synchro)?.flags == [CardKind.extraDeck])
+        #expect(CardKinds.deckKind(game: yugioh, printings: [promo], ygoType: synchro)?.flags == [CardKind.extraDeck])
+        #expect(CardKinds.deckKind(game: yugioh, printings: [effect], ygoType: none)?.flags == [])
+        #expect(asked == ["Y", "Stardust Dragon"])
+        // Another game never asks for a YGOPRODeck type, whatever the lookup would say.
+        asked = []
+        #expect(CardKinds.deckKind(game: riftbound, printings: [rune], ygoType: synchro) == riftbound.kind(cardType: "Rune", ygoType: nil))
+        #expect(CardKinds.deckKind(game: magic, cardType: "Instant", cardName: "Bolt", ygoType: synchro).group == "Instants")
+        #expect(asked.isEmpty)
+    }
 }

@@ -429,11 +429,11 @@ actor CatalogStore: ModelActor {
     }
 
     /// The cards of `game` with these exact card keys (a paste's names), by key: the card's name and type from its first
-    /// printing with a card type, newest set first (`DeckPage.kind` reads the same printing), else from its newest printing.
+    /// printing with a card type, newest set first, else from its newest printing (`CardKinds.decidingPrinting`, the printing every deck place takes a kind from).
     /// A key the store has no product of the game for is left out. In batches of 500 keys (`printings(game:cardKeys:)`).
     func cards(game: String, keys: [String]) throws -> [String: CatalogCard] {
         try printings(game: game, cardKeys: keys).compactMapValues { printings in
-            (printings.first { !$0.cardType.isEmpty } ?? printings.first).map {
+            CardKinds.decidingPrinting(printings).map {
                 CatalogCard(cardKey: CardName.searchKey($0.cardName), name: $0.cardName, cardType: $0.cardType)
             }
         }
