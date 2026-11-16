@@ -64,35 +64,63 @@ nonisolated enum SetMaths {
     /// target's own price goes into the sum, or it counts as without a price (F6).
     static func numbers(products: [Int], priced: (Int) -> [String], ownedCount: (PrintingKey) -> Int,
                         ownedFinishes: (Int) -> [String], price: (PrintingKey) -> ShownPrice?) -> SetNumbers {
-        var owned = 0, total = 0, unpriced = 0
-        var sum: Double?
+        var counter = Counter()
         for product in products {
             for target in targets(productID: product, priced: priced(product), owned: ownedFinishes(product)) {
-                total += 1
-                if ownedCount(target.key) >= 1 {
-                    owned += 1
-                } else if let shown = price(target.key) {
-                    sum = (sum ?? 0) + shown.amount
-                } else {
-                    unpriced += 1
-                }
+                counter.add(owned: ownedCount(target.key) >= 1) { price(target.key) }
             }
         }
-        return SetNumbers(owned: owned, total: total, missingSum: sum, missingUnpriced: unpriced)
+        return counter.numbers
     }
 
-    /// One row per set that has a product in the index (F5), in the order of `sets`. `rows` is every collection row of
-    /// the game; a row with a count under 1 is not owned, and a row of a product in no set counts nowhere.
-    static func rows(sets: [SetRecord], index: SetIndex, rows: [CollectionRow], priced: (Int) -> [String],
-                     price: (PrintingKey) -> ShownPrice?) -> [SetRow] {
-        let owned = SetOwned(rows: rows)
-        return sets.compactMap { set in
-            let products = index.products(of: set.groupID)
-            guard !products.isEmpty else { return nil }
-            let counted = numbers(products: products, priced: priced, ownedCount: owned.count,
-                                  ownedFinishes: owned.finishes(of:), price: price)
-            return SetRow(set: set, numbers: counted)
+    /// The same numbers with one lookup per product (final fix A8): `prices` gives the product's finishes and their
+    /// prices (`GamePrices.prices(productID:)`), and a target's price is its finish's there (`GamePrices.shown`'s rule).
+    static func numbers(products: [Int], prices: (Int) -> [FinishPrice], ownedCount: (PrintingKey) -> Int,
+                        ownedFinishes: (Int) -> [String]) -> SetNumbers {
+        var counter = Counter()
+        for product in products {
+            let list = prices(product)
+            for target in targets(productID: product, priced: list.map(\.finish), owned: ownedFinishes(product)) {
+                counter.add(owned: ownedCount(target.key) >= 1) { list.first { $0.finish == target.finish }?.price.shown }
+            }
         }
+        return counter.numbers
+    }
+
+    /// The running numbers of one set: a missing target's price is asked only when it is missing.
+    private struct Counter {
+        var owned = 0, total = 0, unpriced = 0
+        var sum: Double?
+
+        mutating func add(owned isOwned: Bool, price: () -> ShownPrice?) {
+            total += 1
+            if isOwned {
+                owned += 1
+            } else if let shown = price() {
+                sum = (sum ?? 0) + shown.amount
+            } else {
+                unpriced += 1
+            }
+        }
+
+        var numbers: SetNumbers { SetNumbers(owned: owned, total: total, missingSum: sum, missingUnpriced: unpriced) }
+    }
+
+    /// One row per set that has a product in the index (F5), in the order of `sets`; a set of the index without a set
+    /// record is not listed. `rows` is every collection row of the game; a row with a count under 1 is not owned, and a
+    /// row of a product in no set counts nowhere. `prices` is asked once per product (A8). A cancelled task stops between
+    /// sets and returns the rows made so far (A8): the caller drops them.
+    static func rows(sets: [SetRecord], index: SetIndex, rows: [CollectionRow], prices: (Int) -> [FinishPrice]) -> [SetRow] {
+        let owned = SetOwned(rows: rows)
+        var result: [SetRow] = []
+        for set in sets {
+            if Task.isCancelled { break }
+            let products = index.products(of: set.groupID)
+            guard !products.isEmpty else { continue }
+            let counted = numbers(products: products, prices: prices, ownedCount: owned.count, ownedFinishes: owned.finishes(of:))
+            result.append(SetRow(set: set, numbers: counted))
+        }
+        return result
     }
 
     /// A27: "My sets" only while some set has an owned target; else all sets.
@@ -117,8 +145,9 @@ nonisolated enum SetMaths {
         return sorted(kept, by: sort)
     }
 
-    /// Newest: release date descending, undated last. Most complete: owned ÷ total descending. Cost: the missing sum
-    /// ascending; sets whose missing targets have no price after them; complete sets last. Every tie goes by name.
+    /// Newest: release date descending, undated last. Most complete: owned ÷ total descending. Cost: the missing sum in
+    /// whole cents ascending (final fix A7: $0.10 + $0.20 and $0.30 are a tie); sets whose missing targets have no price
+    /// after them; complete sets last. Every tie goes by name.
     private static func sorted(_ rows: [SetRow], by sort: SetSort) -> [SetRow] {
         let keyed = rows.map { (row: $0, name: CardName.searchKey($0.set.name)) }
         func byName(_ a: (row: SetRow, name: String), _ b: (row: SetRow, name: String)) -> Bool {
@@ -126,6 +155,7 @@ nonisolated enum SetMaths {
             if a.row.set.name != b.row.set.name { return a.row.set.name < b.row.set.name }
             return a.row.id < b.row.id
         }
+        func cents(_ amount: Double) -> Double { (amount * 100).rounded() }
         // 0: priced and missing, 1: missing without any price, 2: complete.
         func costRank(_ n: SetNumbers) -> Int { n.isComplete ? 2 : n.missingSum == nil ? 1 : 0 }
         return keyed.sorted { a, b in
@@ -147,7 +177,7 @@ nonisolated enum SetMaths {
             case .cost:
                 let p = costRank(x), q = costRank(y)
                 if p != q { return p < q }
-                if p == 0, let s = x.missingSum, let t = y.missingSum, s != t { return s < t }
+                if p == 0, let s = x.missingSum.map(cents), let t = y.missingSum.map(cents), s != t { return s < t }
             }
             return byName(a, b)
         }.map(\.row)

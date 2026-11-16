@@ -112,9 +112,7 @@ final class SetsScreenState: GameScreenState {
     /// The rows of the sets in both the index and the store (F5), with the targets' finishes and prices from `prices`
     /// (nil: the game has no price file; every product is then one Normal target without a price).
     nonisolated static func rows(sets: [SetRecord], index: SetIndex, rows: [CollectionRow], prices: GamePrices?) -> [SetRow] {
-        SetMaths.rows(sets: sets, index: index, rows: rows,
-                      priced: { prices?.prices(productID: $0).map(\.finish) ?? [] },
-                      price: { prices?.shown(key: $0) })
+        SetMaths.rows(sets: sets, index: index, rows: rows, prices: { prices?.prices(productID: $0) ?? [] })
     }
 
     /// The line above the list (final fix A4, Review Focus 5): why it shows nothing or old numbers, in this priority: the

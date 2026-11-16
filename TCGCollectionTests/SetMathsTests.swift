@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
+private final class LookupCounter: @unchecked Sendable { var count = 0 }
+
 struct SetMathsTests {
     private func key(_ id: Int, _ finish: String) -> PrintingKey { PrintingKey(productID: id, finish: finish) }
 
@@ -93,7 +95,7 @@ struct SetMathsTests {
     @Test func rowsListOnlySetsWithProductsInTheIndex() {
         let index = SetIndex(sets: [10: [1, 2], 20: [3]])
         let sets = [set(10, "Alpha"), set(20, "Beta"), set(30, "Gamma")]
-        let result = SetMaths.rows(sets: sets, index: index, rows: [], priced: { _ in [] }, price: { _ in nil })
+        let result = SetMaths.rows(sets: sets, index: index, rows: [], prices: { _ in [] })
         #expect(result.map(\.id) == [10, 20])
         #expect(result.map(\.numbers.total) == [2, 1])
     }
@@ -102,9 +104,9 @@ struct SetMathsTests {
     @Test func aRowOfAProductInNoSetChangesNothing() {
         let index = SetIndex(sets: [10: [1, 2]])
         let sets = [set(10, "Alpha")]
-        let without = SetMaths.rows(sets: sets, index: index, rows: [], priced: { _ in [] }, price: { _ in nil })
+        let without = SetMaths.rows(sets: sets, index: index, rows: [], prices: { _ in [] })
         let with = SetMaths.rows(sets: sets, index: index, rows: [row(99, "Normal", 4), row(99, "Foil", 1)],
-                                 priced: { _ in [] }, price: { _ in nil })
+                                 prices: { _ in [] })
         #expect(with == without)
     }
 
@@ -114,10 +116,55 @@ struct SetMathsTests {
         let index = SetIndex(sets: [10: [1], 20: [2]])
         let sets = [set(10, "Alpha"), set(20, "Beta")]
         let rows = [row(2, "Normal", 1), row(2, "Foil", 2), row(1, "Etched", 0)]
-        let result = SetMaths.rows(sets: sets, index: index, rows: rows, priced: { _ in ["Normal"] },
-                                   price: { _ in ShownPrice(amount: 1, isLow: false) })
+        let result = SetMaths.rows(sets: sets, index: index, rows: rows,
+                                   prices: { _ in [FinishPrice(finish: "Normal", price: Price(market: 1, low: nil, mid: nil, high: nil))] })
         #expect(result[0].numbers == numbers(owned: 0, total: 1, sum: 1, unpriced: 0))
         #expect(result[1].numbers == numbers(owned: 2, total: 2, sum: nil, unpriced: 0))
+    }
+
+    /// Final fix A8: the rows ask the price lookup once per product (its finishes and their prices), not again per
+    /// target; the numbers are those of the two-closure form.
+    @Test func rowsAskThePricesOncePerProduct() {
+        let index = SetIndex(sets: [10: [1, 2], 20: [3]])
+        let sets = [set(10, "Alpha"), set(20, "Beta")]
+        let table: [Int: [FinishPrice]] = [
+            1: [FinishPrice(finish: "Normal", price: Price(market: 2, low: nil, mid: nil, high: nil)),
+                FinishPrice(finish: "Foil", price: Price(market: nil, low: 0.5, mid: nil, high: nil))],
+            2: [FinishPrice(finish: "Foil", price: Price(market: 0, low: nil, mid: nil, high: nil))],   // 0: no price
+        ]
+        let lookups = LookupCounter()
+        let result = SetMaths.rows(sets: sets, index: index, rows: [row(1, "Normal", 1), row(3, "Etched", 2)],
+                                   prices: { lookups.count += 1; return table[$0] ?? [] })
+        #expect(lookups.count == 3)
+        // Set 10: 1 Normal owned, 1 Foil ~$0.50, 2 Foil no price. Set 20: 3 Normal (no price), 3 Etched owned.
+        #expect(result.map(\.numbers) == [numbers(owned: 1, total: 3, sum: 0.5, unpriced: 1),
+                                          numbers(owned: 1, total: 2, sum: nil, unpriced: 1)])
+        let twoClosures = SetMaths.numbers(products: [1, 2], priced: { (table[$0] ?? []).map(\.finish) },
+                                           ownedCount: { $0 == self.key(1, "Normal") ? 1 : 0 }, ownedFinishes: { $0 == 1 ? ["Normal"] : [] },
+                                           price: { key in table[key.productID]?.first { $0.finish == key.finish }?.price.shown })
+        #expect(twoClosures == result[0].numbers)
+    }
+
+    /// A8: a cancelled task stops between sets: the rows return early (the caller's cancel guard drops them).
+    @Test func cancelledRowsReturnEarly() async {
+        let sets = (1...50).map { set($0, "Set \($0)") }
+        let index = SetIndex(sets: Dictionary(uniqueKeysWithValues: (1...50).map { ($0, [$0]) }))
+        let task = Task.detached { () -> [SetRow] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return SetMaths.rows(sets: sets, index: index, rows: [], prices: { _ in [] })
+        }
+        #expect(await task.value.count < 50)
+        #expect(SetMaths.rows(sets: sets, index: index, rows: [], prices: { _ in [] }).count == 50)
+    }
+
+    /// B: two rows of one printing key count once (one owned target); a set of the index without a set record is not
+    /// listed.
+    @Test func twoRowsOfOneKeyCountOnceAndASetWithoutARecordIsLeftOut() {
+        let index = SetIndex(sets: [10: [1, 2], 99: [3]])
+        let result = SetMaths.rows(sets: [set(10, "Alpha")], index: index,
+                                   rows: [row(1, "Normal", 1), row(1, "Normal", 2)], prices: { _ in [] })
+        #expect(result.map(\.id) == [10])
+        #expect(result[0].numbers == numbers(owned: 1, total: 2, sum: nil, unpriced: 1))
     }
 
     // MARK: scope (A27)
@@ -173,6 +220,16 @@ struct SetMathsTests {
     @Test func sortMostCompleteThenName() {
         let tie = setRow(set(6, "Aaa", "AAA"), numbers(owned: 1, total: 2, sum: 1, unpriced: 0))   // 50 %, ties set 1
         #expect(SetMaths.shown(sample + [tie], scope: .all, text: "", sort: .complete).map(\.id) == [4, 3, 6, 1, 5, 2])
+    }
+
+    /// Final fix A7: the cost sort compares whole cents, so $0.10 + $0.20 and $0.30 are a tie (then by name).
+    @Test func sortCostComparesWholeCents() {
+        let summed = 0.1 + 0.2                                                       // 0.30000000000000004
+        #expect(summed != 0.3)
+        let rows = [setRow(set(1, "Aaa"), numbers(owned: 0, total: 2, sum: summed, unpriced: 0)),
+                    setRow(set(2, "Bbb"), numbers(owned: 0, total: 1, sum: 0.3, unpriced: 0))]
+        #expect(SetMaths.shown(rows, scope: .all, text: "", sort: .cost).map(\.id) == [1, 2])
+        #expect(SetMaths.shown(rows.reversed(), scope: .all, text: "", sort: .cost).map(\.id) == [1, 2])
     }
 
     @Test func sortCostPutsUnpricedThenCompleteLast() {
