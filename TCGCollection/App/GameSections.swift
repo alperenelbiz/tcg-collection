@@ -13,6 +13,9 @@ nonisolated enum GameSections {
     /// G8: the game's Sets row and screen are shown, and its set index is made.
     static func showsSets(_ profile: GameProfile) -> Bool { profile.collector }
 
+    /// B2 (final fix): a deck sheet's write action may write to the game: it is followed and has the player role.
+    static func decksWritable(_ profile: GameProfile, followed: Bool) -> Bool { followed && showsDecks(profile) }
+
     /// The screen to show when `asked` is wanted (stored, launched, or on screen): a deck screen without the player role,
     /// or of a deck that is gone (`deckExists` false), and Sets without the collector role open the Collection; any other
     /// screen is itself.

@@ -172,10 +172,14 @@ final class PasteDeckModel: Identifiable {
         return deck == deckAtRead ? nil : Self.deckChanged
     }
 
-    /// "Create deck" / "Add to <deck>" is on: not applied yet, the table is shown, the game can change, the deck is there
-    /// (when adding), no line is still unknown, and at least one line is saved.
+    /// "Create deck" / "Add to <deck>" is on: not applied yet, the table is shown, the game can change, is followed and
+    /// has the player role, the deck is there (when adding), no line is still unknown, and at least one line is saved.
     var canApply: Bool {
         guard !applied, step == .table, problem == nil, deckID == nil || deck != nil else { return false }
+        // A5, B2 (final fix): the paste writes to its game (taken when the sheet opened) only while that game is followed
+        // and has the player role; a role or game turned off meanwhile writes nothing.
+        guard GameSections.decksWritable(library.profile(game: gameID), followed: library.followedGames.contains(gameID))
+        else { return false }
         let lines = lines
         return DeckPaste.unknownCount(lines) == 0 && !DeckPaste.cards(lines).isEmpty
     }

@@ -32,6 +32,13 @@ final class UserLibrary {
     /// the game's file found a file (or an iCloud placeholder) of it on disk at the write (it arrived after the read; task 5
     /// fix round 1 (c)). Nothing was written, the game was read again. Until `clearUnsavedChangeNotice()`.
     private(set) var unsavedChangeNotice: String?
+    /// The games whose change `unsavedChangeNotice` is about, in the order they were refused (final fix A3, B6: an import
+    /// and "Continue" say them their own way). Until `clearUnsavedChangeNotice()`.
+    private(set) var unsavedChangeGames: [String] = []
+    /// "The change was not saved: <the game's problem>": the write of a profile change (a Settings toggle) failed or was
+    /// refused (not "appeared", which `unsavedChangeNotice` says). G13 hides the problem of a game just turned off from the
+    /// sidebar, so it is said once in the status line (final fix A9). Until `clearUnsavedProfileNotice()`.
+    private(set) var unsavedProfileNotice: String?
     /// True when `load` found no folder at `folder`, or a reload found it gone: changes are refused until another folder
     /// is used, or (gone after the load) until a reload finds it back.
     private(set) var folderIsMissing = false
@@ -75,6 +82,12 @@ final class UserLibrary {
     /// the file, and refuses when one is on disk by then (`UserFilesError.appeared`). A read of the game or a write that
     /// succeeded ends it.
     @ObservationIgnored private var creates: Set<String> = []
+    /// Per game, the profile last known on disk: read (`apply`), or written by a write that succeeded. A refused game
+    /// shows it (final fix A8). Emptied at a load and a folder switch.
+    @ObservationIgnored private var knownProfiles: [String: GameProfile] = [:]
+    /// Games whose memory holds a profile change that no write has saved yet: a failed or refused write of such a game is
+    /// said (`unsavedProfileNotice`, final fix A9).
+    @ObservationIgnored private var unsavedProfiles: Set<String> = []
     /// The serial path: every write and every read of a game file runs after the one queued before it.
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var queued = 0
@@ -160,13 +173,17 @@ final class UserLibrary {
     }
 
     /// The game's profile (G1, G2): whether the user follows it and his roles in it. All on for a game without a file, a
-    /// refused file (its profile is not read) and an unknown game.
-    func profile(game: String) -> GameProfile { shown(game).profile }
+    /// file refused at its first read (its profile is not read) and an unknown game.
+    /// Final fix A8: a game whose file is refused after it was known (a write refused, a reload refused) keeps the profile
+    /// last known on disk (read or written here) for the rest of the run, so a game set off does not show again.
+    func profile(game: String) -> GameProfile {
+        refused[game] != nil ? knownProfiles[game] ?? .all : shown(game).profile
+    }
 
     /// After the folder's first read: whether it has a file of any known game, read or refused (newer, unreadable, not
-    /// downloaded from iCloud), or one written here since (G11: a folder without one is new). False before the read and
-    /// for a missing folder.
-    var hasGameFile: Bool { !files.isEmpty || !refused.isEmpty }
+    /// downloaded from iCloud), or one written here since (G11: a folder without one is new); a file still to be created,
+    /// or whose create failed, does not count (`hasFile`). False before the read and for a missing folder.
+    var hasGameFile: Bool { Games.all.contains { hasFile(game: $0.id) } }
 
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
@@ -214,7 +231,21 @@ final class UserLibrary {
 
     func clearUnsavedSaleNotice() { unsavedSaleNotice = nil }
 
-    func clearUnsavedChangeNotice() { unsavedChangeNotice = nil }
+    func clearUnsavedChangeNotice() {
+        unsavedChangeNotice = nil
+        unsavedChangeGames = []
+    }
+
+    func clearUnsavedProfileNotice() { unsavedProfileNotice = nil }
+
+    /// What `unsavedChangeNotice` says for one game.
+    nonisolated static func unsavedChangeText(_ game: String) -> String {
+        "The change was not saved: \(Games.game(game)?.name ?? game) was just read from your folder. Do it again."
+    }
+
+    /// The game has a file in the folder as far as this run knows: one read (or refused at a read), or one written here.
+    /// Not a file this app is still to create, or failed to create (`creates`): it is not on disk (final fix A2).
+    func hasFile(game: String) -> Bool { (files[game] != nil && !creates.contains(game)) || refused[game] != nil }
 
     // MARK: Changing
 
@@ -342,7 +373,7 @@ final class UserLibrary {
     /// read, which it replaces (`GameUserFile.setProfile`). `writesKey` (onboarding's "Continue", G11): the `profile` key is
     /// written also when the profile is all on, so a game without a file gets one and the folder is no longer new.
     func setProfile(_ profile: GameProfile, game: String, writesKey: Bool = false) {
-        change(game) { $0.setProfile(profile, writesKey: writesKey) }
+        if change(game, { $0.setProfile(profile, writesKey: writesKey) }) { unsavedProfiles.insert(game) }
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.
@@ -412,8 +443,10 @@ final class UserLibrary {
         guard let error else {
             creates.remove(game)
             writeFailures[game] = nil
-            // The whole state is on disk, every sale in it too.
+            // The whole state is on disk, every sale and profile in it too.
             unsavedSales.remove(game)
+            unsavedProfiles.remove(game)
+            knownProfiles[game] = file.profile
             return
         }
         if case .appeared? = error as? UserFilesError {
@@ -424,8 +457,11 @@ final class UserLibrary {
             creates.remove(game)
             writeFailures[game] = nil
             unsavedSales.remove(game)
+            unsavedProfiles.remove(game)
             if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
-            unsavedChangeNotice = "The change was not saved: \(Games.game(game)?.name ?? game) was just read from your folder. Do it again."
+            unsavedChangeNotice = Self.unsavedChangeText(game)
+            unsavedChangeGames.removeAll { $0 == game }
+            unsavedChangeGames.append(game)
             queueReload(game, in: folder)
             return
         }
@@ -440,11 +476,19 @@ final class UserLibrary {
             if unsavedSales.remove(game) != nil, let problem = problem(game: game) {
                 unsavedSaleNotice = "The sale was not saved: \(problem)"
             }
+            sayUnsavedProfile(game)
             return
         }
         var isDirectory: ObjCBool = false
         let folderThere = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) && isDirectory.boolValue
         writeFailures[game] = folderThere ? "\(game).json could not be saved (\(error.localizedDescription))." : Self.missingFolder(folder)
+        sayUnsavedProfile(game)
+    }
+
+    /// A9: the dropped or failed write held a profile change: "The change was not saved: <the game's problem>", once.
+    private func sayUnsavedProfile(_ game: String) {
+        guard unsavedProfiles.remove(game) != nil, let problem = problem(game: game) else { return }
+        unsavedProfileNotice = "The change was not saved: \(problem)"
     }
 
     // MARK: Loading and reloading
@@ -467,7 +511,9 @@ final class UserLibrary {
         writeFailures = [:]
         conflictFailures = [:]
         unsavedSales = []
+        unsavedProfiles = []
         creates = []
+        knownProfiles = [:]
         // The reads of this load say what they take off sale; a notice not yet said about the memory just dropped would
         // count the same copies twice (B2).
         clearSaleNotice()
@@ -509,7 +555,9 @@ final class UserLibrary {
         writeFailures = [:]
         conflictFailures = [:]
         unsavedSales = []
+        unsavedProfiles = []
         creates = []
+        knownProfiles = [:]
         notice = nil
         folderIsMissing = false
         watcher?.stop()
@@ -518,9 +566,22 @@ final class UserLibrary {
     }
 
     /// Reads every game's file of the folder again, now (not from memory; task 5 fix round 1 (b): "Continue" looks at the
-    /// folder before it writes). Returns when the reads have run. Nothing before the folder's load or for a missing folder.
+    /// folder before it writes). Returns when the reads have run. Nothing before the folder's load or for a folder missing
+    /// at the load; a folder that went away after the load is looked at again (its return is seen: final fix A2).
+    /// A file this app failed to create (`creates` with a failed write) is not on disk: memory drops that change, so the
+    /// read applies and the next change creates the file again (final fix A2: "Continue" again after a failed write).
     func readAgain() async {
-        guard let folder, isLoaded, !folderIsMissing else { return }
+        guard let folder, readsAgain else { return }
+        await flush()
+        for game in creates where writeFailures[game] != nil {
+            let shownBefore = shown(game)
+            files[game] = nil
+            writeFailures[game] = nil
+            creates.remove(game)
+            unsavedSales.remove(game)
+            unsavedProfiles.remove(game)
+            if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
+        }
         var last: Task<Void, Never>?
         for game in Games.all { last = queueReload(game.id, in: folder) }
         await last?.value
@@ -594,9 +655,11 @@ final class UserLibrary {
             if files[game].map({ !file.hasSameLists(as: $0) }) ?? true { addToSaleNotice(lost) }
             files[game] = file
             refused[game] = nil
+            knownProfiles[game] = file.profile
         case .missing:
             files[game] = nil
             refused[game] = nil
+            knownProfiles[game] = nil
         case .refused(let text):
             creates.remove(game)
             files[game] = nil

@@ -69,7 +69,8 @@ struct ImportModelTests {
         let (library, folder) = try await library()
         let model = importing(try fixture("collection-riftbound.csv"), library: library, reader: try await catalog())
         await model.prepare()
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "3 new, 1 changed, 1 not in the file (kept)"))
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "3 new, 1 changed, 1 not in the file (kept)",
+                                                     counts: ["riftbound": .init(new: 3, changed: 1, missing: 1)]))
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 3", "555 Normal 2", "900001 Normal 5", "722282 Normal 4", "721337 Normal 3"])
         // The import's own write is not "a change made while the sheet was open" (the sheet sees the version move).
         #expect(!model.refreshComparison() && model.notice == nil)
@@ -400,7 +401,8 @@ struct ImportModelTests {
         #expect(model.block(game: "riftbound") == nil)
         #expect(model.skipped.map(\.name) == ["Pikachu"])
         #expect(model.summary == "1 new, 1 changed, 1 not in the file (kept)")
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)"))
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)",
+                                                     counts: ["riftbound": .init(new: 1, changed: 1, missing: 1)]))
         #expect(shown(library.rows(game: "riftbound")) == ["721334 Foil 2", "555 Normal 2", "721337 Normal 1"])
         await library.flush()
         #expect(try Data(contentsOf: folder.appending(path: "yu-gi-oh.json")) == Data("not json".utf8))
@@ -421,10 +423,43 @@ struct ImportModelTests {
         #expect(model.block(game: "riftbound") == nil)
         #expect(model.notImported.map(\.name) == ["Pikachu"])
         #expect(model.summary == "1 new, 1 changed, 1 not in the file (kept)")
-        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)"))
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)",
+                                                     counts: ["riftbound": .init(new: 1, changed: 1, missing: 1)]))
         await library.flush()
         #expect(try Data(contentsOf: folder.appending(path: "yu-gi-oh.json")) == Data(off.utf8))
         #expect(library.rows(game: "yu-gi-oh").isEmpty)
+    }
+
+    /// B3 (final fix): a game turned on while the sheet is open makes a `prepare` due, so the sheet does not end on a
+    /// comparison made while the game was off; after it the game is no longer blocked as turned off.
+    @Test func aGameTurnedOnWhileTheSheetIsOpenIsPreparedAgain() async throws {
+        let off = #"{"version":1,"collection":[],"profile":{"followed":false}}"#
+        let (library, _) = try await library(extra: ["yu-gi-oh.json": off])
+        let model = importing(try fixture("collection-mixed.csv"), library: library, reader: try await catalog())
+        await model.prepare()
+        #expect(model.block(game: "yu-gi-oh") == .turnedOff)
+        #expect(!model.needsPrepare)
+        library.setProfile(.all, game: "yu-gi-oh")
+        #expect(model.needsPrepare)
+        await model.prepare()
+        #expect(!model.needsPrepare)
+        #expect(model.block(game: "yu-gi-oh") != .turnedOff)
+        library.setProfile(GameProfile(followed: false), game: "yu-gi-oh")
+        #expect(model.needsPrepare)                                             // turned off again: prepared again too
+    }
+
+    /// A3 (final fix): `Applied` keeps each game's counts, so the summary of only the games written can be said; the
+    /// summary of every game written is the summary itself.
+    @Test func theSummaryOfSomeGamesOfAnImport() {
+        let applied = ImportModel.Applied(gameID: "riftbound", games: ["riftbound", "yu-gi-oh"], summary: "3 new, 1 changed, 2 not in the file (1 removed, 1 kept)",
+                                          counts: ["riftbound": .init(new: 2, changed: 1),
+                                                   "yu-gi-oh": .init(new: 1, missing: 2, removed: 1)])
+        #expect(applied.summary(of: ["riftbound", "yu-gi-oh"]) == applied.summary)
+        #expect(applied.summary(of: ["yu-gi-oh", "riftbound"]) == applied.summary)
+        #expect(applied.summary(of: ["riftbound"]) == "2 new, 1 changed")
+        #expect(applied.summary(of: ["yu-gi-oh"]) == "1 new, 2 not in the file (1 removed, 1 kept)")
+        #expect(ImportModel.summaryText(.init()) == nil)
+        #expect(ImportModel.summaryText(.init(missing: 1, removed: 1)) == "1 not in the file (removed)")
     }
 
     /// A file that could not be read at all: one sentence, nothing else.

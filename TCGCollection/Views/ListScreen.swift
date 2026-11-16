@@ -176,9 +176,16 @@ extension View {
 struct CatalogNote: View {
     let text: String?
     let identifier: String
+    @Environment(AppModel.self) private var model
+
+    /// B7 (final fix): while nothing can download (the catalog's gate is closed: no folder chosen, the first-run question
+    /// open) "The catalog is still downloading…" is not said: nothing. Any other note is said.
+    static func shown(_ text: String?, downloads: Bool) -> String? {
+        text == CollectionList.catalogDownloading && !downloads ? nil : text
+    }
 
     var body: some View {
-        if let text {
+        if let text = Self.shown(text, downloads: model.catalogMayStart) {
             Text(text)
                 .font(Theme.lineFont)
                 .foregroundStyle(Theme.muted)

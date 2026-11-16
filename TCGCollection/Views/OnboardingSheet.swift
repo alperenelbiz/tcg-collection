@@ -50,6 +50,16 @@ struct OnboardingSheet: View {
             }
             GameProfilesView(profiles: $draft, rows: ProfileRows.draftRows(games: Games.all, profiles: draft))
                 .padding(.top, 20)
+            // Final fix A2: why the last "Continue" could not finish (the folder is missing, a write failed); the sheet
+            // stays open and "Continue" can be clicked again.
+            if let problem = model.onboardingProblem {
+                Text(problem)
+                    .font(Theme.lineFont)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, Theme.lineGap)
+                    .accessibilityIdentifier("onboarding-problem")
+            }
             HStack {
                 Spacer()
                 Button("Continue") {

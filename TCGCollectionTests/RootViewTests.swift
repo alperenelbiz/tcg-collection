@@ -96,4 +96,20 @@ struct RootViewTests {
         #expect(model.screen == .collection && model.showsRoot(.collection))
         #expect(path.wrappedValue.isEmpty)                       // the root: the kept page is dropped
     }
+
+    /// B7 (final fix): while the catalog gate is closed (no folder chosen, the first-run question open) nothing downloads,
+    /// so a list's catalog note does not say "still downloading": it says nothing. Other notes stay.
+    @Test func noDownloadingNoteWhileNothingDownloads() {
+        #expect(CatalogNote.shown(CollectionList.catalogDownloading, downloads: false) == nil)
+        #expect(CatalogNote.shown(CollectionList.catalogDownloading, downloads: true) == CollectionList.catalogDownloading)
+        #expect(CatalogNote.shown(CollectionList.catalogEmpty, downloads: false) == CollectionList.catalogEmpty)
+        #expect(CatalogNote.shown(nil, downloads: false) == nil)
+    }
+
+    /// B8 (final fix): the game picker's selection is always among its items: the game on screen when it is followed,
+    /// else the first followed game, in the same render.
+    @Test func thePickersSelectionIsAlwaysAnItem() {
+        #expect(GameSelection.shown(asked: "riftbound", followed: ["magic-the-gathering", "riftbound"]) == "riftbound")
+        #expect(GameSelection.shown(asked: "yu-gi-oh", followed: ["riftbound", "cyberpunk"]) == "riftbound")
+    }
 }

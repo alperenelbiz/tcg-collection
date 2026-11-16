@@ -1565,6 +1565,123 @@ struct UserLibraryTests {
         #expect(try stored(dir, "riftbound").map(\.count) == [2])
     }
 
+    // MARK: Phase 4B final fix wave
+
+    /// A8: a write refused (the file on disk became one this app must not rewrite) drops the game's memory; its profile is
+    /// then the last one known on disk (read or written), not all on, for the rest of the run: a game set off stays off.
+    @MainActor @Test func aRefusedWriteKeepsTheLastKnownProfile() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        try Data(#"{"version":1,"collection":[],"profile":{"followed":false}}"#.utf8).write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.profile(game: "riftbound") == GameProfile(followed: false))
+        let newer = Data(#"{"version":2}"#.utf8)
+        try newer.write(to: file)                                              // no reload: memory still holds the read
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(!lib.canChange(game: "riftbound"))
+        #expect(lib.profile(game: "riftbound") == GameProfile(followed: false))
+        #expect(!lib.followedGames.contains("riftbound"))
+        #expect(try Data(contentsOf: file) == newer)
+        // A profile written here is the last known one too.
+        let other = tempDir(), otherFile = other.appending(path: "cyberpunk.json")
+        let second = UserLibrary(folder: other, watcher: nil); await second.load()
+        second.setProfile(GameProfile(collector: false), game: "cyberpunk"); await second.flush()
+        try newer.write(to: otherFile)
+        second.setCount(1, game: "cyberpunk", key: riftFoil, name: "A"); await second.flush()
+        #expect(second.profile(game: "cyberpunk") == GameProfile(collector: false))
+        // A file refused at the load has no known profile: all on (G1).
+        let third = UserLibrary(folder: other, watcher: nil); await third.load()
+        #expect(third.profile(game: "cyberpunk") == .all)
+    }
+
+    /// A9: a profile change whose write fails (an I/O error, here a read-only folder) is said once
+    /// (`unsavedProfileNotice`), also for a game just turned off; a change of another list is not.
+    @MainActor @Test func aFailedWriteOfAProfileIsSaid() async throws {
+        let dir = tempDir()
+        try Data(#"{"version":1,"collection":[]}"#.utf8).write(to: dir.appending(path: "riftbound.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(lib.unsavedProfileNotice == nil)
+        lib.setProfile(GameProfile(followed: false), game: "riftbound"); await lib.flush()
+        let problem = try #require(lib.problem(game: "riftbound"))
+        #expect(problem.hasPrefix("riftbound.json could not be saved"))
+        #expect(lib.unsavedProfileNotice == "The change was not saved: \(problem)")
+        lib.clearUnsavedProfileNotice()
+        #expect(lib.unsavedProfileNotice == nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        lib.setProfile(.all, game: "riftbound"); await lib.flush()              // written now: nothing said
+        #expect(lib.unsavedProfileNotice == nil)
+    }
+
+    /// Final fix A3 / B6: the games whose change was refused because their file appeared are listed
+    /// (`unsavedChangeGames`), in order, until `clearUnsavedChangeNotice()`.
+    @MainActor @Test func theGamesWhoseFileAppearedAreListed() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        try ownersFile.write(to: dir.appending(path: "riftbound.json"))
+        try ownersFile.write(to: dir.appending(path: "cyberpunk.json"))
+        lib.setProfile(.all, game: "riftbound", writesKey: true)
+        lib.setProfile(.all, game: "cyberpunk", writesKey: true)
+        lib.setProfile(.all, game: "yu-gi-oh", writesKey: true)
+        await lib.flush()
+        #expect(lib.unsavedChangeGames == ["riftbound", "cyberpunk"])
+        #expect(UserLibrary.unsavedChangeText("riftbound")
+                == "The change was not saved: Riftbound was just read from your folder. Do it again.")
+        lib.clearUnsavedChangeNotice()
+        #expect(lib.unsavedChangeGames.isEmpty); #expect(lib.unsavedChangeNotice == nil)
+    }
+
+    /// Final fix A2: a file this app tried to create and could not write is not a game file of the folder
+    /// (`hasGameFile`, `hasFile(game:)`); `readAgain` drops such a change and reads the game from disk again, also after
+    /// the folder went away after the load and came back.
+    @MainActor @Test func aCreateThatFailedIsNoGameFileAndReadAgainDropsIt() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        lib.setProfile(GameProfile(followed: false), game: "riftbound", writesKey: true); await lib.flush()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        #expect(lib.problem(game: "riftbound") != nil)
+        #expect(!lib.hasFile(game: "riftbound")); #expect(!lib.hasGameFile)
+        await lib.readAgain()
+        #expect(lib.problem(game: "riftbound") == nil)
+        #expect(lib.profile(game: "riftbound") == .all)
+        lib.setProfile(GameProfile(followed: false), game: "riftbound", writesKey: true); await lib.flush()
+        #expect(lib.hasFile(game: "riftbound")); #expect(lib.hasGameFile)
+        #expect(try storedFile(dir, "riftbound").profile == GameProfile(followed: false))
+
+        // The folder gone after the load: `readAgain` sees it go and come back.
+        let gone = dir.deletingLastPathComponent().appending(path: "moved-\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: dir, to: gone)
+        await lib.readAgain()
+        #expect(lib.folderIsMissing)
+        try FileManager.default.moveItem(at: gone, to: dir)
+        await lib.readAgain()
+        #expect(!lib.folderIsMissing); #expect(lib.hasFile(game: "riftbound"))
+    }
+
+    /// Task 1's gaps (final fix C): a folder whose only game file is an iCloud placeholder has a game file.
+    @MainActor @Test func aPlaceholderIsAGameFile() async throws {
+        let dir = tempDir()
+        try Data().write(to: dir.appending(path: ".cyberpunk.json.icloud"))
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.hasGameFile); #expect(lib.hasFile(game: "cyberpunk"))
+        #expect(!lib.canSetProfile(game: "cyberpunk"))
+        #expect(lib.problem(game: "cyberpunk") == "cyberpunk.json is not downloaded from iCloud yet.")
+    }
+
+    /// G3 at the library's level (final fix C): every game `followed: false` counts as every game followed.
+    @MainActor @Test func noGameFollowedInTheFilesMeansEveryGame() async throws {
+        let dir = tempDir()
+        for game in Games.all {
+            try Data(#"{"version":1,"collection":[],"profile":{"followed":false}}"#.utf8)
+                .write(to: dir.appending(path: "\(game.id).json"))
+        }
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(lib.followedGames == Games.all.map(\.id))
+        #expect(Games.all.allSatisfy { !lib.profile(game: $0.id).followed })
+    }
+
     /// The rows stored in `<dir>/<game>.json`.
     private func stored(_ dir: URL, _ game: String) throws -> [CollectionRow] {
         try GameUserFile(data: try #require(try UserFiles.read(dir.appending(path: "\(game).json")))).collection

@@ -61,6 +61,16 @@ nonisolated enum ProfileRows {
             : "A game or a role you turn off is hidden. Its cards, lists and decks stay in your folder."
     }
 
+    /// The members of `new` that differ from `old` (the profile a view rendered), set onto `current` (the profile of this
+    /// moment); every other member of `current` is kept (final fix A4).
+    static func applying(_ new: GameProfile, over old: GameProfile, onto current: GameProfile) -> GameProfile {
+        var result = current
+        if new.followed != old.followed { result.followed = new.followed }
+        if new.player != old.player { result.player = new.player }
+        if new.collector != old.collector { result.collector = new.collector }
+        return result
+    }
+
     /// `profiles` with one member of one game flipped (a game without an entry starts from all on). Every other member
     /// and game is kept: turning `followed` on keeps the roles the game had.
     static func toggled(_ profiles: [String: GameProfile], game: String, member: Member) -> [String: GameProfile] {
@@ -149,26 +159,11 @@ struct GamesSettingsPane: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let library = model.library
-        let ids = Games.all.map(\.id)
-        let profiles = Dictionary(uniqueKeysWithValues: ids.map { ($0, library.profile(game: $0)) })
-        let canChange = Dictionary(uniqueKeysWithValues: ids.map { ($0, library.canSetProfile(game: $0)) })
-        let problems = Dictionary(uniqueKeysWithValues: ids.map { ($0, Self.problem(library, game: $0)) })
+        let profiles = Self.profiles(model.library)
         // Task 5: while the first-run question is due or open, nothing here can change (it would write before "Continue").
         let onboarding = model.onboardingDue
         VStack(alignment: .leading, spacing: Theme.ruleSpacing) {
-            GameProfilesView(
-                profiles: Binding(
-                    get: { profiles },
-                    set: { changed in
-                        // `toggled` changes one game: only that game's profile is written.
-                        for id in ids where changed[id] != profiles[id] {
-                            library.setProfile(changed[id] ?? .all, game: id)
-                        }
-                        model.profilesChanged()
-                    }),
-                rows: ProfileRows.settingsRows(games: Games.all, profiles: profiles, canChange: canChange,
-                                               problems: problems, onboarding: onboarding))
+            GameProfilesView(profiles: Self.binding(model: model, rendered: profiles), rows: Self.rows(model))
             Text(ProfileRows.settingsNote(onboarding: onboarding))
                 .font(Theme.lineFont)
                 .foregroundStyle(Theme.muted)
@@ -183,10 +178,43 @@ struct GamesSettingsPane: View {
         .accessibilityIdentifier("settings-games")
     }
 
-    /// Why the game's profile cannot change: its problem (`problem(game:)`), else no folder, else the folder not read yet
-    /// (the import sheet's sentences).
-    private static func problem(_ library: UserLibrary, game: String) -> String {
-        library.problem(game: game) ?? (library.folder == nil ? ImportModel.noFolder : "Your collection is not read yet.")
+    /// Every game's profile as the library holds it.
+    static func profiles(_ library: UserLibrary) -> [String: GameProfile] {
+        Dictionary(uniqueKeysWithValues: Games.all.map { ($0.id, library.profile(game: $0.id)) })
+    }
+
+    /// The pane's rows from the library and the model (the Settings lock while the first-run question is due).
+    static func rows(_ model: AppModel) -> [ProfileRow] {
+        let library = model.library
+        let ids = Games.all.map(\.id)
+        let canChange = Dictionary(uniqueKeysWithValues: ids.map { ($0, library.canSetProfile(game: $0)) })
+        let problems = Dictionary(uniqueKeysWithValues: ids.map { ($0, Self.problem(library, game: $0)) })
+        return ProfileRows.settingsRows(games: Games.all, profiles: profiles(library), canChange: canChange,
+                                        problems: problems, onboarding: model.onboardingDue)
+    }
+
+    /// The pane's binding over the profiles `rendered` with the view. A toggle (`toggled` flips one member of one game)
+    /// writes only that game, and only the member that differs from the rendered value, onto the library's profile of
+    /// that moment (final fix A4): a second toggle before a re-render does not write the first one back.
+    static func binding(model: AppModel, rendered: [String: GameProfile]) -> Binding<[String: GameProfile]> {
+        let library = model.library
+        return Binding(
+            get: { rendered },
+            set: { changed in
+                for id in Games.all.map(\.id) where changed[id] != rendered[id] {
+                    let current = library.profile(game: id)
+                    library.setProfile(ProfileRows.applying(changed[id] ?? .all, over: rendered[id] ?? .all, onto: current),
+                                       game: id)
+                }
+                model.profilesChanged()
+            })
+    }
+
+    /// Why the game's profile cannot change: its problem (`problem(game:)`), else no folder (the import sheet's
+    /// sentence), else the folder not read yet ("Reading your collection…", the card page's sentence).
+    static func problem(_ library: UserLibrary, game: String) -> String {
+        // B9: a folder not read yet says the app's existing sentence.
+        library.problem(game: game) ?? (library.folder == nil ? ImportModel.noFolder : "Reading your collection…")
     }
 }
 #endif

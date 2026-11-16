@@ -597,10 +597,7 @@ struct DeckLines: View {
                 .accessibilityIdentifier("card-add-to-deck-\(deck.id)")
             }
             if !decks.isEmpty { Divider() }
-            Button("New Deck…") {
-                model.newDeckCard = card
-                model.showsNewDeck = true
-            }
+            Button("New Deck…") { model.openNewDeck(game: gameID, card: card) }
             .accessibilityIdentifier("card-add-to-deck-new")
         }
         .fixedSize()

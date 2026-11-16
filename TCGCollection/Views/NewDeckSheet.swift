@@ -24,7 +24,8 @@ struct NewDeckSheet: View {
     var body: some View {
         let formats = Games.game(gameID)?.formats ?? []
         DeckNameSheet(title: "New Deck", name: $name, identifier: "new-deck", confirm: "Create",
-                      canConfirm: !formats.isEmpty && model.library.canChange(game: gameID)) {
+                      canConfirm: !formats.isEmpty && model.library.canChange(game: gameID)
+                        && model.decksWritable(game: gameID)) {
             if formats.count > 1 {
                 Picker("Format", selection: $format) {
                     ForEach(formats) { format in Text(format.name).tag(format.id) }
@@ -43,7 +44,8 @@ struct NewDeckSheet: View {
         } confirmed: {
             // A card page's "New Deck…": the deck and the card's one copy in one library change (final fix A3).
             let cards = adding.flatMap { card in Games.game(gameID).map { DeckPage.newDeckCards(card, format: format, game: $0) } }
-            guard let id = model.library.addDeck(game: gameID, name: name, format: format, cards: cards ?? []) else { return }
+            // A5, B2: written to the sheet's own game, and only while it is followed with the player role.
+            guard let id = model.addNewDeck(game: gameID, name: name, format: format, cards: cards ?? []) else { return }
             dismiss()
             if adding == nil { model.showRoot(of: .deck(id)) }
         } cancelled: {
@@ -72,7 +74,8 @@ struct RenameDeckSheet: View {
                       canConfirm: !trimmed.isEmpty && model.library.canChange(game: gameID)) {
             EmptyView()
         } confirmed: {
-            guard !trimmed.isEmpty else { return }
+            // B2: nothing while the game is not followed or its player role is off.
+            guard !trimmed.isEmpty, model.decksWritable(game: gameID) else { return }
             model.library.changeDeck(game: gameID, id: deckID) { deck in
                 var deck = deck
                 deck.name = trimmed

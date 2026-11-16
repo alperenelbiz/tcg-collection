@@ -508,6 +508,8 @@ struct DeckView: View {
                                 titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
                     // The Collection first, so the page of the removed deck is never on show.
+                    // B2: nothing while the game is not followed or its player role is off.
+                    guard model.decksWritable(game: gameID) else { return }
                     model.showRoot(of: .collection)
                     library.removeDeck(game: gameID, id: state.deckID)
                 }

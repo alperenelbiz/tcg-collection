@@ -1975,6 +1975,430 @@ struct AppModelTests {
         #expect(FileManager.default.fileExists(atPath: model.paths.sets("riftbound").path))
         #expect(!model.setIndexIsDue("riftbound"))
     }
+
+    // MARK: Phase 4B final fix wave
+
+    /// Riftbound ticked, nothing else: the onboarding draft "Continue" gets in these tests.
+    private static var riftboundOnly: [String: GameProfile] {
+        ProfileRows.toggled(Onboarding.draft(games: Games.all), game: "riftbound", member: .followed)
+    }
+
+    /// A2: the folder goes away before "Continue": the question stays open, the gate stays closed (no catalog request),
+    /// nothing is written, and the sheet says the missing-folder sentence. The folder back and "Continue" again: the four
+    /// files, the question closed, the gate open, the chosen game synced.
+    @MainActor @Test(.timeLimit(.minutes(1))) func continueOnAFolderThatIsGoneKeepsTheQuestionOpen() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-onboarding", "YES", "-game", "riftbound"])
+        let run = Task { await model.start() }
+        try await until { model.onboardingDue }
+        let away = root.appending(path: "away")
+        try FileManager.default.moveItem(at: user, to: away)
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(!model.catalogMayStart)
+        #expect(model.onboardingProblem == "The collection folder is not at \(user.path).")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(await fakeCatalog.groupCalls == 0); #expect(await fakeArchive.calls.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: user.path))
+
+        try FileManager.default.moveItem(at: away, to: user)
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(!model.onboardingDue); #expect(!model.showsOnboarding); #expect(model.catalogMayStart)
+        #expect(model.onboardingProblem == nil)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        await run.value
+        #expect(await fakeCatalog.groupCalls == 1)                           // Riftbound only
+    }
+
+    /// A2: the folder is there but the writes fail (a read-only folder): the question stays open with the first game's
+    /// problem, the gate closed; "Continue" again once the folder can be written writes the four files and closes it.
+    @MainActor @Test(.timeLimit(.minutes(1))) func continueWhoseWritesFailKeepsTheQuestionOpen() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        #expect(model.onboardingDue)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: user.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: user.path) }
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(!model.catalogMayStart)
+        #expect(model.onboardingProblem?.hasPrefix("magic-the-gathering.json could not be saved") == true)
+        #expect(gameFiles(user).isEmpty)
+        #expect(model.statusNotice == nil)                                     // the sheet says it, not the status line
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: user.path)
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(!model.onboardingDue); #expect(model.onboardingProblem == nil)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        #expect(try storedProfile(user, "riftbound") == ["followed": true, "player": true, "collector": true])
+        #expect(try storedProfile(user, "magic-the-gathering") == ["followed": false, "player": true, "collector": true])
+    }
+
+    /// B6: a file that appears during "Continue" (between its read and its write) is not replaced; the question closes (a
+    /// game file was found) and the status line says that game's answer was not saved, without "Do it again.".
+    @MainActor @Test(.timeLimit(.minutes(1))) func aFileThatAppearsDuringContinueIsReadAndSaid() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        model.library.writeDelay = .milliseconds(300)
+        let version = model.library.version
+        let finishing = Task { await model.finishOnboarding(Self.riftboundOnly) }
+        try await until { model.library.version > version }                   // the profiles are set, the writes wait
+        let file = user.appending(path: "cyberpunk.json")
+        try Self.lateFile.write(to: file)
+        await finishing.value
+        await model.library.flush()
+        #expect(try Data(contentsOf: file) == Self.lateFile)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        #expect(!model.onboardingDue); #expect(model.catalogMayStart); #expect(model.onboardingProblem == nil)
+        #expect(model.statusNotice == "Cyberpunk TCG was just read from your folder; your answer for it was not saved.")
+        #expect(model.library.unsavedChangeNotice == nil)
+        #expect(model.library.rows(game: "cyberpunk").map(\.count) == [2])
+    }
+
+    /// A3: an import of two games where one game's file appears before its write: that game's not-saved sentence is said,
+    /// and "Imported: …" only for the game that was written. When no game was written, no "Imported: …" at all.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anImportSaysOnlyTheGamesItWrote() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        await model.start()
+        let row = CollectionRow(productID: 1, finish: "Normal", count: 1, condition: "", name: "A")
+        try Self.lateFile.write(to: user.appending(path: "cyberpunk.json"))       // arrives after the read
+        model.library.replace(game: "riftbound", rows: [row])
+        model.library.replace(game: "cyberpunk", rows: [row])
+        let applied = ImportModel.Applied(gameID: "riftbound", games: ["riftbound", "cyberpunk"], summary: "3 new",
+                                          counts: ["riftbound": .init(new: 2), "cyberpunk": .init(new: 1)])
+        await model.importApplied(applied)
+        #expect(model.statusNotice == UserLibrary.unsavedChangeText("cyberpunk") + " Imported: 2 new")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == UserLibrary.unsavedChangeText("cyberpunk") + " Imported: 2 new")
+        #expect(try Data(contentsOf: user.appending(path: "cyberpunk.json")) == Self.lateFile)
+
+        // Only the game whose file appeared: no "Imported: …".
+        try Self.lateFile.write(to: user.appending(path: "yu-gi-oh.json"))
+        model.library.replace(game: "yu-gi-oh", rows: [row])
+        await model.importApplied(.init(gameID: "yu-gi-oh", games: ["yu-gi-oh"], summary: "1 new"))
+        #expect(model.statusNotice == UserLibrary.unsavedChangeText("yu-gi-oh"))
+    }
+
+    /// A5, B2: New Deck opened from a Magic card page; Magic turned off in Settings while the sheet is open. The model's
+    /// game switch closes the old game's sheets without a write, and the sheet's Create (bound to Magic, its game at
+    /// opening) writes nothing into any file.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameTurnedOffUnderNewDeckWritesNoDeck() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "magic-the-gathering"])
+        await model.start()
+        let card = DeckCardToAdd(cardKey: "lightning bolt", name: "Lightning Bolt", kind: nil)
+        model.openNewDeck(game: "magic-the-gathering", card: card)
+        #expect(model.showsNewDeck); #expect(model.newDeckGame == "magic-the-gathering"); #expect(model.newDeckCard == card)
+        model.pendingPaste = ("Deck", "commander")
+        model.showsSharing = true
+        model.renamingDeck = true
+        model.library.setProfile(GameProfile(followed: false), game: "magic-the-gathering")
+        model.profilesChanged()
+        #expect(model.gameID == "yu-gi-oh")
+        #expect(!model.showsNewDeck); #expect(model.newDeckCard == nil); #expect(model.newDeckGame == nil)
+        #expect(model.pendingPaste == nil); #expect(!model.showsSharing); #expect(!model.renamingDeck)
+        #expect(model.pasting == nil); #expect(!model.showsSheet)
+        #expect(model.addNewDeck(game: "magic-the-gathering", name: "Deck", format: "commander", cards: []) == nil)
+        await model.library.flush()
+        for game in Games.all { #expect(model.library.decks(game: game.id).isEmpty, "\(game.id)") }
+        for name in gameFiles(user) {
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: user.appending(path: name))) as? [String: Any]
+            #expect(object?["decks"] == nil, "\(name)")
+        }
+        // B2: the guard of every deck sheet's write: a followed game with the player role only.
+        #expect(!model.decksWritable(game: "magic-the-gathering"))
+        #expect(model.decksWritable(game: "yu-gi-oh"))
+        model.library.setProfile(GameProfile(player: false), game: "yu-gi-oh")
+        #expect(!model.decksWritable(game: "yu-gi-oh"))
+        #expect(model.addNewDeck(game: "yu-gi-oh", name: "Deck", format: "", cards: []) == nil)
+        #expect(model.addNewDeck(game: "riftbound", name: "Deck", format: "standard", cards: []) != nil)
+    }
+
+    /// A5, B2: a paste sheet read and ready to apply; its game's player role goes off (or the game is turned off): apply
+    /// writes nothing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func thePasteOfAGameTurnedOffWritesNothing() async throws {
+        for profile in [GameProfile(player: false), GameProfile(followed: false)] {
+            let root = tempRoot()
+            let text = root.appending(path: "paste.txt")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("2 Dockside Lock-Up".utf8).write(to: text)
+            let network = CountingFixtures()
+            let model = fixtureModel(root, network, ["-game", "riftbound", "-pasteDeck", text.path])
+            await model.start()
+            let paste = try #require(model.pasting)
+            await paste.read()
+            #expect(paste.canApply, "\(profile)")
+            model.library.setProfile(profile, game: "riftbound")
+            model.profilesChanged()
+            #expect(model.pasting == nil, "\(profile)")
+            #expect(!paste.canApply, "\(profile)"); #expect(paste.apply() == nil, "\(profile)")
+            await model.library.flush()
+            #expect(model.library.decks(game: "riftbound").isEmpty, "\(profile)")
+        }
+    }
+
+    /// A6: the followed games last known are kept (in the root's preferences) and used when the folder cannot tell. With
+    /// Riftbound alone followed, a launch whose folder is missing asks for no other game's set list.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aMissingFolderUsesTheFollowedGamesLastKnown() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        for game in ["magic-the-gathering", "yu-gi-oh", "cyberpunk"] { try writeUserFile(root, game, Self.notFollowed) }
+        let first = fixtureModel(root, CountingFixtures(), ["-game", "riftbound"])
+        await first.start()
+        await first.waitForSetIndexes()
+        #expect(first.followedGames.map(\.id) == ["riftbound"])
+        let network = CountingFixtures()
+        let second = fixtureModel(root, network, ["-game", "riftbound"])
+        try FileManager.default.removeItem(at: user)                           // after the model's init, which makes it
+        #expect(second.followedGames.map(\.id) == ["riftbound"])              // before the read, too
+        await second.start()
+        await second.waitForSetIndexes()
+        #expect(second.library.folderIsMissing)
+        #expect(await network.groups == [89])
+        #expect(second.followedGames.map(\.id) == ["riftbound"])
+    }
+
+    /// A6, the owner's case: no list stored (a first launch of this build): a missing folder counts every game.
+    @MainActor @Test(.timeLimit(.minutes(1))) func withNoListStoredAMissingFolderCountsEveryGame() async throws {
+        let root = tempRoot()
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-game", "riftbound"])
+        try FileManager.default.removeItem(at: AppPaths.userTestRoot(root))
+        await model.start()
+        #expect(model.library.folderIsMissing)
+        #expect(await network.groups == [89, 1, 2, 92])
+        #expect(model.followedGames.map(\.id) == Games.all.map(\.id))
+    }
+
+    /// A6: a folder switch while a sync runs: during the new folder's read the sync's other-games step uses the followed
+    /// games last known, so it starts no step for a game that is off.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aFolderSwitchDuringASyncStartsNoStepForAGameThatIsOff() async throws {
+        let root = tempRoot()
+        let first = root.appending(path: "icloud").appending(path: "TCG Collection")
+        let second = root.appending(path: "second")
+        for folder in [first, second] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(Self.notFollowed.utf8).write(to: folder.appending(path: "yu-gi-oh.json"))
+        }
+        let network = CountingFixtures(), archive = GatedArchive()
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-askUserFolder", "YES", "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: archive, fetcher: network, now: { Self.day1 })
+        let run = Task { await model.start() }
+        try await Task.sleep(for: .milliseconds(100))
+        try await model.useICloudDrive()
+        while await !archive.called { try await Task.sleep(for: .milliseconds(2)) }
+        let gate = ReadGate()
+        model.library.beforeRead = { await gate.pass($0) }
+        let switching = Task { try await model.useFolder(second) }
+        try await gate.waitUntilHolding()
+        #expect(!model.library.isLoaded)
+        #expect(model.followedGames.map(\.id) == ["magic-the-gathering", "riftbound", "cyberpunk"])
+        await archive.release()
+        try await until { model.catalogSettled(game: "riftbound") && !model.isFollowed("yu-gi-oh") }
+        while await network.groups.count < 2 { try await Task.sleep(for: .milliseconds(2)) }
+        gate.open()
+        try await switching.value
+        await run.value
+        #expect(await !network.groups.contains(2))
+    }
+
+    /// A7: Yu-Gi-Oh! turned on gets its picture index (one request), under that step's own once-a-day rule: a second
+    /// toggle on the same day asks for nothing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func yugiohTurnedOnGetsItsPictureIndexOncePerDay() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-game", "riftbound"])
+        await model.start()
+        #expect(await network.fetches.isEmpty)
+        model.library.setProfile(.all, game: "yu-gi-oh")
+        model.profilesChanged()
+        await model.waitForProfileWork()
+        #expect(await network.fetches == ["cardinfo.php"])
+        #expect(model.ygoIndex != nil)
+        model.library.setProfile(GameProfile(followed: false), game: "yu-gi-oh"); model.profilesChanged()
+        await model.waitForProfileWork()
+        model.library.setProfile(.all, game: "yu-gi-oh"); model.profilesChanged()
+        await model.waitForProfileWork()
+        #expect(await network.fetches == ["cardinfo.php"])
+    }
+
+    /// A9: a Settings toggle whose write fails is said once in the status line, also for a game just turned off.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aFailedProfileWriteIsSaidInTheStatusLine() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        try writeUserFile(root, "riftbound", #"{"version":1,"collection":[]}"#)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "cyberpunk"])
+        await model.start()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: user.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: user.path) }
+        model.library.setProfile(GameProfile(followed: false), game: "riftbound")
+        model.profilesChanged()
+        await model.library.flush()
+        let problem = try #require(model.library.problem(game: "riftbound"))
+        try await until { model.statusNotice == "The change was not saved: \(problem)" }
+        #expect(model.library.unsavedProfileNotice == nil)
+    }
+
+    /// B1: a sharing notice waiting behind another notice is dropped when the player role goes off; the base stays.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aWaitingSharingNoticeIsDroppedWhenThePlayerRoleGoesOff() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-game", "riftbound"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        model.pendingCountChanged(0, game: "riftbound")
+        model.pdfEnded("Another notice.")
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == "Another notice.")
+        model.library.setProfile(GameProfile(player: false), game: "riftbound")
+        model.profilesChanged()
+        try await until { model.statusNotice == nil }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == nil)
+        // The base stays: the same count again says nothing.
+        model.library.setProfile(.all, game: "riftbound"); model.profilesChanged()
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == nil)
+    }
+
+    /// B4: a game turned on after the launch's price step failed: its step does not replace that failure.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aTurnOnStepKeepsTheLaunchsFailure() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "cyberpunk", Self.notFollowed)
+        let model = model(["app", "-store", root.path, "-game", "riftbound"], now: { Self.day2 })
+        await model.start()
+        guard case .failed(let failure) = model.status else { Issue.record("\(model.status)"); return }
+        #expect(failure.contains("Prices:"))
+        model.library.setProfile(.all, game: "cyberpunk"); model.profilesChanged()
+        await model.waitForProfileWork()
+        #expect(model.status == .failed(failure))
+        #expect(model.catalogSettled(game: "cyberpunk"))
+    }
+
+    /// B5: offline, on a new folder, the launch's local scans wait for the answer; "Continue" runs them for the games
+    /// chosen (the filter lists and the set index of Riftbound), not for a game not chosen.
+    @MainActor @Test(.timeLimit(.minutes(1))) func continueRunsTheLocalScansAnOfflineLaunchLeftOut() async throws {
+        let root = tempRoot()
+        let filling = fixtureModel(root, CountingFixtures(), ["-game", "riftbound"])
+        await filling.start()
+        await filling.waitForSetIndexes()
+        let paths = AppPaths(root: root)
+        for game in ["riftbound", "magic-the-gathering"] {
+            try FileManager.default.removeItem(at: paths.facets(game))
+            try FileManager.default.removeItem(at: paths.sets(game))
+        }
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        #expect(model.onboardingDue)
+        await model.finishOnboarding(Self.riftboundOnly)
+        await model.waitForProfileWork(); await model.waitForSetIndexes()
+        #expect(FileManager.default.fileExists(atPath: paths.facets("riftbound").path))
+        #expect(FileManager.default.fileExists(atPath: paths.sets("riftbound").path))
+        #expect(!FileManager.default.fileExists(atPath: paths.facets("magic-the-gathering").path))
+        #expect(!FileManager.default.fileExists(atPath: paths.sets("magic-the-gathering").path))
+    }
+
+    /// C: a game turned on while the launch's sync runs, before its other-games step: that step takes it (one set-list
+    /// request), and it is settled at the end.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameTurnedOnBeforeTheOtherGamesStepIsSyncedOnce() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "cyberpunk", Self.notFollowed)
+        let network = CountingFixtures(), archive = GatedArchive()
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: archive, fetcher: network, now: { Self.day1 })
+        let run = Task { await model.start() }
+        while await !archive.called { try await Task.sleep(for: .milliseconds(2)) }
+        model.library.setProfile(.all, game: "cyberpunk"); model.profilesChanged()
+        #expect(!model.catalogSettled(game: "cyberpunk"))
+        await archive.release()
+        await run.value
+        await model.waitForProfileWork()
+        #expect(await network.groups.filter { $0 == 92 }.count == 1)
+        #expect(Games.all.allSatisfy { model.catalogSettled(game: $0.id) })
+    }
+
+    /// C: a game turned on after the other-games step began: the sync's end runs its step (one set-list request), and it
+    /// is settled at the end.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameTurnedOnDuringTheOtherGamesStepIsSyncedOnce() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "cyberpunk", Self.notFollowed)
+        let network = GatedGroups(category: 1)
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: network, fetcher: network, now: { Self.day1 })
+        let run = Task { await model.start() }
+        while await !network.held { try await Task.sleep(for: .milliseconds(2)) }
+        model.library.setProfile(.all, game: "cyberpunk"); model.profilesChanged()
+        await network.release()
+        await run.value
+        await model.waitForProfileWork()
+        #expect(await network.groups.filter { $0 == 92 }.count == 1)
+        #expect(Games.all.allSatisfy { model.catalogSettled(game: $0.id) })
+    }
+
+    /// C: a game turned on while the catalog waits for the next UTC day, and one turned on offline: no set-list request,
+    /// settled at once.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameTurnedOnWhileHeldOrOfflineAsksForNothing() async throws {
+        let held = tempRoot()
+        try preferences(held).set("2026-01-03", forKey: "lastCatalogFetchDay")
+        try writeUserFile(held, "cyberpunk", Self.notFollowed)
+        let network = CountingFixtures()
+        let waiting = fixtureModel(held, network, ["-game", "riftbound"])
+        await waiting.start()
+        #expect(waiting.catalogWaits)
+        waiting.library.setProfile(.all, game: "cyberpunk"); waiting.profilesChanged()
+        await waiting.waitForProfileWork()
+        #expect(await network.groups.isEmpty)
+        #expect(waiting.catalogSettled(game: "cyberpunk"))
+
+        let offline = tempRoot()
+        try writeUserFile(offline, "cyberpunk", Self.notFollowed)
+        let other = CountingFixtures()
+        let model = fixtureModel(offline, other, ["-game", "riftbound", "-offline", "YES"])
+        await model.start()
+        model.library.setProfile(.all, game: "cyberpunk"); model.profilesChanged()
+        await model.waitForProfileWork()
+        #expect(await other.groups.isEmpty)
+        #expect(model.catalogSettled(game: "cyberpunk"))
+    }
+
+    /// G3 at the model's level (final fix C): every game `followed: false` in the files shows every game.
+    @MainActor @Test func noGameFollowedShowsEveryGame() async throws {
+        let root = tempRoot()
+        for game in Games.all { try writeUserFile(root, game.id, Self.notFollowed) }
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "cyberpunk"])
+        await model.start()
+        #expect(model.followedGames.map(\.id) == Games.all.map(\.id))
+        #expect(model.gameID == "cyberpunk")
+    }
+}
+
+/// The fixture network (every game), counting set lists, whose first set-list request of `category` waits until
+/// `release()`: a test can act while a catalog step of the other games runs.
+private actor GatedGroups: TCGCSVFetching, ArchiveFetching, DataFetching {
+    private let inner = CountingFixtures()
+    private let category: Int
+    private(set) var held = false
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    init(category: Int) { self.category = category }
+
+    var groups: [Int] { get async { await inner.groups } }
+
+    func groups(category: Int) async throws -> Data {
+        if category == self.category, !released, !held {
+            held = true
+            await withCheckedContinuation { waiting = $0 }
+        }
+        return try await inner.groups(category: category)
+    }
+
+    func products(category: Int, group: Int) async throws -> Data { try await inner.products(category: category, group: group) }
+    func download(day: String, to file: URL) async throws -> Bool { try await inner.download(day: day, to: file) }
+    func data(from url: URL) async throws -> (Data, Int) { try await inner.data(from: url) }
+
+    func release() {
+        released = true
+        waiting?.resume()
+        waiting = nil
+    }
 }
 
 /// The fixture network (every game) with its requests counted: set lists and sets by category, archives by day, other

@@ -74,4 +74,71 @@ struct GameProfilesViewTests {
         #expect(ProfileRows.toggled(start, game: "yu-gi-oh", member: .followed)
                 == ["yu-gi-oh": GameProfile(followed: true, player: false, collector: true)])
     }
+
+    /// G3 at the Settings rows' level (final fix C): every game `followed: false` (every game then counts as followed):
+    /// no game is the last followed one, every game's box can be ticked, and every role is off until its game is.
+    @Test func noGameFollowedLeavesEveryRowOpen() {
+        let none = Dictionary(uniqueKeysWithValues: ids.map { ($0, off) })
+        let made = rows(none)
+        #expect(made.allSatisfy { $0.canFollow && !$0.canChooseRoles && !$0.profile.followed })
+    }
 }
+
+/// The Settings pane on a real library and model (final fix A4, B9, C).
+#if os(macOS)
+@MainActor
+struct GamesSettingsPaneTests {
+    private func model(_ root: URL) -> AppModel {
+        AppModel(options: .init(arguments: ["app", "-store", root.path, "-offline", "YES"]), catalogClient: NoNetwork(),
+                 archiveClient: NoNetwork(), fetcher: NoNetwork())
+    }
+
+    /// A4: two toggles on one binding made at one render (Player off, then Collector off, before a re-render): both are
+    /// written; the second does not write the first one back.
+    @Test func twoTogglesOnAStaleBindingBothCount() async throws {
+        let model = model(tempRoot())
+        await model.start()
+        let rendered = GamesSettingsPane.profiles(model.library)
+        let binding = GamesSettingsPane.binding(model: model, rendered: rendered)
+        binding.wrappedValue = ProfileRows.toggled(rendered, game: "riftbound", member: .player)
+        binding.wrappedValue = ProfileRows.toggled(rendered, game: "riftbound", member: .collector)
+        #expect(model.library.profile(game: "riftbound") == GameProfile(followed: true, player: false, collector: false))
+        await model.library.flush()
+        let stored = try GameUserFile(data: Data(contentsOf: try #require(model.library.folder).appending(path: "riftbound.json")))
+        #expect(stored.profile == GameProfile(followed: true, player: false, collector: false))
+    }
+
+    /// B9: a folder not read yet says the app's existing sentence.
+    @Test func aFolderNotReadYetSaysReadingYourCollection() {
+        let library = UserLibrary(folder: tempDir(), watcher: nil)
+        #expect(GamesSettingsPane.problem(library, game: "riftbound") == "Reading your collection…")
+        let none = UserLibrary(folder: nil, watcher: nil)
+        #expect(GamesSettingsPane.problem(none, game: "riftbound") == ImportModel.noFolder)
+    }
+
+    /// C: the row of a game whose file is an iCloud placeholder (not downloaded): its sentence, every box off.
+    @Test func aPlaceholdersRowSaysWhyAndIsOff() async throws {
+        let root = tempRoot()
+        let user = AppPaths.userTestRoot(root)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data().write(to: user.appending(path: ".cyberpunk.json.icloud"))
+        let model = model(root)
+        await model.start()
+        let row = try #require(GamesSettingsPane.rows(model).first { $0.gameID == "cyberpunk" })
+        #expect(!row.canFollow); #expect(!row.canChooseRoles)
+        #expect(row.problem == "cyberpunk.json is not downloaded from iCloud yet.")
+    }
+
+    /// C: a profile changed by a reload (another device) while the pane shows: its rows follow.
+    @Test func theRowsFollowAReload() async throws {
+        let root = tempRoot()
+        let model = model(root)
+        await model.start()
+        #expect(GamesSettingsPane.rows(model).first { $0.gameID == "riftbound" }?.profile == .all)
+        let file = try #require(model.library.folder).appending(path: "riftbound.json")
+        try Data(#"{"version":1,"collection":[],"profile":{"collector":false}}"#.utf8).write(to: file)
+        await model.library.fileChanged(file)?.value
+        #expect(GamesSettingsPane.rows(model).first { $0.gameID == "riftbound" }?.profile == GameProfile(collector: false))
+    }
+}
+#endif

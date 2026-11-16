@@ -54,6 +54,43 @@ final class ImportModel: Identifiable {
         let gameID: String
         let games: [String]
         let summary: String
+        /// Each written game's counts (final fix A3), so the summary of only some of the games can be said.
+        var counts: [String: Counts] = [:]
+
+        /// The summary of the games of `written` only: `summary` when that is every game written (or no counts are
+        /// known), else the counts of those games summed (`summaryText`).
+        func summary(of written: [String]) -> String {
+            guard Set(written) != Set(games), !counts.isEmpty else { return summary }
+            let total = written.reduce(into: Counts()) { total, game in
+                let one = counts[game] ?? Counts()
+                total.new += one.new; total.changed += one.changed; total.missing += one.missing; total.removed += one.removed
+            }
+            return ImportModel.summaryText(total) ?? summary
+        }
+    }
+
+    /// One game's part of an import: new and changed printings, rows not in the file and how many of them are removed.
+    nonisolated struct Counts: Equatable, Sendable {
+        var new = 0, changed = 0, missing = 0, removed = 0
+    }
+
+    /// "12 new, 3 changed, 2 not in the file (kept)" for `counts`; nil when it has nothing.
+    nonisolated static func summaryText(_ counts: Counts) -> String? {
+        var parts: [String] = []
+        if counts.new > 0 { parts.append("\(counts.new) new") }
+        if counts.changed > 0 { parts.append("\(counts.changed) changed") }
+        if counts.missing > 0 {
+            let kept = counts.missing - counts.removed
+            let choice = counts.removed == 0 ? "kept" : kept == 0 ? "removed" : "\(counts.removed) removed, \(kept) kept"
+            parts.append("\(counts.missing) not in the file (\(choice))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// One comparison's counts, with the Remove choices of this moment.
+    private func counts(_ comparison: ImportComparison) -> Counts {
+        Counts(new: comparison.new.count, changed: comparison.changed.count, missing: comparison.missing.count,
+               removed: comparison.missing.filter { remove.contains($0.key) }.count)
     }
 
     nonisolated static let notAnExport = "This is not a TCGplayer collection export."
@@ -108,6 +145,8 @@ final class ImportModel: Identifiable {
     /// The collection holds a product of a game of the file that the last lookup did not read (a row added elsewhere):
     /// the comparison is not trusted, and Import is off, until a full `prepare` (`needsPrepare`) has read it.
     private(set) var lookupIsStale = false
+    /// The followed games when `comparisons` were made (B3): a game turned on or off since makes a `prepare` due.
+    @ObservationIgnored private var followedAtCompare: Set<String> = []
     /// `library.version` when `comparisons` were made.
     @ObservationIgnored private var comparedVersion: Int?
     /// Each `prepare` takes the next number; only the latest one stores what it made.
@@ -196,6 +235,7 @@ final class ImportModel: Identifiable {
         products = found
         setNames = names
         catalogAtCompare = catalogs
+        followedAtCompare = Set(library.followedGames)
         lookedUp = queried
         let (made, otherGames) = compare(file.lines)
         comparisons = made
@@ -239,12 +279,15 @@ final class ImportModel: Identifiable {
 
     /// True when the sheet must run `prepare` again (it does when this turns true): a game whose comparison was made while
     /// its catalog downloaded is settled now, or the collection holds a product the last lookup did not read
-    /// (`lookupIsStale`). Not while a `prepare` runs. A first `prepare` on a settled catalog leaves nothing due. A game
+    /// (`lookupIsStale`), or a game of the file was turned on or off since the comparison (B3). Not while a `prepare` runs. A first `prepare` on a settled catalog leaves nothing due. A game
     /// recorded as `.empty` (settled, no products) is not due: its `prepare` would record the same and run again forever;
     /// the sheet tells the user to import the file again.
     var needsPrepare: Bool {
         guard !isPreparing, state == .ready else { return false }
+        let followed = Set(library.followedGames)
         return lookupIsStale || comparisons.contains { catalogAtCompare[$0.gameID] == .downloading && catalogSettled($0.gameID) }
+            // B3 (final fix): a game of the file turned on or off since the comparison (Settings, another device).
+            || comparisons.contains { followed.contains($0.gameID) != followedAtCompare.contains($0.gameID) }
     }
 
     private var missingKeys: Set<PrintingKey> { Set(comparisons.flatMap { $0.missing.map(\.key) }) }
@@ -290,19 +333,12 @@ final class ImportModel: Identifiable {
         guard !comparisons.isEmpty else { return Self.noGame }
         let shown = importable
         guard !shown.isEmpty else { return Self.nothingImportable }
-        let new = shown.reduce(0) { $0 + $1.new.count }, changed = shown.reduce(0) { $0 + $1.changed.count }
-        let missing = shown.flatMap(\.missing)
-        var parts: [String] = []
-        if new > 0 { parts.append("\(new) new") }
-        if changed > 0 { parts.append("\(changed) changed") }
-        if !missing.isEmpty {
-            let removed = missing.filter { remove.contains($0.key) }.count, kept = missing.count - removed
-            let choice = removed == 0 ? "kept" : kept == 0 ? "removed" : "\(removed) removed, \(kept) kept"
-            parts.append("\(missing.count) not in the file (\(choice))")
+        let total = shown.map(counts).reduce(into: Counts()) { total, one in
+            total.new += one.new; total.changed += one.changed; total.missing += one.missing; total.removed += one.removed
         }
-        if parts.isEmpty { return Self.matches }
+        guard let text = Self.summaryText(total) else { return Self.matches }
         // Only kept rows: Import would write nothing, so it is not offered until a row is set to Remove.
-        return writes ? parts.joined(separator: ", ") : Self.nothingToImport
+        return writes ? text : Self.nothingToImport
     }
 
     /// "Not imported": what the parse skipped, other games, and every line not recognised, by line. The lines
@@ -380,7 +416,8 @@ final class ImportModel: Identifiable {
         let games = importable
         let changed = games.filter(writes).map(\.gameID)
         guard let first = changed.first else { return nil }
-        let applied = Applied(gameID: first, games: changed, summary: summary)
+        let written = Dictionary(uniqueKeysWithValues: games.filter { changed.contains($0.gameID) }.map { ($0.gameID, counts($0)) })
+        let applied = Applied(gameID: first, games: changed, summary: summary, counts: written)
         for comparison in games {
             let rows = library.rows(game: comparison.gameID)
             library.replace(game: comparison.gameID, rows: CollectionImport.apply(comparison, to: rows, remove: remove))

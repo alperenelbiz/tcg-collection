@@ -101,7 +101,8 @@ struct SharingSheet: View {
                     .accessibilityIdentifier("sharing-cancel")
                 Spacer()
                 Button("Done") {
-                    model.library.setShared(choices.answers, game: gameID)
+                    // B2: nothing while the game is not followed or its player role is off.
+                    if model.decksWritable(game: gameID) { model.library.setShared(choices.answers, game: gameID) }
                     model.showsSharing = false
                 }
                 .sheetDefaultButton()

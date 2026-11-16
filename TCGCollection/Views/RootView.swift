@@ -103,11 +103,12 @@ struct RootView: View {
         }
         // "Paste a deck…" of this sheet opens the paste sheet once this one has closed.
         .sheet(isPresented: $model.showsNewDeck, onDismiss: {
-            model.newDeckCard = nil
+            model.newDeckClosed()
             model.openPendingPaste()
         }) {
-            NewDeckSheet(gameID: model.gameID, deckNames: model.library.decks(game: model.gameID).map(\.name),
-                         adding: model.newDeckCard)
+            // A5: the sheet's game is the one it was opened for, not the game on screen of a later render.
+            let game = model.newDeckGame ?? model.gameID
+            NewDeckSheet(gameID: game, deckNames: model.library.decks(game: game).map(\.name), adding: model.newDeckCard)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }
@@ -235,7 +236,11 @@ private struct Sidebar: View {
         let profile = model.profile(of: model.gameID)
         return List(selection: $selection) {
             // G4: the followed games only, in the games' order.
-            Picker("Game", selection: $model.gameID) {
+            // B8: the selection shown is always one of the items: when the game on screen stops being followed, the first
+            // followed game, in this render (the model's own switch follows).
+            Picker("Game", selection: Binding(
+                get: { GameSelection.shown(asked: model.gameID, followed: model.followedGames.map(\.id)) },
+                set: { model.gameID = $0 })) {
                 ForEach(model.followedGames) { game in
                     Text(game.name).tag(game.id)
                 }
@@ -363,7 +368,7 @@ private struct SidebarDecks: View {
                     .foregroundStyle(Theme.muted)
                     .accessibilityIdentifier("sidebar-decks-unreadable")
             }
-            Button { model.showsNewDeck = true } label: {
+            Button { model.openNewDeck(game: game) } label: {
                 SidebarRow(title: "New Deck…", icon: "plus", selected: false, muted: true)
             }
             .buttonStyle(.plain)

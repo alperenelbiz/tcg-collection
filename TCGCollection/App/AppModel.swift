@@ -237,6 +237,15 @@ final class AppModel {
     @ObservationIgnored private var folderAfterOnboarding = false
     /// True while "Continue" writes the profiles: a second click does nothing.
     private(set) var finishingOnboarding = false
+    /// Final fix A2: why the last "Continue" could not finish (the folder is missing or not read, a write failed); the
+    /// sheet shows it under its table and stays open, the gate stays closed. Nil otherwise.
+    private(set) var onboardingProblem: String?
+    /// The games whose file this question's "Continue" wrote: a later "Continue" (after a failed write) does not take
+    /// them for a game file found in the folder.
+    @ObservationIgnored private var onboardingWrote: Set<String> = []
+    /// B5: the launch's local scans (filter lists, set indexes) ran while the question was due (offline, or with a store
+    /// in memory: the launch does not wait for the gate): they run for the chosen games when the question closes.
+    @ObservationIgnored private var scansWaitForAnswer = false
     /// "Import CSV…" asked for the system's file panel (`chooseCSVFile`).
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
@@ -246,6 +255,9 @@ final class AppModel {
     /// "New Deck…" of a card page's "Add to deck": the card the new deck gets one copy of after Create. Nil when the
     /// sidebar opened the sheet; cleared when the sheet closes.
     var newDeckCard: DeckCardToAdd?
+    /// The game the New Deck sheet was opened for (`openNewDeck`): it writes to that game or not at all (final fix A5).
+    /// Nil while the sheet is closed.
+    private(set) var newDeckGame: String?
     /// A deck page's Rename sheet is open (`RenameDeckSheet` sets it while it shows).
     var renamingDeck = false
     /// The paste the paste sheet shows (`PasteDeckSheet`); nil while no paste sheet is open.
@@ -313,6 +325,10 @@ final class AppModel {
     private nonisolated static let lastFetchDayKey = "lastCatalogFetchDay"
     /// The UTC day of the last `cardinfo.php` request, made or failed: a failed refresh is not tried again that day.
     private nonisolated static let lastYGOIndexAttemptDayKey = "lastYGOIndexAttemptDay"
+    /// Final fix A6: the ids of the followed games last known from the folder (`rememberFollowedGames`).
+    private nonisolated static let followedGamesKey = "followedGames"
+    /// The stored `followedGamesKey`, read once at launch; nil when none is stored.
+    @ObservationIgnored private var knownFollowed: [String]?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
@@ -384,6 +400,7 @@ final class AppModel {
         priceSync = PriceSync(paths: paths, client: archiveClient)
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
+        knownFollowed = defaults.stringArray(forKey: Self.followedGamesKey)
         for game in Games.all {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
         }
@@ -418,8 +435,26 @@ final class AppModel {
     /// its folder; every game before that (and while the folder is missing or switched), so nothing changes at launch for
     /// a folder whose games are all followed (A30). Observed: the game picker lists them.
     var followedGames: [GameDefinition] {
-        guard library.isLoaded else { return Games.all }
+        guard library.isLoaded, !library.folderIsMissing else { return lastKnownFollowed }
         return library.followedGames.compactMap { Games.game($0) }
+    }
+
+    /// Final fix A6: the followed games last known (`knownFollowed`), for the times the folder cannot tell (before its
+    /// read, during a folder switch, a missing folder, a run with no folder); every game when none is stored (a first
+    /// launch of this build: A30).
+    private var lastKnownFollowed: [GameDefinition] {
+        let known = (knownFollowed ?? []).compactMap { Games.game($0) }
+        return known.isEmpty ? Games.all : Games.all.filter { game in known.contains { $0.id == game.id } }
+    }
+
+    /// Keeps the followed games in the preferences (`followedGamesKey`) whenever the library knows them: read, the folder
+    /// there, the first-run question not due (a new folder only seems to follow every game).
+    private func rememberFollowedGames() {
+        guard library.isLoaded, !library.folderIsMissing, !onboardingDue else { return }
+        let ids = library.followedGames
+        guard ids != knownFollowed else { return }
+        knownFollowed = ids
+        defaults.set(ids, forKey: Self.followedGamesKey)
     }
 
     func isFollowed(_ gameID: String) -> Bool { followedGames.contains { $0.id == gameID } }
@@ -460,12 +495,9 @@ final class AppModel {
         let shown = GameSections.screen(screen, profile: profile, deckExists: { _ in true })
         if shown != screen { showRoot(of: shown) }
         if !GameSections.showsDecks(profile) {
-            if showsSharing { showsSharing = false }
-            if let paste = pasting, paste.gameID == gameID { pasting = nil }
-            if showsNewDeck { showsNewDeck = false }
-            if newDeckCard != nil { newDeckCard = nil }
-            pendingPaste = nil
-            if renamingDeck { renamingDeck = false }
+            closeDeckSheets()
+            // B1: a sharing notice waiting behind another notice is not said without the role; the base stays.
+            pendingHeld = nil
         }
         // While the first-run question is due nothing is asked for: the roles before it stay the base (fix round 1 (e)).
         guard !onboardingDue else { return }
@@ -499,6 +531,18 @@ final class AppModel {
     /// True once the launch's sync has begun: before it, a game turned on is covered by that sync.
     @ObservationIgnored private var syncBegan = false
 
+    /// The sheets that belong to one game's decks close without writing (A5, G7): the sharing sheet, the paste sheet, New
+    /// Deck (and the paste it asked for), Rename Deck.
+    private func closeDeckSheets() {
+        if showsSharing { showsSharing = false }
+        if pasting != nil { pasting = nil }
+        if showsNewDeck { showsNewDeck = false }
+        if newDeckCard != nil { newDeckCard = nil }
+        if newDeckGame != nil { newDeckGame = nil }
+        pendingPaste = nil
+        if renamingDeck { renamingDeck = false }
+    }
+
     /// Applies a profile change (the library's version moved; the model observes it, `watchProfiles`, and Settings or
     /// onboarding may call it too: a second call with nothing new does nothing).
     /// - G4: when the game on screen is not followed, the first followed game is shown, on its Collection (a switch made by
@@ -509,10 +553,13 @@ final class AppModel {
     /// Nothing happens before the library has read its folder.
     func profilesChanged() {
         guard library.isLoaded else { return }
+        rememberFollowedGames()
         let followed = followedGames.map(\.id)
         if !followed.contains(gameID) {
             gameID = GameSelection.shown(asked: gameID, followed: followed)
             showRoot(of: .collection)
+            // A5: the old game's sheets close without writing; none is rebuilt for the new game.
+            closeDeckSheets()
         }
         applyRoles()
         // Fix round 1 (e): while the first-run question is due no game is "turned on" (the folder only seems to follow
@@ -578,22 +625,41 @@ final class AppModel {
                 continue
             }
             isRunning = true
+            // B4: a failure in the status line (the launch's price step or picture index) stays said.
+            let earlier: String? = if case .failed(let text) = status { text } else { nil }
             let now = self.now()
             let held = await catalogHeld(now: now)
             catalogWaits = held
+            // A7: Yu-Gi-Oh! turned on gets its picture index under that step's own once-a-day rule, after its catalog
+            // step (none while held: the step keeps its own rules, as in a held sync).
+            let indexGames = games.filter { $0.pictures == .ygoprodeck }
             if held {
                 catalogPending.subtract(ids)
+                let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: 0, now: now)
                 isRunning = false
-                status = .idle(StatusText.resetWaits)
+                if let earlier {
+                    status = .failed(([earlier] + [indexFailure].compactMap { $0 }).joined(separator: " · "))
+                } else {
+                    status = indexFailure.map { .failed(StatusText.resetWaits + " · " + $0) } ?? .idle(StatusText.resetWaits)
+                }
                 continue
             }
             catalogPending.formUnion(ids)
             let result = await syncCatalog(of: games, now: now, rebuild: false)
             catalogPending.subtract(ids)
+            let newSets = indexGames.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
+            let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: newSets, now: now)
             isRunning = false
             let pending = await rulesPendingCount(now: now)
             let done = StatusText.done(result: result, priceDay: prices.day(game: gameID), rulesPending: pending)
-            status = result.failedSetLists > 0 ? .failed(done) : .idle(done)
+            let failures = [earlier, indexFailure].compactMap { $0 }
+            if result.failedSetLists > 0 {
+                status = .failed(([done] + failures).joined(separator: " · "))
+            } else if !failures.isEmpty {
+                status = .failed(failures.joined(separator: " · "))
+            } else {
+                status = .idle(done)
+            }
         }
     }
 
@@ -773,6 +839,7 @@ final class AppModel {
         // In the same main-actor turn as the end of the read (no suspension since `isLoaded` was set): the gate never sees
         // the new folder read without its decision.
         decideOnboarding()
+        rememberFollowedGames()
     }
 
     // MARK: Onboarding (G11)
@@ -788,6 +855,8 @@ final class AppModel {
                                    asked: options.onboarding)
         onboardingDue = due
         showsOnboarding = due && !folderSheetUp
+        onboardingProblem = nil
+        onboardingWrote = []
     }
 
     /// The folder sheet is on screen or asked for: the onboarding sheet waits.
@@ -829,18 +898,45 @@ final class AppModel {
         // means the folder is not new: nothing is written, the question closes.
         await library.readAgain()
         guard onboardingDue else { return }
-        if library.hasGameFile || !library.isLoaded || library.folderIsMissing {
+        // A game file this question did not write: the folder is not new (fix round 1 (b)).
+        if Games.all.contains(where: { library.hasFile(game: $0.id) && !onboardingWrote.contains($0.id) }) {
             closeOnboarding()
+            return
+        }
+        // Final fix A2: a folder that cannot be read or written keeps the question open, with its problem, the gate closed.
+        guard library.isLoaded, !library.folderIsMissing else {
+            onboardingProblem = library.problem ?? "Reading your collection…"
             return
         }
         for game in Games.all {
             library.setProfile(Onboarding.written(draft[game.id]), game: game.id, writesKey: true)
         }
         await library.flush()
+        guard onboardingDue else { return }
+        // The sheet says a failed write itself (below); the status line does not say it a second time.
+        library.clearUnsavedProfileNotice()
+        // B6: a file that appeared between the read and the write was read, not replaced: the folder has a game file.
+        let appeared = library.unsavedChangeGames
+        if !appeared.isEmpty {
+            library.clearUnsavedChangeNotice()
+            say(appeared.map(Self.answerNotSaved).joined(separator: " "))
+        }
+        onboardingWrote.formUnion(Games.all.map(\.id).filter {
+            library.hasFile(game: $0) && library.problem(game: $0) == nil && !appeared.contains($0)
+        })
+        if appeared.isEmpty, let problem = Games.all.lazy.compactMap({ self.library.problem(game: $0.id) }).first {
+            onboardingProblem = problem
+            return
+        }
         let followed = followedGames.map(\.id)
         if let first = followed.first { gameID = first }
         showRoot(of: .collection)
         closeOnboarding()
+    }
+
+    /// B6: what the status line says for a game whose file appeared during "Continue" (there is nothing to do again).
+    nonisolated static func answerNotSaved(_ game: String) -> String {
+        "\(Games.game(game)?.name ?? game) was just read from your folder; your answer for it was not saved."
     }
 
     /// The question ends ("Continue", or a game file found meanwhile): the sheet closes, the gate opens, and the profiles
@@ -848,7 +944,18 @@ final class AppModel {
     private func closeOnboarding() {
         showsOnboarding = false
         onboardingDue = false
+        onboardingProblem = nil
+        onboardingWrote = []
         profilesChanged()
+        // B5: the local scans an offline (or store-failure) launch left out while the question was due.
+        guard scansWaitForAnswer else { return }
+        scansWaitForAnswer = false
+        let previous = profileWork
+        profileWork = Task { [weak self] in
+            await previous?.value
+            await self?.writeMissingFacetLists()
+            self?.requestMissingSetIndexes()
+        }
     }
 
     /// Fix round 1 (a): while the question is due, a read that finds a game file (a reload, the watcher, the folder coming
@@ -937,13 +1044,22 @@ final class AppModel {
         await library.flush()
         // A later import (its own wait) says its own result.
         guard number == appliedImports else { return }
-        if let problem = applied.games.lazy.compactMap({ self.library.problem(game: $0) }).first {
-            say(problem)
+        // Final fix A3: a game whose file appeared before its write was not written: its not-saved sentence, and
+        // "Imported: …" only for the games written (none: not at all).
+        let appeared = library.unsavedChangeGames
+        if !appeared.isEmpty { library.clearUnsavedChangeNotice() }
+        var parts = appeared.map(UserLibrary.unsavedChangeText)
+        let written = applied.games.filter { !appeared.contains($0) }
+        if let problem = written.lazy.compactMap({ self.library.problem(game: $0) }).first {
+            say((parts + [problem]).joined(separator: " "))
             return
         }
-        let sale = library.saleNotice
-        library.clearSaleNotice()
-        say("Imported: \(applied.summary)" + (sale.map { ". \($0)" } ?? ""))
+        if !written.isEmpty {
+            let sale = library.saleNotice
+            library.clearSaleNotice()
+            parts.append("Imported: \(applied.summary(of: written))" + (sale.map { ". \($0)" } ?? ""))
+        }
+        if !parts.isEmpty { say(parts.joined(separator: " ")) }
     }
 
     // MARK: Pasting a deck
@@ -960,6 +1076,33 @@ final class AppModel {
                                  ygoType: { [weak self] name in game?.pictures == .ygoprodeck ? self?.ygoType(cardName: name) : nil },
                                  names: pasteNames,
                                  catalogVersion: { [weak self] in self?.catalogVersion ?? 0 })
+    }
+
+    /// "New Deck…" (the sidebar; a card page's "Add to deck" with its `card`): the sheet, bound to `game` (A5).
+    func openNewDeck(game: String, card: DeckCardToAdd? = nil) {
+        newDeckGame = game
+        newDeckCard = card
+        showsNewDeck = true
+    }
+
+    /// The New Deck sheet has gone: it forgets its game and card.
+    func newDeckClosed() {
+        newDeckGame = nil
+        newDeckCard = nil
+    }
+
+    /// The New Deck sheet's Create: the deck (with `cards`) in `game`, its game at opening; nil, and nothing written, when
+    /// that game's decks may not be written now (`decksWritable`: A5, B2) or the library refuses.
+    func addNewDeck(game: String, name: String, format: String, cards: [DeckCard]) -> String? {
+        guard decksWritable(game: game) else { return nil }
+        return library.addDeck(game: game, name: name, format: format, cards: cards)
+    }
+
+    /// B2: whether a deck sheet's write action (New Deck's Create, the paste's apply, the sharing sheet's Done, Rename's
+    /// Save, Delete Deck) may write to `game`: the game is followed and has the player role (`GameSections`). A click
+    /// during a sheet's dismiss, after a role or game went off, writes nothing.
+    func decksWritable(game: String) -> Bool {
+        GameSections.decksWritable(profile(of: game), followed: library.followedGames.contains(game))
     }
 
     /// The New Deck sheet has closed: the paste sheet it asked for opens now (two sheets never change places at once).
@@ -1054,8 +1197,16 @@ final class AppModel {
     /// that was not saved (it never hides one); each of those ending calls this again (`watchSaleNotices`).
     private func sayPendingSaleNotice() {
         // Fix round 1 (c): a change whose new file met a file that arrived meanwhile; it is said at once, as a lost sale.
-        if let unsaved = library.unsavedChangeNotice {
+        // Not while an import's result or "Continue" is to come: they say it their own way (final fix A3, B6).
+        if let unsaved = library.unsavedChangeNotice, importsBeingSaid == 0, !finishingOnboarding {
             library.clearUnsavedChangeNotice()
+            unsavedSaleSaid = unsaved
+            say(unsaved)
+            return
+        }
+        // A9: a profile change whose write failed (a Settings toggle), once; "Continue" says its own in its sheet.
+        if let unsaved = library.unsavedProfileNotice, !finishingOnboarding {
+            library.clearUnsavedProfileNotice()
             unsavedSaleSaid = unsaved
             say(unsaved)
             return
@@ -1077,8 +1228,8 @@ final class AppModel {
     private func watchSaleNotices() {
         let library = library
         let changes = Observations { [weak self] in
-            (library.saleNotice, library.unsavedSaleNotice, library.unsavedChangeNotice, self?.importing == nil,
-             self?.statusNotice)
+            (library.saleNotice, library.unsavedSaleNotice, library.unsavedChangeNotice, library.unsavedProfileNotice,
+             self?.importing == nil, self?.statusNotice)
         }
         Task { [weak self] in
             for await _ in changes {
@@ -1116,7 +1267,10 @@ final class AppModel {
         #if DEBUG
         if options.onboarding { await openLaunchImport() }
         #endif
-        // G4: a stored or launched game that is not followed opens the first followed one.
+        rememberFollowedGames()
+        // G4: a stored or launched game that is not followed opens the first followed one (with a missing folder: of the
+        // followed games last known, A6).
+        if library.folderIsMissing { gameID = GameSelection.shown(asked: gameID, followed: followedGames.map(\.id)) }
         if library.isLoaded {
             let followed = followedGames.map(\.id)
             gameID = GameSelection.shown(asked: gameID, followed: followed)
@@ -1143,6 +1297,9 @@ final class AppModel {
         // G6: a run that syncs waits for the followed games (the folder's first read) before its scans and its steps. One
         // that does not sync goes on: its scans then cover every game while no folder is read.
         if canSync { await waitUntilCatalogMayStart() }
+        // B5: offline (or with a store in memory) the launch does not wait for the gate: while the first-run question is
+        // due its scans cover no game, and they run for the chosen games when it closes.
+        if onboardingDue { scansWaitForAnswer = true }
         await writeMissingFacetLists()
         await setIndexRead?.value
         requestMissingSetIndexes()
@@ -1444,10 +1601,11 @@ final class AppModel {
         let chosen = game
         turnedOn.removeAll { $0 == chosen.id }
         var first = SyncResult(fetched: 0, failed: 0, newSets: [:]), rest = first
-        if !held {
+        // The game on screen is followed (G4); with the followed games last known (A6) it is checked again.
+        if !held, isSynced(chosen.id) {
             first = await syncCatalog(of: [chosen], now: now, rebuild: rebuild)
-            catalogPending.remove(chosen.id)
         }
+        catalogPending.remove(chosen.id)
         let priceFailure = await syncPrices(now: now)
         if !held {
             // The followed games of this moment: a game turned on since the launch is among them.
