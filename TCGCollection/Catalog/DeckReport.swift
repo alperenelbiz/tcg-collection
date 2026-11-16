@@ -5,8 +5,9 @@ import SwiftData
 /// `-catalogReport YES`, the decks part (phase 3A task 8): each game's cards by deck kind (`CardKinds.deckKind`, the one kind
 /// rule), and the times of the deck reads on the store the report runs on: a paste from "Read" to its table
 /// (`PasteDeckModel.read`) with misspelt names and how well the nearest names find them, a deck page's first join, the reads
-/// of a deck's search, and the work of one render of a deck page. Printed after `CatalogReport`; the written numbers are in
-/// `docs/reports/2026-11-catalog-report.md`, "Decks, phase 3A check".
+/// of a deck's search, and the work of one render of a deck page; Wanted with two active decks of 60 cards (phase 3B task 8).
+/// Printed after `CatalogReport`; the written numbers are in `docs/reports/2026-11-catalog-report.md`, "Decks, phase 3A
+/// check" and "Sharing, phase 3B check".
 @MainActor
 enum DeckReport {
     static func text(model: AppModel) async throws -> String {
@@ -21,6 +22,8 @@ enum DeckReport {
         lines += try await joinLines(model: model)
         lines.append("")
         lines += try await searchLines(model: model)
+        lines.append("")
+        lines += try await wantedLines(model: model)
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -332,6 +335,56 @@ enum DeckReport {
             lines.append("\"\(text)\": search \(ms(search.median)), \(shown.count) cards; their printings \(ms(read.median)), "
                          + "\(printings) printings")
         }
+        return lines
+    }
+
+    // MARK: Wanted with two active decks
+
+    /// Wanted's join (`WantedJoin.run`: `WantedList.joinKeys`, `reader.printings` and `sets`, `WantedList.read`) and the work
+    /// of one render (`WantedList.content`, sorted, totals) with two active Riftbound decks of 60 owned cards each, 30 of
+    /// them in both (one copy each: a card owned once is pending), on the collection; then one render after a `+` (a
+    /// hand-added copy of the first deck's first card: the render that shows the new count, before the next join).
+    private static func wantedLines(model: AppModel) async throws -> [String] {
+        var lines = ["== Wanted with 2 active decks (the first join through a fresh store; then median of 3 on reader; "
+                     + "median of 3 renders)"]
+        guard let game = Games.game("riftbound") else { return lines }
+        let rows = model.library.rows(game: game.id)
+        let owned = try await ownedKeys(rows: rows, model: model, limit: 90)
+        guard owned.count == 90 else {
+            lines.append("not measured: \(owned.count) distinct owned Riftbound cards, 90 needed")
+            return lines
+        }
+        let decks = [Array(owned[0..<60]), Array(owned[30..<90])].enumerated().map { index, keys in
+            Deck(id: "report-\(index)", name: "Report \(index + 1)", format: "standard", active: true,
+                 cards: keys.map { DeckCard(cardKey: $0, name: $0, section: "main", count: 1) })
+        }
+        let wanted: [WantedEntry] = []
+        func join(_ store: CatalogStore) async throws -> WantedRead {
+            let keys = WantedList.joinKeys(wanted: wanted, decks: decks)
+            let printings = try await store.printings(game: game.id, cardKeys: Array(keys))
+            let sets = try await store.sets(game: game.id)
+            let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
+            return WantedList.read(game: game, printings: printings, keys: keys, rows: rows, setNames: names)
+        }
+        var read: WantedRead?
+        let first = try await durations(1) { read = try await join(CatalogStore(modelContainer: model.reader.modelContainer)) }
+        let again = try await durations(3) { read = try await join(model.reader) }
+        let price = WantedList.price(model.prices, game: game.id)
+        // Only times: the numbers of the list come from the owner's collection.
+        func render(_ wanted: [WantedEntry]) -> Int {
+            let content = WantedList.content(wanted, decks: decks, sharing: [:], read: read, joinFailed: false,
+                                             catalogHasProducts: true, catalogSettled: true, price: price)
+            let shown = WantedList.sorted(WantedList.filtered(content.cards, text: ""), by: .name)
+            return WantedList.totals(shown).count + shown.filter(\.pending).count
+        }
+        var work = 0
+        let plain = await durations(3) { work &+= render(wanted) }
+        let added = [WantedEntry(cardKey: owned[0], name: owned[0], count: 1)]
+        let plus = await durations(3) { work &+= render(added) }
+        let printings = read?.printings.values.reduce(0) { $0 + $1.count } ?? 0
+        lines.append("Riftbound 2 decks of 60 distinct owned cards (30 in both, \(read?.keys.count ?? 0) keys, \(printings) printings): "
+                     + "join \(ms(first.median)) first, \(ms(again.median)) again")
+        lines.append("render \(preciseMs(plain.median)); render after one + \(preciseMs(plus.median))\(work == 0 ? " (empty)" : "")")
         return lines
     }
 

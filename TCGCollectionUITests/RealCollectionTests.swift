@@ -594,6 +594,242 @@ final class RealCollectionTests: UITestCase {
         print("RealCollectionTests deck\n\(report)")
     }
 
+    /// Shared copies on a real Riftbound collection, offline (phase 3B: E2–E8, A22, A24). Skipped unless `TCG_REAL_STORE` is
+    /// set and its root has `user/riftbound.json`. The file must hold no active deck, no `sharing` answer and no `wanted`
+    /// entry, else it fails at once (give it a fresh copy). A deck that is not active is allowed: in a full run
+    /// `testADeckOnTheRealCollection` (name order: first) leaves one. Four launches:
+    /// 1. The Collection: its first 16 distinct card names from the cells' labels (never constants). For the first name that
+    ///    is no rune (a basic card is never shared), the search for that name: when every shown printing has that name, the
+    ///    subtitle's copies are the copies owned of the card (`a of b copies`); else the next name.
+    /// 2. and 3. `-pasteDeck` with a text the test writes into its own temporary folder, for a new deck each: the card at its
+    ///    owned count and four other cards of the Collection at 1 copy (other four in each deck), "Read", "Create deck",
+    ///    Deck ▸ Active. After the second: the second deck's sidebar count is the owned count (E4: the first deck takes every
+    ///    owned copy), the first deck has none.
+    /// 4. Wanted (`-screen wanted`): one cell, the card, `<name>, ×<owned>, <owned> for decks, …` (E5, A24), "Decision
+    ///    pending", "Decisions (1)…"; "Share" → the cell goes (shared: the largest use equals the owned count), the file's
+    ///    `sharing` is `[<card key>: true]`, the second deck's count goes. Then both decks are set not active again, so a
+    ///    later test of this class on the same root (the lists test sells a printing of the Collection's first cells) sees
+    ///    no deck's need.
+    /// After the last quit: `collection`, `wanted`, `forSale` and `sold` as before; two more decks, not active; the answer.
+    /// The byte comparison of those four lists is a step outside the test (the report's "Sharing, phase 3B check").
+    /// Attachment `real-sharing-timings`: launch → Wanted's cell with its decks' part, and the "Share" click → the cell's
+    /// change (each measured from outside, polled every 0.2 s: an upper bound).
+    func testSharedCopiesOnTheRealCollection() throws {
+        let root = try realStoreRoot()
+        let file = root.appending(path: "user").appending(path: "riftbound.json")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            throw XCTSkip("\(file.path) is not there: this test runs on a root whose Riftbound collection is imported")
+        }
+        let initial = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any], file.path)
+        let decksBefore = (initial["decks"] as? [[String: Any]]) ?? []
+        XCTAssertFalse(decksBefore.contains { $0["active"] as? Bool == true }, "\(file.path) has an active deck: give the test a fresh copy")
+        XCTAssertTrue((initial["sharing"] as? [Any])?.isEmpty ?? true, "\(file.path) has sharing answers: give the test a fresh copy")
+        XCTAssertTrue((initial["wanted"] as? [Any])?.isEmpty ?? true, "\(file.path) has wanted cards: give the test a fresh copy")
+        let bytesBefore = try Data(contentsOf: file).count
+        var times: [String] = []
+        let seconds = { (from: Date) in String(format: "%.1f s", Date().timeIntervalSince(from)) }
+
+        // 1. A card he owns, and how many copies.
+        var app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        let rows = try storedCollection(game: "riftbound")
+        XCTAssertTrue(waitUntil(timeout: 60) { app.windows.firstMatch.title.hasSuffix(" " + self.totals(rows)) },
+                      app.windows.firstMatch.title)
+        let names = try collectionNames(app, count: 16)
+        var chosen: (name: String, owned: Int)?
+        for name in names.prefix(8) where !name.hasSuffix(" Rune") {
+            if let owned = try copiesOwned(app, of: name) { chosen = (name, owned); break }
+        }
+        let card = try XCTUnwrap(chosen, "none of the first 8 names could be counted alone: \(names.prefix(8))")
+        XCTAssertGreaterThan(card.owned, 0)
+        let others = names.filter { $0.caseInsensitiveCompare(card.name) != .orderedSame }
+        XCTAssertGreaterThanOrEqual(others.count, 8, "\(names)")
+        quit(app)
+
+        // 2. and 3. Two decks by paste, each set active.
+        var deckIDs: [String] = []
+        for (index, extra) in [others[0..<4], others[4..<8]].enumerated() {
+            let paste = (["\(card.owned) \(card.name)"] + extra.map { "1 \($0)" }).joined(separator: "\n") + "\n"
+            let (running, id) = try pasteNewDeck(root: root, text: paste, copies: card.owned + 4, known: idsOf(decksBefore) + deckIDs)
+            app = running
+            deckIDs.append(id)
+            if index == 1 {
+                let count = element(app, "sidebar-deck-missing-\(id)")
+                XCTAssertTrue(waitUntil(timeout: 30) { count.exists && self.text(count) == "\(card.owned)" },
+                              "the second deck's count: \(count.exists ? text(count) : "none"), not \(card.owned)")
+                XCTAssertFalse(element(app, "sidebar-deck-missing-\(deckIDs[0])").exists, "the first deck misses copies")
+                shot("real-sharing-1-second-deck")
+            }
+            quit(app)
+        }
+        let decks = storedDecks().filter { deckIDs.contains($0["id"] as? String ?? "") }
+        XCTAssertEqual(decks.map { $0["active"] as? Bool }, [true, true])
+        let keys = decks.map { Set(cards(ofDeck: $0).map(\.key)) }
+        let common = keys[0].intersection(keys[1])
+        XCTAssertEqual(common.count, 1, "\(keys)")
+        let key = try XCTUnwrap(common.first)
+        let savedName = try XCTUnwrap(((decks[0]["cards"] as? [[String: Any]]) ?? [])
+            .first { $0["cardKey"] as? String == key }?["name"] as? String)
+
+        // 4. Wanted: the decks' part, the pending mark, Share.
+        let launched = Date()
+        app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "wanted"])
+        let cell = app.buttons["wanted-cell-\(key)"]
+        let expected = "\(savedName), ×\(card.owned), \(card.owned) for decks, "
+        XCTAssertTrue(waitUntil(timeout: 60) { cell.exists && cell.label.hasPrefix(expected) },
+                      "\(cell.exists ? cell.label : "no cell"), not \(expected)…")
+        times.append("launch -> Wanted's cell with its decks' part: \(seconds(launched))")
+        XCTAssertEqual(identifiers(wantedCells(app)), ["wanted-cell-\(key)"])
+        let pending = element(app, "wanted-pending-\(key)")
+        XCTAssertTrue(pending.waitForExistence(timeout: 10), "no pending row")
+        XCTAssertEqual(text(pending), "Decision pending")
+        XCTAssertEqual(element(app, "wanted-decisions").label, "Decisions (1)…")
+        XCTAssertEqual(text(element(app, "sidebar-deck-missing-\(deckIDs[1])")), "\(card.owned)")
+        XCTAssertFalse(text(app.staticTexts["status-line"]).contains("sharing decision"), "the launch said the pending card")
+        let share = settled(reveal(app, "wanted-share-\(key)", in: "wanted-screen"))
+        shot("real-sharing-2-wanted-pending")
+        let clicked = Date()
+        share.click()
+        XCTAssertTrue(waitUntil { !cell.exists }, "the shared card stayed on Wanted")
+        times.append("Share click -> the cell gone: \(seconds(clicked))")
+        XCTAssertTrue(waitUntil { self.storedSharing() == [key: true] }, "\(storedSharing())")
+        XCTAssertTrue(waitUntil { !self.element(app, "sidebar-deck-missing-\(deckIDs[1])").exists }, "the second deck still misses copies")
+        XCTAssertFalse(element(app, "wanted-decisions").exists, "Decisions stays with nothing pending")
+        shot("real-sharing-3-wanted-after-share")
+
+        // Both decks not active again (a later test of this class on the same root).
+        for id in deckIDs {
+            let name = try XCTUnwrap(storedDecks().first { $0["id"] as? String == id }?["name"] as? String)
+            element(app, "sidebar-deck-\(id)").click()
+            XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasPrefix(name + " – ") && self.element(app, "deck-screen").exists },
+                          "the deck page of \(id) did not open: \(app.windows.firstMatch.title)")
+            element(app, "deck-menu").click()
+            let active = app.menuItems["Active"].firstMatch
+            XCTAssertTrue(active.waitForExistence(timeout: 5), "no Active item")
+            active.click()
+            XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == id }?["active"] as? Bool == false },
+                          "\(id) stays active")
+        }
+        quit(app)
+
+        // After the last quit: the other lists as before, the answer, two more decks, not active.
+        let final = try XCTUnwrap(storedUserFile(game: "riftbound"))
+        for list in ["collection", "wanted", "forSale", "sold"] {
+            XCTAssertEqual(final[list] as? NSArray, initial[list] as? NSArray, "\(list) changed")
+        }
+        XCTAssertEqual(storedSharing(), [key: true])
+        XCTAssertEqual(storedDecks().count, decksBefore.count + 2)
+        XCTAssertFalse(storedDecks().contains { $0["active"] as? Bool == true }, "a deck stays active")
+        times.append("riftbound.json: \(bytesBefore) bytes before, \(try Data(contentsOf: file).count) bytes after")
+        let report = times.joined(separator: "\n")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "real-sharing-timings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print("RealCollectionTests sharing\n\(report)")
+    }
+
+    /// The copies owned of the card `name`: the Collection's search for it, when every shown printing has that name (the
+    /// label's product name without its trailing brackets): the subtitle's `<a> of <b> copies`. Nil when another card
+    /// shows too. Empties the search field after.
+    private func copiesOwned(_ app: XCUIApplication, of name: String) throws -> Int? {
+        let field = searchField(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no search field")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(name)
+        defer {
+            field.typeKey("a", modifierFlags: .command)
+            field.typeKey(.delete, modifierFlags: [])
+        }
+        let window = app.windows.firstMatch
+        let pattern = /([\d,]+) of [\d,]+ cop(?:y|ies) · ([\d,]+) of [\d,]+ printings?/
+        var title = ""
+        // The subtitle follows each keystroke: wait until it shows a part and is the same on two reads.
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            let now = window.title
+            defer { title = now }
+            return now == title && now.firstMatch(of: pattern) != nil
+        }, window.title)
+        let match = try XCTUnwrap(title.firstMatch(of: pattern), title)
+        let number = { (text: Substring) in Int(text.replacingOccurrences(of: ",", with: "")) ?? -1 }
+        let copies = number(match.1), printings = number(match.2)
+        let cells = collectionCells(app)
+        var seen: [String: String] = [:]                        // identifier → label
+        for _ in 0..<20 where seen.count < printings {
+            for cell in cells.allElementsBoundByIndex where cell.exists { seen[cell.identifier] = cell.label }
+            if seen.count < printings, let shown = cells.allElementsBoundByIndex.last(where: \.isHittable) {
+                shown.scroll(byDeltaX: 0, deltaY: -300)
+            }
+        }
+        guard seen.count == printings else { return nil }
+        let alone = seen.values.allSatisfy { label in
+            guard let end = label.range(of: ", ×") else { return false }
+            return Self.withoutBrackets(String(label[..<end.lowerBound])).caseInsensitiveCompare(name) == .orderedSame
+        }
+        return alone ? copies : nil
+    }
+
+    /// Launches on the Collection with `-pasteDeck` and `text` (written into the runner's temporary folder), for a new deck:
+    /// "Read" (every line known: "<copies> cards on 5 lines"), "Create deck", then Deck ▸ Active on the deck's page. Returns
+    /// the running app and the new deck's id (the one not in `known`).
+    private func pasteNewDeck(root: URL, text: String, copies: Int, known: [String]) throws -> (XCUIApplication, String) {
+        let pasteFile = FileManager.default.temporaryDirectory.appending(path: "sharing-check-paste-\(UUID().uuidString).txt")
+        try Data(text.utf8).write(to: pasteFile)
+        defer { try? FileManager.default.removeItem(at: pasteFile) }
+        let app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection", "-pasteDeck", pasteFile.path])
+        let sheet = element(app, "paste-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 30), "no paste sheet")
+        let read = element(app, "paste-read")
+        XCTAssertTrue(waitUntil(timeout: 30) { read.isEnabled }, "Read stays off")
+        read.click()
+        let summary = element(app, "paste-summary")
+        XCTAssertTrue(waitUntil(timeout: 60) { summary.exists }, "no table")
+        XCTAssertEqual(self.text(summary), "\(copies) cards on 5 lines")
+        let apply = element(app, "paste-apply")
+        XCTAssertTrue(waitUntil { apply.isEnabled }, "Create deck stays off")
+        apply.click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+        var id: String?
+        XCTAssertTrue(waitUntil {
+            id = self.storedDecks().compactMap { $0["id"] as? String }.first { !known.contains($0) }
+            return id != nil
+        }, "no new deck in the file")
+        let deckID = try XCTUnwrap(id)
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10), "the new deck's page did not open")
+        element(app, "deck-menu").click()
+        let active = app.menuItems["Active"].firstMatch
+        XCTAssertTrue(active.waitForExistence(timeout: 5), "no Active item")
+        active.click()
+        XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == deckID }?["active"] as? Bool == true },
+                      "\(deckID) is not active")
+        return (app, deckID)
+    }
+
+    /// The ids of `decks`.
+    private func idsOf(_ decks: [[String: Any]]) -> [String] {
+        decks.compactMap { $0["id"] as? String }
+    }
+
+    /// The sharing answers of the running root's Riftbound file: card key → shared.
+    private func storedSharing() -> [String: Bool] {
+        let list = (((try? storedUserFile(game: "riftbound")) ?? nil)?["sharing"] as? [[String: Any]]) ?? []
+        return Dictionary(list.compactMap { entry in
+            (entry["cardKey"] as? String).flatMap { key in (entry["shared"] as? Bool).map { (key, $0) } }
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Waits until `element` stops moving (a scroll's deceleration), so a click lands on it: once its frame was the same
+    /// on two reads 0.3 s apart. Returns the element.
+    private func settled(_ element: XCUIElement) -> XCUIElement {
+        var last = element.frame
+        _ = waitUntil(timeout: 3) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            defer { last = element.frame }
+            return element.frame == last
+        }
+        return element
+    }
+
     /// The Collection's first `count` distinct card names in reading order, from the cells' labels (`<product name>, ×<n>,
     /// …`): the product name without its trailing brackets (`Calm Rune (R02a)` → `Calm Rune`). Scrolls the gallery while
     /// it needs more.
@@ -662,7 +898,12 @@ final class RealCollectionTests: UITestCase {
 
     /// The cards of the first deck: card key, section, count.
     private func cards(of decks: [[String: Any]]) -> [(key: String, section: String, count: Int)] {
-        ((decks.first?["cards"] as? [[String: Any]]) ?? []).map {
+        decks.first.map(cards(ofDeck:)) ?? []
+    }
+
+    /// The cards of one deck: card key, section, count.
+    private func cards(ofDeck deck: [String: Any]) -> [(key: String, section: String, count: Int)] {
+        ((deck["cards"] as? [[String: Any]]) ?? []).map {
             ($0["cardKey"] as? String ?? "", $0["section"] as? String ?? "", $0["count"] as? Int ?? 0)
         }
     }
@@ -672,9 +913,10 @@ final class RealCollectionTests: UITestCase {
         cards(of: decks).reduce(0) { $0 + $1.count }
     }
 
-    /// The element `identifier` of the deck page, scrolled into the window (a group's cells are in a lazy grid).
-    private func reveal(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
-        let target = element(app, identifier), page = element(app, "deck-screen")
+    /// The element `identifier` of a screen (the deck page unless `screen` names another container), scrolled into the
+    /// window (a group's cells are in a lazy grid).
+    private func reveal(_ app: XCUIApplication, _ identifier: String, in screen: String = "deck-screen") -> XCUIElement {
+        let target = element(app, identifier), page = element(app, screen)
         for _ in 0..<30 where !(target.exists && target.isHittable) {
             page.scroll(byDeltaX: 0, deltaY: -120)
         }

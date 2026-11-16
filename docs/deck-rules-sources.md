@@ -82,8 +82,9 @@ riftbound.leagueoflegends.com redirects):
   named card." CR 103.3.b.1: "This includes your Chosen Champion." TR 601.1.c.3: "Limits on copies of named cards apply
   to the combination of main deck and sideboard." Runes, the Legend and Battlefields are not Main Deck cards and are not
   counted (`countedSections` = champion, main, sideboard).
-- Main Deck size, a note: CR 103.3 says "at least 40" (built, no maximum); TR 601.1.b says "In competitions, a player's
-  Main Deck must be exactly 40 cards." (also TR 402.1). The competition number is not built as a bound.
+- Main Deck size, a note: CR 103.3 says "at least 40"; TR 601.1.b says "In competitions, a player's Main Deck must be
+  exactly 40 cards." (also TR 402.1). Built: exactly 40 for the Main Deck with its Champion (total of `champion` +
+  `main`, 40...40), Alperen, 2026-11-16 (A20). A deck of 39 says "needs 40 cards", one of 41 "at most 40 cards".
 - Not built (other rules, not numbers of a section): CR 103.3.d, at most 3 Signature cards in total; CR 103.5.c, no two
   Battlefields of one name; domain identity.
 - Card types (for `CardKind`): CR 103.3 names "Units, Gear, and Spells"; the catalog's `Card Type` values (copy of the
