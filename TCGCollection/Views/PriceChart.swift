@@ -209,10 +209,10 @@ nonisolated struct PriceChart: Equatable, Sendable {
 
     // MARK: Texts
 
-    /// `+$1.20 in 90 days`, `−$0.40 in 12 days` (a real minus sign), `no change in 30 days` (H15): the days from the
-    /// first point to the last.
+    /// `+$1.20 in 90 days`, `−$0.40 in 12 days` (a real minus sign), `no change in 30 days` (H15): the calendar days
+    /// from the first point's day to the last point's day, both included (a full window is 90 days).
     private static func changeText(from first: Entry, to last: Entry) -> String {
-        let days = Int((last.date.timeIntervalSince(first.date) / 86_400).rounded())
+        let days = Int((last.date.timeIntervalSince(first.date) / 86_400).rounded()) + 1
         let span = days == 1 ? "1 day" : "\(days) days"
         let cents = Int((last.amount * 100).rounded()) - Int((first.amount * 100).rounded())
         guard cents != 0 else { return "no change in \(span)" }

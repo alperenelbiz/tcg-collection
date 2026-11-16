@@ -138,16 +138,16 @@ struct PriceChartTests {
 
     @Test func summaryIsTheLastPriceAndTheChange() {
         let full = chart([point("2026-08-19", 11.20), point("2026-11-16", 12.40)])
-        #expect(full.summary == ChartSummary(price: "$12.40", change: "+$1.20 in 89 days"))
-        let low = chart([point("2026-11-01", 3.40), point("2026-11-13", 3.00, low: true)])
+        #expect(full.summary == ChartSummary(price: "$12.40", change: "+$1.20 in 90 days"))
+        let low = chart([point("2026-11-02", 3.40), point("2026-11-13", 3.00, low: true)])
         #expect(low.summary == ChartSummary(price: "~$3.00", change: "−$0.40 in 12 days"))
-        let flat = chart([point("2026-10-01", 5), point("2026-10-15", 5.2), point("2026-10-31", 5)])
+        let flat = chart([point("2026-10-01", 5), point("2026-10-15", 5.2), point("2026-10-30", 5)])
         #expect(flat.summary == ChartSummary(price: "$5.00", change: "no change in 30 days"))
     }
 
     @Test func aChangeUnderACentIsNoChange() {
         let chart = chart([point("2026-11-01", 0.1), point("2026-11-02", 0.1 + 0.2 - 0.2)])
-        #expect(chart.summary?.change == "no change in 1 day")
+        #expect(chart.summary?.change == "no change in 2 days")
     }
 
     @Test func noSummaryUnderTwoPoints() {
