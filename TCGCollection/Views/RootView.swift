@@ -222,8 +222,9 @@ private struct Sidebar: View {
     private var list: some View {
         @Bindable var model = model
         return List(selection: $selection) {
+            // G4: the followed games only, in the games' order.
             Picker("Game", selection: $model.gameID) {
-                ForEach(Games.all) { game in
+                ForEach(model.followedGames) { game in
                     Text(game.name).tag(game.id)
                 }
             }

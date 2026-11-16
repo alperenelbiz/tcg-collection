@@ -69,12 +69,15 @@ actor PriceSync {
     /// An archive already on disk is never downloaded again. If reading a file that was just
     /// downloaded (or found on disk) throws, `run` rethrows and leaves the file where it is:
     /// a new day brings a new file, so the rule stays true.
-    func run(games: [GameDefinition], now: Date, haveDay: String?) async throws -> [String: GamePrices]? {
+    ///
+    /// `download` false (a game turned on, G5): only an archive already on disk is read; nothing is downloaded.
+    func run(games: [GameDefinition], now: Date, haveDay: String?, download: Bool = true) async throws -> [String: GamePrices]? {
         let wanted = PriceDay.wanted(now: now)
         for day in [wanted, PriceDay.before(wanted)] {
             if let haveDay, haveDay >= day { return nil }
             let file = paths.archives.appending(path: "prices-\(day).ppmd.7z")
             if !FileManager.default.fileExists(atPath: file.path) {
+                guard download else { continue }
                 try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
                 guard try await client.download(day: day, to: file) else { continue }
             }

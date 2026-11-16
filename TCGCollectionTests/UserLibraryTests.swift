@@ -1431,6 +1431,23 @@ struct UserLibraryTests {
         #expect(!missing.hasGameFile)
     }
 
+    /// G13: the sidebar's problem line (`problems`, `problem`) names only followed games. A game that is not followed
+    /// keeps its own problem (`problem(game:)`); a refused file's profile is not read, so it counts as followed.
+    @MainActor @Test func theProblemLineSkipsAGameThatIsNotFollowed() async throws {
+        let dir = tempDir()
+        try UserFiles.write(Data(#"{"version":1,"collection":[],"profile":{"followed":false}}"#.utf8),
+                            to: dir.appending(path: "riftbound.json"))
+        try UserFiles.write(Data(#"{"version":2}"#.utf8), to: dir.appending(path: "cyberpunk.json"))
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        #expect(!lib.profile(game: "riftbound").followed)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()      // the folder is read-only
+        #expect(lib.problem(game: "riftbound")?.hasPrefix("riftbound.json could not be saved") == true)
+        #expect(lib.problems == ["cyberpunk.json was written by a newer version of the app."])
+        #expect(lib.problem == "cyberpunk.json was written by a newer version of the app.")
+    }
+
     /// The JSON object stored in `file`.
     private func jsonObject(_ file: URL) throws -> [String: Any] {
         let data = try #require(try UserFiles.read(file))

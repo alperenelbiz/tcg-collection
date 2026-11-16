@@ -1387,7 +1387,221 @@ struct AppModelTests {
         guard case .failed(let text)? = missing.importing?.state else { Issue.record("no failed import"); return }
         #expect(text.hasPrefix("This file could not be read ("))
     }
+
+    // MARK: Followed games (phase 4B task 2: A28, G3–G6)
+
+    /// A game file that turns the game off (G1).
+    private static let notFollowed = #"{"version":1,"collection":[],"profile":{"followed":false}}"#
+
+    /// Writes `<root>/user/<game>.json` before the launch.
+    private func writeUserFile(_ root: URL, _ game: String, _ json: String) throws {
+        let user = AppPaths.userTestRoot(root)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: user.appending(path: "\(game).json"))
+    }
+
+    /// A model on the fixture network (all four games), counting its requests.
+    @MainActor private func fixtureModel(_ root: URL, _ network: CountingFixtures, _ extra: [String] = []) -> AppModel {
+        AppModel(options: .init(arguments: ["app", "-store", root.path] + extra), catalogClient: network,
+                 archiveClient: network, fetcher: network, now: { Self.day1 })
+    }
+
+    /// G5, A28: Yu-Gi-Oh! is not followed. The launch fetches no set list or set of it, scans no filter list or set index
+    /// of it, fills no price of it from the archive and asks for no Yu-Gi-Oh! picture index; the other three games are
+    /// synced as before, and nothing waits for Yu-Gi-Oh!.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameThatIsNotFollowedIsNeitherFetchedNorScanned() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-game", "riftbound"])
+        await model.start()
+        await model.waitForSetIndexes()
+        #expect(model.followedGames.map(\.id) == ["magic-the-gathering", "riftbound", "cyberpunk"])
+        #expect(!model.isFollowed("yu-gi-oh")); #expect(model.isFollowed("riftbound"))
+        #expect(await network.groups == [89, 1, 92])                          // the game on screen first, then the others
+        #expect(await !network.products.contains(2))
+        #expect(try await model.reader.sets(game: "yu-gi-oh").isEmpty)
+        #expect(try await model.reader.progress(game: "yu-gi-oh").fetched == 0)
+        for game in ["magic-the-gathering", "riftbound", "cyberpunk"] {
+            #expect(try await model.reader.progress(game: game).fetched >= 1, "\(game)")
+            #expect(FileManager.default.fileExists(atPath: model.paths.facets(game).path), "\(game)")
+            #expect(FileManager.default.fileExists(atPath: model.paths.sets(game).path), "\(game)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: model.paths.facets("yu-gi-oh").path))
+        #expect(!FileManager.default.fileExists(atPath: model.paths.sets("yu-gi-oh").path))
+        #expect(await network.fetches.isEmpty)                                 // no cardinfo.php
+        #expect(model.ygoIndex == nil)
+        #expect(await network.archives == ["2026-01-02"])                      // the day's archive, once, for the others
+        #expect(model.prices.day(game: "riftbound") == "2026-01-02")
+        #expect(model.prices.day(game: "yu-gi-oh") == nil)
+        #expect(Games.all.allSatisfy { model.catalogSettled(game: $0.id) })
+        #expect(model.status == .idle("Catalog up to date · prices of 2026-01-02"))
+    }
+
+    /// G5: a game that is not followed is not pending: during the price step (between the game on screen and the other
+    /// games) Yu-Gi-Oh! is settled while Cyberpunk, still due, is not.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameThatIsNotFollowedIsNeverPending() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let archive = GatedArchive()
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: fakeCatalog, archiveClient: archive, fetcher: fakeFetcher, now: { Self.day1 })
+        let run = Task { await model.start() }
+        while await !archive.called { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(model.catalogSettled(game: "riftbound"))
+        #expect(model.catalogSettled(game: "yu-gi-oh"))
+        #expect(!model.catalogSettled(game: "cyberpunk"))
+        await archive.release()
+        await run.value
+        #expect(Games.all.allSatisfy { model.catalogSettled(game: $0.id) })
+        #expect(await !log.entries.contains("groups 2"))
+    }
+
+    /// G4: a launched (`-game`) or stored game that is not followed opens the first followed game.
+    @MainActor @Test func aLaunchOnAGameThatIsNotFollowedShowsTheFirstFollowedGame() async throws {
+        let root = tempRoot()
+        let first = model(["app", "-store", root.path, "-offline", "YES"])
+        await first.start()
+        first.gameID = "yu-gi-oh"                                              // stored
+        try writeUserFile(root, "magic-the-gathering", Self.notFollowed)
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let stored = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(stored.gameID == "yu-gi-oh")                                  // before the folder is read
+        await stored.start()
+        #expect(stored.gameID == "riftbound")
+        let launched = model(["app", "-store", root.path, "-offline", "YES", "-game", "magic-the-gathering"])
+        await launched.start()
+        #expect(launched.gameID == "riftbound")
+        #expect(launched.followedGames.map(\.id) == ["riftbound", "cyberpunk"])
+    }
+
+    /// Before the folder is read every game counts as followed, so nothing changes at launch for a folder whose games are
+    /// all followed (A30).
+    @MainActor @Test func everyGameIsFollowedBeforeTheFolderIsRead() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.followedGames.map(\.id) == Games.all.map(\.id))
+        await model.start()
+        #expect(model.followedGames.map(\.id) == ["magic-the-gathering", "riftbound", "cyberpunk"])
+    }
+
+    /// G5: turning a game on runs its catalog step once (also when `profilesChanged` is called more than once) and fills
+    /// its prices from the archive already on disk (no download); turning it off again fetches and removes nothing.
+    @MainActor @Test(.timeLimit(.minutes(1))) func turningAGameOnRunsItsCatalogStepAndOffRemovesNothing() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "yu-gi-oh", Self.notFollowed)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-game", "riftbound"])
+        await model.start()
+        await model.waitForSetIndexes()
+        #expect(try await model.reader.progress(game: "yu-gi-oh").fetched == 0)
+
+        model.library.setProfile(.all, game: "yu-gi-oh")
+        model.profilesChanged()
+        model.profilesChanged()
+        await model.waitForProfileWork()
+        await model.waitForSetIndexes()
+        #expect(await network.groups == [89, 1, 92, 2])                       // one set list: one step
+        let fetched = try await model.reader.progress(game: "yu-gi-oh").fetched
+        #expect(fetched >= 1)
+        #expect(model.catalogSettled(game: "yu-gi-oh"))
+        #expect(model.prices.day(game: "yu-gi-oh") == "2026-01-02")           // from the archive on disk
+        #expect(await network.archives == ["2026-01-02"])                      // no second download
+        #expect(FileManager.default.fileExists(atPath: model.paths.facets("yu-gi-oh").path))
+        #expect(FileManager.default.fileExists(atPath: model.paths.sets("yu-gi-oh").path))
+        #expect(model.followedGames.map(\.id) == Games.all.map(\.id))
+
+        let requests = (await network.groups, await network.products.count, await network.archives, await network.fetches)
+        model.library.setProfile(GameProfile(followed: false), game: "yu-gi-oh")
+        model.profilesChanged()
+        await model.waitForProfileWork()
+        await model.library.flush()
+        #expect(await network.groups == requests.0); #expect(await network.products.count == requests.1)
+        #expect(await network.archives == requests.2); #expect(await network.fetches == requests.3)
+        #expect(try await model.reader.progress(game: "yu-gi-oh").fetched == fetched)   // its catalog stays
+        #expect(FileManager.default.fileExists(atPath: model.paths.facets("yu-gi-oh").path))
+        #expect(FileManager.default.fileExists(atPath: model.paths.sets("yu-gi-oh").path))
+        #expect(model.prices.day(game: "yu-gi-oh") == "2026-01-02")
+        #expect(!model.isFollowed("yu-gi-oh"))
+    }
+
+    /// G4: the game on screen stops being followed by a reload (another device): the first followed game is shown, on its
+    /// Collection (a switch made by code). The model reacts by itself (it observes the library).
+    @MainActor @Test(.timeLimit(.minutes(1))) func theGameOnScreenTurnedOffByAReloadShowsTheFirstFollowedGame() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "all-cards"])
+        await model.start()
+        #expect(model.gameID == "riftbound"); #expect(model.screen == .allCards)
+        let file = AppPaths.userTestRoot(root).appending(path: "riftbound.json")
+        try Data(Self.notFollowed.utf8).write(to: file)
+        await model.library.fileChanged(file)?.value
+        try await until { model.gameID == "magic-the-gathering" }
+        #expect(model.screen == .collection); #expect(model.showsRoot(.collection))
+        #expect(model.followedGames.map(\.id) == ["magic-the-gathering", "yu-gi-oh", "cyberpunk"])
+    }
+
+    /// G6: with no folder chosen the library has not loaded: `start()` begins no catalog step and no price step. Once a
+    /// folder is used (and read) the steps run.
+    @MainActor @Test(.timeLimit(.minutes(1))) func noCatalogStepBeforeTheFolderIsRead() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-askUserFolder", "YES"])
+        #expect(!model.catalogMayStart)
+        let run = Task { await model.start() }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(await fakeCatalog.groupCalls == 0)
+        #expect(await fakeArchive.calls.isEmpty)
+        try await model.useICloudDrive()
+        #expect(model.catalogMayStart)
+        await run.value
+        #expect(await fakeCatalog.groupCalls == 4)
+        #expect(try await model.store.progress(game: "riftbound").fetched == 14)
+    }
+
+    /// G6 with `-store`: the folder is read at once, and every game file is read before the first catalog request.
+    @MainActor @Test func theFirstCatalogRequestComesAfterTheFoldersFirstRead() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-game", "riftbound"])
+        let log = log
+        model.library.beforeRead = { url in await log.add("read \(url.lastPathComponent)") }
+        await model.start()
+        #expect(Array(await log.entries.prefix(5)) == ["read magic-the-gathering.json", "read yu-gi-oh.json",
+                                                         "read riftbound.json", "read cyberpunk.json", "groups 89"])
+    }
 }
+
+/// The fixture network (every game) with its requests counted: set lists and sets by category, archives by day, other
+/// requests by the URL's last path component.
+private actor CountingFixtures {
+    private let catalog = FileCatalogClient(directory: fixturesDirectory())
+    private let archive = FileArchiveClient(directory: fixturesDirectory())
+    private let fetcher = FileFetcher(directory: fixturesDirectory())
+    private(set) var groups: [Int] = []
+    private(set) var products: [Int] = []
+    private(set) var archives: [String] = []
+    private(set) var fetches: [String] = []
+
+    func groups(category: Int) async throws -> Data {
+        groups.append(category)
+        return try await catalog.groups(category: category)
+    }
+
+    func products(category: Int, group: Int) async throws -> Data {
+        products.append(category)
+        return try await catalog.products(category: category, group: group)
+    }
+
+    func download(day: String, to file: URL) async throws -> Bool {
+        archives.append(day)
+        return try await archive.download(day: day, to: file)
+    }
+
+    func data(from url: URL) async throws -> (Data, Int) {
+        fetches.append(url.lastPathComponent)
+        return try await fetcher.data(from: url)
+    }
+}
+
+extension CountingFixtures: TCGCSVFetching, ArchiveFetching, DataFetching {}
 
 /// An archive client whose first download waits until `release()`: a test can look at the model during the price step.
 private actor GatedArchive: ArchiveFetching {

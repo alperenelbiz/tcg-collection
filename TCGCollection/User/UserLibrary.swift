@@ -90,14 +90,24 @@ final class UserLibrary {
 
     // MARK: Reading
 
-    /// Every problem, folder first, then refused files, failed writes and unsettled conflicts, in game order.
+    /// Every problem, folder first, then refused files, failed writes and unsettled conflicts, in game order. G13: only
+    /// followed games' problems (a game that is not followed keeps its own, `problem(game:)`). A refused file's profile is
+    /// not read, so its game counts as followed.
     var problems: [String] {
         var list: [String] = []
         if folderIsMissing, let folder { list.append(Self.missingFolder(folder)) }
+        let followed = followedGames
         for kind in [refused, writeFailures, conflictFailures] {
-            for game in Games.all { if let text = kind[game.id], !list.contains(text) { list.append(text) } }
+            for game in followed { if let text = kind[game], !list.contains(text) { list.append(text) } }
         }
         return list
+    }
+
+    /// The ids of the followed games (G3), in the games' order, from the profiles in memory (all on for a game without a
+    /// file, a refused file, and before the first read): every game when none is followed.
+    var followedGames: [String] {
+        let ids = Games.all.map(\.id)
+        return GameSelection.followed(Dictionary(uniqueKeysWithValues: ids.map { ($0, profile(game: $0)) }), games: ids)
     }
 
     /// The folder is missing, a file is newer than this app or cannot be read, or a write failed.
