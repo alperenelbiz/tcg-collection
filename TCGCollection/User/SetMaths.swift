@@ -25,6 +25,27 @@ nonisolated struct SetRow: Sendable, Equatable, Identifiable {
     var id: Int { self.set.groupID }
 }
 
+/// The owned counts of a game's collection rows as the Sets list and a set's page count them (F2): only a row with a
+/// count of 1 or more is owned; the counts of rows of one printing key add up; a product's owned finishes are in the
+/// order of their first rows. One rule for both screens, so they always agree.
+nonisolated struct SetOwned: Sendable {
+    private var counts: [PrintingKey: Int] = [:]
+    private var finishes: [Int: [String]] = [:]
+
+    init(rows: [CollectionRow]) {
+        for row in rows where row.count >= 1 {
+            if counts[row.key] == nil { finishes[row.productID, default: []].append(row.finish) }
+            counts[row.key, default: 0] += row.count
+        }
+    }
+
+    /// The owned count of one target; 0 when not owned.
+    func count(_ key: PrintingKey) -> Int { counts[key] ?? 0 }
+
+    /// The product's owned finishes (for F1's targets).
+    func finishes(of productID: Int) -> [String] { finishes[productID] ?? [] }
+}
+
 /// "My sets" (the sets with an owned target) or "All sets" (A27).
 nonisolated enum SetScope: String, Sendable { case mine, all }
 /// The Sets list's sort: Newest (the default), Name, Most complete, Cost to complete.
@@ -64,17 +85,12 @@ nonisolated enum SetMaths {
     /// the game; a row with a count under 1 is not owned, and a row of a product in no set counts nowhere.
     static func rows(sets: [SetRecord], index: SetIndex, rows: [CollectionRow], priced: (Int) -> [String],
                      price: (PrintingKey) -> ShownPrice?) -> [SetRow] {
-        var counts: [PrintingKey: Int] = [:]
-        var finishes: [Int: [String]] = [:]
-        for row in rows where row.count >= 1 {
-            if counts[row.key] == nil { finishes[row.productID, default: []].append(row.finish) }
-            counts[row.key, default: 0] += row.count
-        }
+        let owned = SetOwned(rows: rows)
         return sets.compactMap { set in
             let products = index.products(of: set.groupID)
             guard !products.isEmpty else { return nil }
-            let counted = numbers(products: products, priced: priced, ownedCount: { counts[$0] ?? 0 },
-                                  ownedFinishes: { finishes[$0] ?? [] }, price: price)
+            let counted = numbers(products: products, priced: priced, ownedCount: owned.count,
+                                  ownedFinishes: owned.finishes(of:), price: price)
             return SetRow(set: set, numbers: counted)
         }
     }

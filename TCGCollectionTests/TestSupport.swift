@@ -25,7 +25,7 @@ actor CallLog {
 
 /// Answers every request with one body, or with a body chosen per URL; counts the calls.
 /// The first `networkErrors` calls throw a transport error instead, as with no network.
-actor FakeFetcher: DataFetching {
+actor FakeFetcher {
     private let body: Data
     private let status: Int
     private let bodies: [URL: Data]
@@ -55,7 +55,7 @@ actor FakeFetcher: DataFetching {
 
 /// A tcgcsv client. `groups` is the set list of `category`; every other category has no sets.
 /// Every set answers `products` unless `setBody` chose another body. Counts calls and concurrency.
-actor FakeCatalog: TCGCSVFetching {
+actor FakeCatalog {
     private static let noSets = Data(#"{"success":true,"errors":[],"results":[],"totalItems":0}"#.utf8)
 
     private let groupsBody: Data
@@ -107,7 +107,7 @@ actor FakeCatalog: TCGCSVFetching {
 }
 
 /// Hands out a fixture file as the archive of a day (`files`: day -> fixture name); any other day is a 404.
-actor FakeArchive: ArchiveFetching {
+actor FakeArchive {
     private let files: [String: String]
     private let log: CallLog?
     private(set) var calls: [String] = []
@@ -125,6 +125,13 @@ actor FakeArchive: ArchiveFetching {
         return true
     }
 }
+
+// The conformances stand apart from the actors: with one in an actor's inheritance clause, Swift 6.4 infers the
+// protocol's `nonisolated` onto the actor and rejects it ("'nonisolated' modifier cannot be applied to this
+// declaration") whenever this file is compiled in a batch with another primary file (a clean build).
+extension FakeFetcher: DataFetching {}
+extension FakeCatalog: TCGCSVFetching {}
+extension FakeArchive: ArchiveFetching {}
 
 extension CatalogStore {
     /// Test only: how many transactions the store's change history holds.

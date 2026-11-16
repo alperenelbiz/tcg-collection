@@ -1,7 +1,8 @@
 import XCTest
 
 /// The Sets list (phase 4A task 3): "My sets" and "All sets" (A27), the numbers of a master set (A26), the sort, the
-/// search, and the list kept across a sidebar switch.
+/// search, and the list kept across a sidebar switch. A set's page (task 4, F8): its targets in card-number order, the
+/// missing ones faded, an owned count control per cell, the filter and the search, and a cell's card page.
 ///
 /// The fixture catalog has one set with cards per game, so these tests serve a copy of the fixtures with one more
 /// Riftbound card, in Origins (24344), from `<root>/fixtures` (`-fixtures`): the index then has Radiance (24819: Kai'Sa,
@@ -45,9 +46,9 @@ final class SetsFlowTests: UITestCase {
     }
 
     /// Launches on Sets with the copied fixtures and `rows` of Riftbound.
-    private func launchSets(owning rows: [StoredRow]) throws -> XCUIApplication {
+    private func launchSets(owning rows: [StoredRow], extra: [String] = []) throws -> XCUIApplication {
         try launch(game: "riftbound", extra: { root in
-            ["-fixtures", root.appending(path: "fixtures").path, "-screen", "sets"]
+            ["-fixtures", root.appending(path: "fixtures").path, "-screen", "sets"] + extra
         }, fixtures: false) { root in
             try self.prepareSets(in: root)
             try self.writeCollection(rows, game: "riftbound", in: root)
@@ -64,6 +65,35 @@ final class SetsFlowTests: UITestCase {
     private func scope(_ app: XCUIApplication, _ title: String) -> XCUIElement {
         let radio = app.radioButtons[title].firstMatch
         return radio.exists ? radio : element(app, "sets-scope").buttons[title].firstMatch
+    }
+
+    /// A segment of the set page's All / Missing / Owned.
+    private func filter(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        let radio = app.radioButtons[title].firstMatch
+        return radio.exists ? radio : element(app, "set-filter").buttons[title].firstMatch
+    }
+
+    /// A set page's cell (the link over the picture and the texts).
+    private func cell(_ app: XCUIApplication, _ productID: Int, _ finish: String = "Normal") -> XCUIElement {
+        app.buttons["set-cell-\(productID)-\(finish)"]
+    }
+
+    /// The identifiers of the set page's cells, in reading order (the count controls left out).
+    private func cellOrder(_ app: XCUIApplication) -> [String] {
+        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
+            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'")))
+    }
+
+    private static let kaisa = 721337, docksideID = 721334, calmRune = 722282, originsCard = 799001
+
+    /// Opens Radiance's page from the list (My sets) and waits for its cells.
+    private func openRadiance(_ app: XCUIApplication) {
+        let radiance = row(app, Self.radiance)
+        XCTAssertTrue(radiance.waitForExistence(timeout: 30))
+        XCTAssertTrue(waitUntilSynced(app))
+        radiance.click()
+        XCTAssertTrue(element(app, "set-screen").waitForExistence(timeout: 10))
+        XCTAssertTrue(cell(app, Self.kaisa).waitForExistence(timeout: 10))
     }
 
     /// The group ids of the shown rows, top to bottom.
@@ -171,17 +201,158 @@ final class SetsFlowTests: UITestCase {
         let page = element(app, "set-screen")
         XCTAssertTrue(page.waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntil { self.title.hasPrefix("Radiance") }, title)
+        XCTAssertTrue(cell(app, Self.kaisa).waitForExistence(timeout: 10))
+        filter(app, "Missing").click()
+        XCTAssertTrue(waitUntil { !self.cell(app, Self.docksideID).exists }, "Missing still shows the owned printing")
 
         element(app, "sidebar-collection").click()
         XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
         element(app, "sidebar-sets").click()
         XCTAssertTrue(page.waitForExistence(timeout: 10), "the set's page was not kept")
         XCTAssertTrue(waitUntil { self.title.hasPrefix("Radiance") }, title)
+        XCTAssertEqual(filter(app, "Missing").value as? Int, 1, "the page's filter was not kept")
+        XCTAssertTrue(cell(app, Self.kaisa).exists)
+        XCTAssertFalse(cell(app, Self.docksideID).exists)
         shot("sets-07-page-kept")
 
         app.toolbars.buttons["Back"].click()
         XCTAssertTrue(row(app, Self.origins).waitForExistence(timeout: 10), "All sets was not kept")
         XCTAssertEqual(rowOrder(app), ["sets-row-\(Self.origins)", "sets-row-\(Self.radiance)"], "the Name sort was not kept")
         XCTAssertEqual(scope(app, "All sets").value as? Int, 1)
+    }
+
+    /// A26, F8: Radiance's targets in card-number order (Kai'Sa 063, Dockside Lock-Up 136 Normal and Foil side by side,
+    /// Calm Rune R02a); the owned one says `×1`, the missing ones `missing` (faded); the subtitle counts targets. `+` on a
+    /// missing cell makes it owned at once (label, subtitle), the file has the row, and the list behind the page shows the
+    /// new count after Back.
+    func testASetPageFadesWhatIsMissing() throws {
+        let app = try launchSets(owning: [Self.dockside])
+        openRadiance(app)
+        XCTAssertTrue(waitUntil { self.title == "Radiance – 1 of 4 · $10.50 to complete + 1 without a price" }, title)
+        XCTAssertEqual(cellOrder(app), ["set-cell-\(Self.kaisa)-Normal", "set-cell-\(Self.docksideID)-Normal",
+                                        "set-cell-\(Self.docksideID)-Foil", "set-cell-\(Self.calmRune)-Normal"])
+        XCTAssertEqual(cell(app, Self.docksideID).label, "Dockside Lock-Up, ×1, $5.12")
+        XCTAssertEqual(cell(app, Self.kaisa).label, "Kai'Sa, Rebel, missing, $1.00")
+        XCTAssertEqual(cell(app, Self.docksideID, "Foil").label, "Dockside Lock-Up, missing, Foil, $9.50")
+        XCTAssertEqual(cell(app, Self.calmRune).label, "Calm Rune (R02a), missing, no price")
+        XCTAssertEqual(text(element(app, "set-cell-value-\(Self.docksideID)-Normal")), "1")
+        XCTAssertEqual(text(element(app, "set-cell-value-\(Self.docksideID)-Foil")), "0")
+        XCTAssertFalse(element(app, "set-note").exists, "a note on a settled catalog")
+        XCTAssertEqual(filter(app, "All").value as? Int, 1)
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 0.5)
+        shot("sets-08-set-page")
+
+        element(app, "set-cell-plus-\(Self.docksideID)-Foil").click()
+        let foil = cell(app, Self.docksideID, "Foil")
+        XCTAssertTrue(waitUntil { foil.label == "Dockside Lock-Up, ×1, Foil, $9.50" }, foil.label)
+        XCTAssertTrue(waitUntil { self.title == "Radiance – 2 of 4 · $1.00 to complete + 1 without a price" }, title)
+        XCTAssertEqual(text(element(app, "set-cell-value-\(Self.docksideID)-Foil")), "1")
+        let added = StoredRow(productID: Self.docksideID, finish: "Foil", count: 1, name: "Dockside Lock-Up")
+        XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound"))?.contains(added) == true },
+                      "\(String(describing: try? storedCollection(game: "riftbound")))")
+        shot("sets-09-set-page-after-plus")
+
+        app.toolbars.buttons["Back"].click()
+        let radiance = row(app, Self.radiance)
+        XCTAssertTrue(radiance.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil { radiance.label == "Radiance, 2 of 4, $1.00 + 1 without a price" }, radiance.label)
+        XCTAssertEqual(text(element(app, "sets-count-\(Self.radiance)")), "2 / 4")
+    }
+
+    /// All / Missing / Owned and the search (the product's name), with their sentences: `No card matches "<text>".`; on
+    /// Origins (nothing owned) "No card of this set in your collection yet.", and once its one card is added, "This set
+    /// is complete.".
+    func testASetPagesFilterAndSearch() throws {
+        let app = try launchSets(owning: [Self.dockside])
+        openRadiance(app)
+        filter(app, "Missing").click()
+        XCTAssertTrue(waitUntil {
+            self.cellOrder(app) == ["set-cell-\(Self.kaisa)-Normal", "set-cell-\(Self.docksideID)-Foil",
+                                    "set-cell-\(Self.calmRune)-Normal"]
+        }, "\(cellOrder(app))")
+        shot("sets-10-missing")
+        filter(app, "Owned").click()
+        XCTAssertTrue(waitUntil { self.cellOrder(app) == ["set-cell-\(Self.docksideID)-Normal"] }, "\(cellOrder(app))")
+        // The subtitle is the set's, whatever the filter.
+        XCTAssertTrue(title.hasSuffix("1 of 4 · $10.50 to complete + 1 without a price"), title)
+
+        let search = searchField(app)
+        search.click()
+        search.typeText("calm")
+        let empty = element(app, "empty-state")
+        XCTAssertTrue(empty.waitForExistence(timeout: 10))
+        XCTAssertEqual(text(empty), "No card matches \"calm\".")
+        XCTAssertTrue(cellOrder(app).isEmpty)
+        shot("sets-11-no-match")
+        // While the search field is active the picker is in the toolbar's overflow (900 pt): the text changes instead.
+        search.typeKey("a", modifierFlags: .command)
+        search.typeText("lock")
+        XCTAssertTrue(waitUntil { self.cellOrder(app) == ["set-cell-\(Self.docksideID)-Normal"] }, "\(cellOrder(app))")
+        search.typeKey("a", modifierFlags: .command)
+        search.typeKey(.delete, modifierFlags: [])
+
+        // Origins: nothing owned.
+        app.toolbars.buttons["Back"].click()
+        scope(app, "All sets").click()
+        let origins = row(app, Self.origins)
+        XCTAssertTrue(origins.waitForExistence(timeout: 10))
+        origins.click()
+        XCTAssertTrue(cell(app, Self.originsCard).waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil { self.title == "Origins – 0 of 1 · 1 without a price" }, title)
+        filter(app, "Owned").click()
+        XCTAssertTrue(empty.waitForExistence(timeout: 10))
+        XCTAssertEqual(text(empty), "No card of this set in your collection yet.")
+        shot("sets-12-nothing-owned")
+        filter(app, "All").click()
+        let plus = element(app, "set-cell-plus-\(Self.originsCard)-Normal")
+        XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        plus.click()
+        XCTAssertTrue(waitUntil { self.title == "Origins – 1 of 1" }, title)
+        filter(app, "Missing").click()
+        XCTAssertTrue(empty.waitForExistence(timeout: 10))
+        XCTAssertEqual(text(empty), "This set is complete.")
+        shot("sets-13-complete")
+    }
+
+    /// Review Focus 4: five fast `+` on a set cell and Cmd+Q at once (`-writeDelay 1500`): the quit waits for the writes,
+    /// and the file has 5. The cell's state follows the count at once.
+    func testFastClicksOnASetCellAndAQuitReachTheFile() throws {
+        let app = try launchSets(owning: [Self.dockside], extra: ["-writeDelay", "1500"])
+        openRadiance(app)
+        let plus = element(app, "set-cell-plus-\(Self.kaisa)-Normal")
+        XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        plus.doubleClick()
+        plus.click()
+        plus.click()
+        plus.click()
+        XCTAssertTrue(waitUntil(timeout: 3) { self.text(self.element(app, "set-cell-value-\(Self.kaisa)-Normal")) == "5" },
+                      text(element(app, "set-cell-value-\(Self.kaisa)-Normal")))
+        XCTAssertEqual(cell(app, Self.kaisa).label, "Kai'Sa, Rebel, ×5, $1.00")
+        let five = StoredRow(productID: Self.kaisa, finish: "Normal", count: 5, name: "Kai'Sa, Rebel")
+        XCTAssertFalse(try storedCollection(game: "riftbound").contains(five), "the write was done before the quit")
+        quit(app)                                                // at once: the last write is still waiting
+        XCTAssertEqual(try storedCollection(game: "riftbound"), [Self.dockside, five])
+    }
+
+    /// A click on a cell opens the card page on that printing in Sets' stack; Back returns to the set at its filter.
+    func testASetCellOpensItsCardPage() throws {
+        let app = try launchSets(owning: [Self.dockside])
+        openRadiance(app)
+        filter(app, "Missing").click()
+        let foil = cell(app, Self.docksideID, "Foil")
+        XCTAssertTrue(waitUntil { !self.cell(app, Self.docksideID).exists })
+        foil.click()
+        let cardTitle = app.staticTexts["card-title"]
+        XCTAssertTrue(cardTitle.waitForExistence(timeout: 10))
+        XCTAssertEqual(text(cardTitle), "Dockside Lock-Up")
+        let facts = app.staticTexts["card-facts-line"]
+        XCTAssertTrue(waitUntil { self.text(facts).contains("136/167") }, text(facts))
+        XCTAssertTrue(element(app, "count-plus-Foil").exists)
+        shot("sets-14-card-page")
+
+        app.toolbars.buttons["Back"].click()
+        XCTAssertTrue(foil.waitForExistence(timeout: 10))
+        XCTAssertEqual(filter(app, "Missing").value as? Int, 1, "the page's filter was not kept")
+        XCTAssertFalse(cell(app, Self.docksideID).exists)
     }
 }

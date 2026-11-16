@@ -40,9 +40,20 @@ final class SetsScreenState: GameScreenState {
     /// The latest making of the rows threw (the catalog's sets could not be read): `rows` stays as it was, and the next
     /// appearance of the screen tries again.
     private(set) var failed = false
+    /// One page state per set opened (its filter, text and products), kept with the list, so Back from a card page and a
+    /// sidebar switch lose none of it. Not observed: a page asks for its state while its view is made.
+    @ObservationIgnored private var pages: [Int: SetPageState] = [:]
 
     init(gameID: String) {
         self.gameID = gameID
+    }
+
+    /// The state of the set's page, made the first time the set is opened.
+    func page(_ groupID: Int) -> SetPageState {
+        if let page = pages[groupID] { return page }
+        let page = SetPageState(gameID: gameID, groupID: groupID)
+        pages[groupID] = page
+        return page
     }
 
     /// True when the search text has a word to match (punctuation alone is no search).
@@ -135,7 +146,7 @@ struct SetsView: View {
             }
             .listScreen("sets", note: nil)
             .navigationDestination(for: SetPageTarget.self) { target in
-                SetPagePlaceholder(name: rows.first { $0.id == target.groupID }?.set.name ?? "")
+                SetPageView(state: state.page(target.groupID), name: rows.first { $0.id == target.groupID }?.set.name ?? "")
                     .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             }
             .navigationTitle("Sets")
@@ -302,23 +313,5 @@ private struct SetSortMenu: View {
             Text("Sort")
         }
         .accessibilityIdentifier("sets-sort")
-    }
-}
-
-/// A set's page until task 4 gives it its own (`SetPageView`): the set's name as the title, so the stack and its kept
-/// path can be tested.
-private struct SetPagePlaceholder: View {
-    let name: String
-
-    var body: some View {
-        Text(name)
-            .font(Theme.pageTitleFont)
-            .foregroundStyle(Theme.text)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(Theme.margin)
-            .background { Theme.ground.ignoresSafeArea() }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("set-screen")
-            .navigationTitle(name)
     }
 }
