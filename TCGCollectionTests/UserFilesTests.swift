@@ -119,6 +119,16 @@ struct UserFilesTests {
         for list in ["forSale", "sold", "decks", "sharing"] {
             #expect(UserFiles.holdsData(Data(#"{"version":1,"\#(list)":[1]}"#.utf8)) == true, "\(list)")
         }
+        // Follow-up: any top-level key but `version` and `profile` with content is data (a later build may add a list at
+        // version 1); empty or null values are not.
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"future":[{"a":1}]}"#.utf8)) == true)
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"future":{"a":1}}"#.utf8)) == true)
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"future":"x"}"#.utf8)) == true)
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"future":0}"#.utf8)) == true)
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"profile":{"followed":false,"player":false}}"#.utf8)) == false)
+        #expect(UserFiles.holdsData(Data(#"{"version":1,"collection":[],"x":[],"y":{},"z":null}"#.utf8)) == false)
+        let unknownList = Data(#"{"version":1,"collection":[],"future":[1]}"#.utf8)
+        #expect(UserFiles.conflictPlan([at(60, empty), at(0, unknownList)]) == .settle(winner: 1))
     }
 
     @Test func theBackupName() throws {

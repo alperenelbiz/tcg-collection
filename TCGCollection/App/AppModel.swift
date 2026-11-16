@@ -631,7 +631,8 @@ final class AppModel {
             let held = await catalogHeld(now: now)
             catalogWaits = held
             // A7: Yu-Gi-Oh! turned on gets its picture index under that step's own once-a-day rule, after its catalog
-            // step (none while held: the step keeps its own rules, as in a held sync).
+            // step. While held there is no catalog step, but the index step still runs under its own rule (0 new sets:
+            // it asks only for a missing or old index), as in a held sync.
             let indexGames = games.filter { $0.pictures == .ygoprodeck }
             if held {
                 catalogPending.subtract(ids)
@@ -899,7 +900,7 @@ final class AppModel {
         await library.readAgain()
         guard onboardingDue else { return }
         // A game file this question did not write: the folder is not new (fix round 1 (b)).
-        if Games.all.contains(where: { library.hasFile(game: $0.id) && !onboardingWrote.contains($0.id) }) {
+        if foundGameFileNotWritten {
             closeOnboarding()
             return
         }
@@ -908,11 +909,17 @@ final class AppModel {
             onboardingProblem = library.problem ?? "Reading your collection…"
             return
         }
-        for game in Games.all {
+        // A second "Continue" (after a failed write) writes only the games not written yet.
+        for game in Games.all where !onboardingWrote.contains(game.id) {
             library.setProfile(Onboarding.written(draft[game.id]), game: game.id, writesKey: true)
         }
         await library.flush()
-        guard onboardingDue else { return }
+        // Follow-up 4: a folder switch closed the question meanwhile: the old folder's not-saved notices are not said.
+        guard onboardingDue else {
+            library.clearUnsavedProfileNotice()
+            library.clearUnsavedChangeNotice()
+            return
+        }
         // The sheet says a failed write itself (below); the status line does not say it a second time.
         library.clearUnsavedProfileNotice()
         // B6: a file that appeared between the read and the write was read, not replaced: the folder has a game file.
@@ -921,9 +928,9 @@ final class AppModel {
             library.clearUnsavedChangeNotice()
             say(appeared.map(Self.answerNotSaved).joined(separator: " "))
         }
-        onboardingWrote.formUnion(Games.all.map(\.id).filter {
-            library.hasFile(game: $0) && library.problem(game: $0) == nil && !appeared.contains($0)
-        })
+        // Follow-up 1: every game whose write succeeded is this question's, whatever the folder's state is now (a file
+        // still to be created, or whose create failed, is in `creates`: `hasFile` is false for it).
+        onboardingWrote.formUnion(Games.all.map(\.id).filter { library.hasFile(game: $0) && !appeared.contains($0) })
         if appeared.isEmpty, let problem = Games.all.lazy.compactMap({ self.library.problem(game: $0.id) }).first {
             onboardingProblem = problem
             return
@@ -932,6 +939,12 @@ final class AppModel {
         if let first = followed.first { gameID = first }
         showRoot(of: .collection)
         closeOnboarding()
+    }
+
+    /// Follow-up 1: the folder has a game file that this question did not write (`onboardingWrote`): it is not new. The one
+    /// test of `finishOnboarding` and `reviseOnboarding`, so a partial "Continue" is never taken for a folder found.
+    private var foundGameFileNotWritten: Bool {
+        Games.all.contains { library.hasFile(game: $0.id) && !onboardingWrote.contains($0.id) }
     }
 
     /// B6: what the status line says for a game whose file appeared during "Continue" (there is nothing to do again).
@@ -962,7 +975,7 @@ final class AppModel {
     /// back) closes it: nothing is written, the gate opens. Revised in that direction only. Not during "Continue" (its own
     /// writes make the files).
     private func reviseOnboarding() {
-        guard onboardingDue, !finishingOnboarding, library.isLoaded, !library.folderIsMissing, library.hasGameFile else {
+        guard onboardingDue, !finishingOnboarding, library.isLoaded, !library.folderIsMissing, foundGameFileNotWritten else {
             return
         }
         closeOnboarding()

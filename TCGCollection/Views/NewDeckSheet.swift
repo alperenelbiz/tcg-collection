@@ -14,6 +14,10 @@ struct NewDeckSheet: View {
     @State private var name: String
     @State private var format: String
 
+    /// Follow-up 3: the sheet's game: the one captured when it opened, else (nothing captured) the model's. Nil: the sheet
+    /// shows nothing (the model cleared its game while the sheet is going away).
+    static func sheetGame(captured: String?, current: String?) -> String? { captured ?? current }
+
     init(gameID: String, deckNames: [String], adding: DeckCardToAdd? = nil) {
         self.gameID = gameID
         self.adding = adding
@@ -144,5 +148,24 @@ private struct DeckNameSheet<Extra: View>: View {
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(isNew ? "new-deck-sheet" : "deck-rename-sheet")
+    }
+}
+
+/// The New Deck sheet as presented: it captures its game and its card when it opens (`State` takes them once), so a
+/// re-render while it is dismissing, after the model cleared them, never makes it a sheet of another game (follow-up 3).
+struct NewDeckSheetHost: View {
+    @Environment(AppModel.self) private var model
+    @State private var captured: String?
+    @State private var card: DeckCardToAdd?
+
+    init(game: String?, card: DeckCardToAdd?) {
+        _captured = State(initialValue: game)
+        _card = State(initialValue: card)
+    }
+
+    var body: some View {
+        if let game = NewDeckSheet.sheetGame(captured: captured, current: model.newDeckGame) {
+            NewDeckSheet(gameID: game, deckNames: model.library.decks(game: game).map(\.name), adding: card)
+        }
     }
 }

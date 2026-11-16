@@ -2032,6 +2032,97 @@ struct AppModelTests {
         #expect(try storedProfile(user, "magic-the-gathering") == ["followed": false, "player": true, "collector": true])
     }
 
+    /// Follow-up 1 (a): two of the four writes of "Continue" succeed, then the folder cannot be written. The question stays
+    /// open; a later event about the files this question wrote (a reload that changes one) does not close it, and the
+    /// gate stays closed. Once the folder can be written, "Continue" writes the rest and closes it.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aPartialContinueKeepsTheQuestionThroughItsOwnFiles() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        model.library.writeDelay = .milliseconds(300)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: user.path) }
+        let finishing = Task { await model.finishOnboarding(Self.riftboundOnly) }
+        try await until { FileManager.default.fileExists(atPath: user.appending(path: "yu-gi-oh.json").path) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: user.path)
+        await finishing.value
+        #expect(model.onboardingDue); #expect(!model.catalogMayStart)
+        #expect(model.onboardingProblem?.hasPrefix("riftbound.json could not be saved") == true)
+        #expect(gameFiles(user) == ["magic-the-gathering.json", "yu-gi-oh.json"])
+        model.library.writeDelay = nil
+        // An event about our own file: the file changes on disk (another writer) and is read again.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: user.path)
+        let magic = user.appending(path: "magic-the-gathering.json")
+        try Data(#"{"version":1,"collection":[{"productID":7,"finish":"Normal","count":1,"name":"A"}],"profile":{"followed":false}}"#.utf8)
+            .write(to: magic)
+        let version = model.library.version
+        await model.library.fileChanged(magic)?.value
+        #expect(model.library.version > version)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(!model.catalogMayStart)
+
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(!model.onboardingDue); #expect(model.catalogMayStart); #expect(model.onboardingProblem == nil)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        #expect(try storedProfile(user, "riftbound") == ["followed": true, "player": true, "collector": true])
+        #expect(model.library.rows(game: "magic-the-gathering").count == 1)       // the other writer's row is kept
+    }
+
+    /// Follow-up 1 (b): the folder goes away during the four writes and comes back: "Continue" again finishes the four
+    /// files and closes the question (the file it wrote before is its own, not a file found).
+    @MainActor @Test(.timeLimit(.minutes(1))) func aFolderGoneDuringContinueThenBackFinishesTheFiles() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        model.library.writeDelay = .milliseconds(300)
+        let away = root.appending(path: "away")
+        let finishing = Task { await model.finishOnboarding(Self.riftboundOnly) }
+        try await until { FileManager.default.fileExists(atPath: user.appending(path: "magic-the-gathering.json").path) }
+        try FileManager.default.moveItem(at: user, to: away)
+        await finishing.value
+        #expect(model.onboardingDue); #expect(!model.catalogMayStart)
+        model.library.writeDelay = nil
+        try FileManager.default.moveItem(at: away, to: user)
+        await model.finishOnboarding(Self.riftboundOnly)
+        #expect(!model.onboardingDue); #expect(model.catalogMayStart)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        #expect(try storedProfile(user, "riftbound") == ["followed": true, "player": true, "collector": true])
+    }
+
+    /// Follow-up 4: a folder switch to a folder with game files while "Continue" waits for its writes (which fail): the
+    /// question is closed by the switch, and the not-saved notices of the old folder's writes are dropped, not said later.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSwitchDuringContinueDropsItsNotices() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES", "-onboarding", "YES"])
+        await model.start()
+        try await model.useICloudDrive()
+        #expect(model.onboardingDue)
+        let first = try #require(model.library.folder)
+        let withFiles = root.appending(path: "with-files")
+        try FileManager.default.createDirectory(at: withFiles, withIntermediateDirectories: true)
+        try Data(#"{"version":1,"collection":[]}"#.utf8).write(to: withFiles.appending(path: "cyberpunk.json"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: first.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: first.path) }
+        model.library.writeDelay = .milliseconds(200)
+        let version = model.library.version
+        let finishing = Task { await model.finishOnboarding(Self.riftboundOnly) }
+        try await until { model.library.version > version }
+        try await model.useFolder(withFiles)
+        await finishing.value
+        #expect(!model.onboardingDue)
+        #expect(model.library.unsavedProfileNotice == nil); #expect(model.library.unsavedChangeNotice == nil)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.statusNotice?.contains("was not saved") != true)
+    }
+
+    /// Follow-up 3: the New Deck sheet's game is the one captured when it opened; a model that has already cleared it
+    /// (the sheet is dismissing) does not make it a sheet of the game on screen; with nothing captured, the model's.
+    @Test func theNewDeckSheetKeepsItsGame() {
+        #expect(NewDeckSheet.sheetGame(captured: "magic-the-gathering", current: nil) == "magic-the-gathering")
+        #expect(NewDeckSheet.sheetGame(captured: "magic-the-gathering", current: "yu-gi-oh") == "magic-the-gathering")
+        #expect(NewDeckSheet.sheetGame(captured: nil, current: "riftbound") == "riftbound")
+        #expect(NewDeckSheet.sheetGame(captured: nil, current: nil) == nil)
+    }
+
     /// B6: a file that appears during "Continue" (between its read and its write) is not replaced; the question closes (a
     /// game file was found) and the status line says that game's answer was not saved, without "Do it again.".
     @MainActor @Test(.timeLimit(.minutes(1))) func aFileThatAppearsDuringContinueIsReadAndSaid() async throws {

@@ -106,9 +106,8 @@ struct RootView: View {
             model.newDeckClosed()
             model.openPendingPaste()
         }) {
-            // A5: the sheet's game is the one it was opened for, not the game on screen of a later render.
-            let game = model.newDeckGame ?? model.gameID
-            NewDeckSheet(gameID: game, deckNames: model.library.decks(game: game).map(\.name), adding: model.newDeckCard)
+            // A5: the sheet's game is the one it was opened for, captured by the host when it opens.
+            NewDeckSheetHost(game: model.newDeckGame, card: model.newDeckCard)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }

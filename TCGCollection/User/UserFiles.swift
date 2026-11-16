@@ -157,7 +157,8 @@ nonisolated enum UserFiles {
     }
 
     /// The conflict decision. `versions[0]` is the current file: when this app must not rewrite it, everything is left.
-    /// Else (final fix A1) a version without data (`holdsData` false: it reads as a game file and every list is empty)
+    /// Else (final fix A1) a version without data (`holdsData` false: it reads as a game file and nothing but `version`
+    /// and `profile` has content)
     /// never wins over a version with data, whatever the dates: when any version holds data, the versions without data
     /// are left out and the newest of the others wins; when none holds data, the newest wins, as before. A version that
     /// does not read as a game file is neither: it keeps the rule by date. On a new Mac "Continue" can write a fresh
@@ -181,18 +182,25 @@ nonisolated enum UserFiles {
         return best
     }
 
-    /// The lists of a game file that hold the user's data (final fix A1). A `profile` is not data.
-    static let dataLists = ["collection", "wanted", "forSale", "sold", "decks", "sharing"]
+    /// The top-level keys of a game file that are not data (final fix A1): its `version` and its `profile`.
+    static let notData: Set<String> = ["version", "profile"]
 
-    /// Whether bytes that read as a game file of this app's version hold data: true when a list (`dataLists`) has an
-    /// element (an entry this build cannot parse, or one with a count under 1, is still an element), false when every
-    /// list is absent, null or empty. Nil for bytes that do not read as such a file: they keep the rule by date.
+    /// Whether bytes that read as a game file of this app's version hold data: true when any top-level key but `version`
+    /// and `profile` has content (a non-empty array or object, or any other value that is not null), also a key this
+    /// build does not know (a later build may add a list at version 1). An entry this build cannot parse, or one with a
+    /// count under 1, is still content. False when every such key is null, `[]` or `{}`. Nil for bytes that do not read
+    /// as such a file: they keep the rule by date.
     static func holdsData(_ data: Data) -> Bool? {
         guard refusal(data) == nil,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return dataLists.contains { key in
-            guard let value = object[key], !(value is NSNull) else { return false }
-            return (value as? [Any])?.isEmpty != true
+        return object.contains { key, value in
+            guard !notData.contains(key) else { return false }
+            switch value {
+            case is NSNull: return false
+            case let array as [Any]: return !array.isEmpty
+            case let dictionary as [String: Any]: return !dictionary.isEmpty
+            default: return true
+            }
         }
     }
 
