@@ -221,8 +221,8 @@ final class AppModel {
     @ObservationIgnored var historyOnDisk: [String: HistoryOnDisk] = [:]
     /// Games whose history in memory differs from their file after a write that failed: the next pass writes them.
     @ObservationIgnored var historyUnwritten: Set<String> = []
-    /// Games whose history file changed on disk (another device, H11, or a creating write that met a file): the next
-    /// pass reads it again first; a running pass keeps nothing of them.
+    /// Games whose history file changed on disk (another device, H11, or a creating write that met a file): the queue
+    /// reads it again (a check, or the next pass's first step); a running pass keeps nothing of them.
     @ObservationIgnored var historyStale: Set<String> = []
     /// The archive days that could not be read in this run (H8): not tried again.
     @ObservationIgnored var historyFailedDays: Set<String> = []
@@ -234,8 +234,6 @@ final class AppModel {
     @ObservationIgnored var historyQueued = false
     /// The wait of `historyQuietTime` after the last library change (H10); nil when none waits.
     @ObservationIgnored var historyQuietTask: Task<Void, Never>?
-    /// The checks of history files reported changed (H11), each after the one before.
-    @ObservationIgnored var historyChecks: Task<Void, Never>?
     /// The library version the change watcher saw last (`waitForHistory`); nil before it runs.
     @ObservationIgnored var historySeenVersion: Int?
     /// True once the launch's price step has ended (or, offline and with a store in memory, the launch has read prices
@@ -250,6 +248,10 @@ final class AppModel {
     @ObservationIgnored var historyPassHook: (@MainActor ([String]) async -> Void)?
     /// Test only: the passes that ran past the gates.
     @ObservationIgnored var historyPassCount = 0
+    /// Test only: the reads of history files (a pass's, a check's of a reported file).
+    @ObservationIgnored var historyFileReads = 0
+    /// Test only: called on the main actor after each history file write of a pass, with its game.
+    @ObservationIgnored var historyWriteHook: (@MainActor (String) async -> Void)?
     #endif
 
     /// The game's history in memory changed: `historyVersions` goes up (its setter stays private to this file).

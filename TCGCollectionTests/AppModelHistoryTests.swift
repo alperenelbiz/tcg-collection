@@ -510,6 +510,120 @@ struct AppModelHistoryTests {
         #expect(!exists(second.appending(path: "riftbound.prices.json")))
     }
 
+    // MARK: Review round 1
+
+    /// Finding 1: a report of a history file while the first-run question is due reads nothing (a read settles conflict
+    /// versions, which writes): the file keeps its bytes and its date.
+    @Test(.timeLimit(.minutes(1))) func aReportedHistoryFileIsNotReadWhileTheFirstRunQuestionIsDue() async throws {
+        let root = tempRoot()
+        let history = PriceHistory(days: ["2026-01-02"], products: [Self.dockside: ["Normal": [ShownPrice(amount: 1, isLow: false)]]])
+        try FileManager.default.createDirectory(at: user(root), withIntermediateDirectories: true)
+        try history.data().write(to: historyURL(root))
+        let written = try sizeAndDate(historyURL(root))
+        let model = try await offlineModel(root, extra: ["-onboarding", "YES"])
+        await model.start()
+        #expect(model.onboardingDue)
+        #expect(model.library.fileChanged(historyURL(root)) == nil)
+        model.historyFileChanged("riftbound")
+        await model.waitForHistory()
+        #expect(model.historyFileReads == 0)
+        #expect(try Data(contentsOf: historyURL(root)) == history.data())
+        #expect(try sizeAndDate(historyURL(root)).date == written.date)
+    }
+
+    /// Finding 1: a report for a game that is not followed reads nothing; once the game is followed again the next pass
+    /// reads the file (memory forgot its read).
+    @Test(.timeLimit(.minutes(1))) func aReportedHistoryFileOfAGameNotFollowedIsNotRead() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "cyberpunk": Self.gameFile()])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        model.library.setProfile(GameProfile(followed: false), game: "riftbound")
+        model.profilesChanged()
+        await model.waitForHistory()
+        var changed = try stored(root)
+        changed.setDay("2025-12-01", rows: [Self.dockside: ["Normal": ShownPrice(amount: 4, isLow: false)]], for: [Self.dockside])
+        try changed.data().write(to: historyURL(root))
+        let written = try sizeAndDate(historyURL(root))
+        let reads = model.historyFileReads
+        await model.library.fileChanged(historyURL(root))?.value
+        await model.waitForHistory()
+        #expect(model.historyFileReads == reads)
+        #expect(try sizeAndDate(historyURL(root)).date == written.date)
+        model.library.setProfile(.all, game: "riftbound")
+        model.profilesChanged()
+        await model.waitForHistory()
+        #expect(model.historyFileReads > reads)
+        #expect(model.history(game: "riftbound") == changed)
+    }
+
+    /// Finding 2: a pass cancelled during one game's write sets and writes nothing for the games after it. The next pass
+    /// does.
+    @Test(.timeLimit(.minutes(1))) func aPassCancelledBetweenTwoGamesSetsAndWritesNothingMore() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "cyberpunk": Self.gameFile(rows: [719684])])
+        let model = try await offlineModel(root)
+        var cancelled = false
+        model.historyWriteHook = { game in
+            guard !cancelled, game == "riftbound" else { return }
+            cancelled = true
+            model.cancelHistoryPass()
+        }
+        await model.start()
+        await model.waitForHistory()
+        #expect(cancelled)
+        #expect(exists(historyURL(root)))
+        #expect(!exists(historyURL(root, "cyberpunk")))
+        #expect(model.history(game: "cyberpunk") == nil)
+        model.requestHistory()
+        await model.waitForHistory()
+        #expect(exists(historyURL(root, "cyberpunk")))
+    }
+
+    /// Findings 3, 4: a history file another device writes during a pass is read only after the pass (in the queue), and
+    /// is not replaced by the pass's result: that result is dropped, the file is read, and a new pass adds what it lacks.
+    @Test(.timeLimit(.minutes(1))) func aHistoryFileWrittenElsewhereDuringAPassIsNotReplaced() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "riftbound.prices.json": "not json"])
+        let model = try await offlineModel(root)
+        let other = PriceHistory(days: ["2025-12-01"], products: [Self.dockside: ["Normal": [ShownPrice(amount: 4, isLow: false)]]])
+        let file = historyURL(root)
+        var readsDuringPass: (before: Int, after: Int)?
+        model.historyPassHook = { games in
+            guard readsDuringPass == nil, games.contains("riftbound") else { return }
+            let before = model.historyFileReads
+            try? UserFiles.write(other.data(), to: file)                       // another device, during the pass
+            model.library.fileChanged(file)
+            try? await Task.sleep(for: .milliseconds(50))
+            readsDuringPass = (before, model.historyFileReads)
+        }
+        await model.start()
+        await model.waitForHistory()
+        #expect(readsDuringPass?.before == readsDuringPass?.after)           // not read beside the running pass
+        let history = try stored(root)
+        #expect(history.days == ["2025-12-01"] + Self.archiveDays)
+        #expect(history.points(productID: Self.dockside, finish: "Normal").first?.amount == 4)
+        #expect(model.history(game: "riftbound") == history)
+    }
+
+    /// Finding 5: a card just put on Wanted is `.reading` at once (before the quiet time ends) when the page passes its
+    /// card key, then `.ready`.
+    @Test(.timeLimit(.minutes(1))) func aCardAddedToWantedIsReadingAtOnce() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        model.historyQuietTime = .seconds(1)
+        model.library.setWanted(1, game: "riftbound", cardKey: Self.docksideKey, name: "Dockside Lock-Up")
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .reading)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
+        #expect(model.historyState(game: "riftbound", productID: Self.rune, cardKey: "calm rune") == .notTracked)
+        await model.waitForHistory()
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .ready)
+    }
+
     // MARK: Days (H10)
 
     /// A price step that brings a new day adds that day to every tracked product, from its archive alone.
