@@ -7,7 +7,7 @@ does not change them. The numbers are in `TCGCollection/Games/DeckFormat.swift` 
 
 A section's bound is a per-section number: a rule warns when one section is under its minimum or over its maximum. A
 minimum of 0 is built as `nil` (no rule). Two official sizes count cards that the approved table puts in two sections
-(Magic Commander: 100 with the commander; Riftbound: at least 40 with the Chosen Champion). They are built as a total
+(Magic Commander: 100 with the commander; Riftbound: exactly 40 with the Chosen Champion, A20). They are built as a total
 over the two sections (`DeckFormat.totals`, `DeckTotal`), and neither section carries a bound of its own; see "Where the
 rules and the approved sections differ". No number in the app is an inference.
 
@@ -71,9 +71,9 @@ riftbound.leagueoflegends.com redirects):
 | Section | Min | Max | By hand | Sentence |
 |---|---|---|---|---|
 | Legend (`legend`) | 1 | 1 | no | CR 103.2: "1 Champion Legend". TR 402.1: "… 1 Legend …" |
-| Champion (`champion`) | 1 | 1 | yes | CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". CR 103.3.a.1: "This will be placed in the Champion Zone at the start of the game." TR 402.1: "(including a chosen champion)". One Chosen Champion. |
+| Champion (`champion`) | 1 | 1 | yes | Alperen, 2026-11-16 (A19): exactly 1. CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". CR 103.3.a.1: "This will be placed in the Champion Zone at the start of the game." TR 402.1: "(including a chosen champion)". One Chosen Champion. |
 | Main Deck (`main`) | — | — | no | No number of its own: the 40 below include the Chosen Champion. |
-| Total "Main Deck with its Champion" (`champion` + `main`) | 40 | — | — | CR 103.3: "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells". |
+| Total "Main Deck with its Champion" (`champion` + `main`) | 40 | 40 | — | Alperen, 2026-11-16 (A20): exactly 40. CR 103.3 says "at least 40"; TR 601.1.b says "exactly 40" in competitions. |
 | Runes (`runes`) | 12 | 12 | no | CR 103.4.a: "12 Rune Cards". TR 402.1: "12 runes". |
 | Battlefields (`battlefields`) | 3 | 3 | no | CR 487.4.a (and 488–491, every sanctioned mode): "Each player provides three (3) Battlefields, included in their deck during deck building." TR 402.1: "exactly 3 battlefields each with a unique name." |
 | Sideboard (`sideboard`) | — | 10 | yes | TR 601.1.c.1: "A player's sideboard can include 10 or fewer cards." (in competitions where a sideboard is allowed) |
@@ -97,12 +97,12 @@ section on deck building (no date on the page; footer "© 2026").
 
 | Section | Min | Max | By hand | Sentence |
 |---|---|---|---|---|
-| Legends (`legends`) | 3 | 3 | no | "Use exactly 3 Legend cards with unique names." |
+| Legends (`legends`) | 3 | 3 | no | "Use exactly 3 Legend cards with unique names." Different names built as at most 1 copy of a card in the section (`maxCopies`), Alperen, 2026-11-16 (A21). |
 | Main Deck (`main`) | 40 | 50 | no | "Include no fewer than 40 and no more than 50 cards (not including your Legends)." |
-| Side Deck (`side`) | — | — | yes | Not confirmed (below). |
+| Side Deck (`side`) | sizes 0 or 7 | | yes | Alperen, 2026-11-16 (A21): 0 or 7 cards (`DeckSection.sizes`). |
 
-- Copy limit 3: "Use no more than 3 copies of the same card." Counted over the Main Deck only (`countedSections` =
-  main): the Legends have their own rule (unique names), and whether the Side Deck counts is not confirmed.
+- Copy limit 3: "Use no more than 3 copies of the same card." Counted over the Main Deck and the Side Deck together
+  (`countedSections` = main, side), Alperen, 2026-11-16 (A21); the Legends have their own rule (unique names).
 - Card types (for `CardKind`): the printable guide (<https://cyberpunktcg.com/docs/printable-gameplay-guide.pdf>):
   "It designates the card as a Legend, Unit, Program, or Gear." The catalog's `CardType` values are those four.
 - Not built: the RAM limit ("Cards must stay within the RAM limit set by your Legends").
@@ -114,24 +114,16 @@ The sections of spec 5.3 are approved and kept. In three places an official rule
 | Rule | Sentence | What the app does |
 |---|---|---|
 | Magic Commander, CR 903.5a | "Each deck must contain exactly 100 cards, including its commander." | The commander stands in its own section (Commander, 1–2, by hand only). A total "Commander deck" over Commander + Deck is exactly 100; the Deck section has no bound of its own. |
-| Riftbound, CR 103.3 | "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells" | The Chosen Champion stands in its own section (Champion, exactly 1, by hand only). A total "Main Deck with its Champion" over Champion + Main Deck is at least 40; the Main Deck section has no bound of its own. A Champion Unit still goes to the Main Deck by default (spec 5.3), so the Champion section is under its minimum until the user moves the champion there. |
-| Riftbound, TR 601.1.b | "In competitions, a player's Main Deck must be exactly 40 cards." | Not a bound: the app follows the Core Rules' "at least 40" (no maximum). Recorded as a note. |
+| Riftbound, CR 103.3 (A20) | "A Main Deck of at least 40 cards: A Chosen Champion Unit, as well as Units, Gear, and Spells" | The Chosen Champion stands in its own section (Champion, exactly 1, by hand only). A total "Main Deck with its Champion" over Champion + Main Deck is exactly 40 (Alperen, 2026-11-16); the Main Deck section has no bound of its own. A Champion Unit still goes to the Main Deck by default (spec 5.3), so the Champion section is under its minimum until the user moves the champion there. |
+| Riftbound, TR 601.1.b | "In competitions, a player's Main Deck must be exactly 40 cards." | Superseded by A20 (Alperen, 2026-11-16): the app builds exactly 40. |
 
 ## Not confirmed (built as nil)
 
-| Game | Number | What was found, and where |
-|---|---|---|
-| Cyberpunk | Side Deck min / max | Not on the official gameplay guide. The official Tournament Rules page (<https://cyberpunktcg.com/tournament-rules>) loads its text with JavaScript, and the text could not be read here. A fan blog (gamertagmythras.com, "Cyberpunk TCG tournament rules") says the tournament sideboard is exactly 7 cards (Tournament Rules 2.1.3, Appendix D.1). Not an official source. |
-| Cyberpunk | Whether the copy limit counts the Side Deck | Not on the gameplay guide; the same fan blog implies it. `countedSections` is main only. |
-
-Built, but a reading and not a quoted number: Riftbound's Champion "exactly 1" reads the singular of CR 103.3 ("A Chosen
-Champion Unit"); no rule writes the number 1 for it.
+None. The numbers that were not confirmed (Cyberpunk Side Deck size, Cyberpunk copy limit over the Side Deck, Riftbound's
+Champion "exactly 1" and Main Deck "exactly 40") were answered by Alperen on 2026-11-16 (A19–A21) and stand as his word,
+not as a quoted official page.
 
 ## Questions for Alperen
 
-1. Cyberpunk Side Deck size: the official Tournament Rules page could not be read here. A fan blog (gamertagmythras.com,
-   "Cyberpunk TCG tournament rules") says the sideboard is exactly 7 cards; it is not an official source. Until a number
-   comes from WeirdCo's own rules, the Side Deck has no size rule.
-2. Cyberpunk copy limit and the Side Deck: the official gameplay guide says "Use no more than 3 copies of the same card"
-   and does not say whether Side Deck cards count. The same fan blog implies they do; not official. The app counts the
-   Main Deck only.
+Questions 1–4 (Cyberpunk Side Deck size, Cyberpunk copy limit and the Side Deck, Riftbound Champion, Riftbound Main Deck
+size) were closed on 2026-11-16 (A19–A21).

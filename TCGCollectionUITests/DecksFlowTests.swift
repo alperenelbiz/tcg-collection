@@ -123,7 +123,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 4")
         XCTAssertEqual(text(element(app, "deck-section-legend")), "Legend · 0")
         XCTAssertEqual(text(element(app, "deck-warning-legend")), "needs 1 card")
-        XCTAssertEqual(text(element(app, "deck-warning-main")), "Main Deck with its Champion: needs at least 40 cards")
+        XCTAssertEqual(text(element(app, "deck-warning-main")), "Main Deck with its Champion: needs 40 cards")
         XCTAssertFalse(element(app, "deck-warning-runes").exists, "12 runes meet the bound")
         for heading in ["Units", "Gear", "Runes"] {
             XCTAssertTrue(element(app, "deck-screen").staticTexts[heading].exists, "no group heading \(heading)")

@@ -9,6 +9,10 @@ nonisolated struct DeckSection: Sendable, Hashable, Identifiable {
     let max: Int?
     /// True when no card goes here by default: only the user puts a card here (Side Deck, Sideboard, Champion).
     let byHandOnly: Bool
+    /// The allowed sizes when the rule is a list (Cyberpunk's Side Deck: 0 or 7). Empty: `min` and `max` decide.
+    var sizes: [Int] = []
+    /// The most copies of one card inside this section alone (Cyberpunk's Legends: different names). Nil: no rule.
+    var maxCopies: Int? = nil
 }
 
 /// A way to build a deck of a game: its sections in order and the copy limit. Each number has its source in
@@ -92,8 +96,8 @@ nonisolated extension GameDefinition {
 /// The deck data of the four games.
 nonisolated enum GameDecks {
     private static func section(_ id: String, _ name: String, min: Int? = nil, max: Int? = nil,
-                                byHand: Bool = false) -> DeckSection {
-        DeckSection(id: id, name: name, min: min, max: max, byHandOnly: byHand)
+                                sizes: [Int] = [], maxCopies: Int? = nil, byHand: Bool = false) -> DeckSection {
+        DeckSection(id: id, name: name, min: min, max: max, byHandOnly: byHand, sizes: sizes, maxCopies: maxCopies)
     }
 
     /// Konami's rulebook: Main 40–60, Extra up to 15, Side up to 15, 3 copies over the three together.
@@ -123,7 +127,7 @@ nonisolated enum GameDecks {
         defaults: [],
         kind: { CardKinds.magic(cardType: $0, ygoType: $1) })
 
-    /// Riftbound Core Rules 103 and Tournament Rules 601 (2026-10-09). The Main Deck's "at least 40" include the Chosen
+    /// Riftbound Core Rules 103 and Tournament Rules 601 (2026-10-09). The Main Deck's exactly 40 (A20) include the Chosen
     /// Champion, which stands in the Champion section: a total over both sections.
     static let riftbound = DeckDefinition(
         formats: [DeckFormat(id: "standard", name: "Standard",
@@ -134,7 +138,7 @@ nonisolated enum GameDecks {
                                         section("battlefields", "Battlefields", min: 3, max: 3),
                                         section("sideboard", "Sideboard", max: 10, byHand: true)],
                              copyLimit: 3, countedSections: ["champion", "main", "sideboard"],
-                             totals: [DeckTotal(sections: ["champion", "main"], min: 40, max: nil,
+                             totals: [DeckTotal(sections: ["champion", "main"], min: 40, max: 40,
                                                 name: "Main Deck with its Champion")])],
         groups: ["Units", "Spells", "Gear", "Legends", "Runes", "Battlefields", CardKind.other],
         defaults: [SectionDefault(flag: CardKind.legend, section: "legend"),
@@ -142,13 +146,14 @@ nonisolated enum GameDecks {
                    SectionDefault(flag: CardKind.battlefield, section: "battlefields")],
         kind: { CardKinds.riftbound(cardType: $0, ygoType: $1) })
 
-    /// The official gameplay guide: exactly 3 Legends, 40–50 other cards, 3 copies. The Side Deck has no official number.
+    /// The official gameplay guide and Alperen's answer of 2026-11-16 (A21): exactly 3 Legends with different names,
+    /// 40–50 other cards, a Side Deck of 0 or 7 cards, 3 copies over the Main Deck and the Side Deck together.
     static let cyberpunk = DeckDefinition(
         formats: [DeckFormat(id: "standard", name: "Standard",
-                             sections: [section("legends", "Legends", min: 3, max: 3),
+                             sections: [section("legends", "Legends", min: 3, max: 3, maxCopies: 1),
                                         section("main", "Main Deck", min: 40, max: 50),
-                                        section("side", "Side Deck", byHand: true)],
-                             copyLimit: 3, countedSections: ["main"])],
+                                        section("side", "Side Deck", sizes: [0, 7], byHand: true)],
+                             copyLimit: 3, countedSections: ["main", "side"])],
         groups: ["Units", "Programs", "Gear", "Legends", CardKind.other],
         defaults: [SectionDefault(flag: CardKind.legend, section: "legends")],
         kind: { CardKinds.cyberpunk(cardType: $0, ygoType: $1) })

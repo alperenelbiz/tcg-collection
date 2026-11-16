@@ -221,8 +221,12 @@ nonisolated enum DeckMaths {
     /// The warning of a count that breaks its bound says which way (final fix B2). Under a minimum: `needs 40–60 cards`,
     /// `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`. Over a maximum: `at most 60 cards`, `at most 1 card`
     /// (also for an exact size or a range). Nil when the count breaks no bound.
-    private static func boundText(count: Int, min: Int?, max: Int?) -> String? {
+    private static func boundText(count: Int, min: Int?, max: Int?, sizes: [Int] = []) -> String? {
         func cards(_ n: Int) -> String { n == 1 ? "1 card" : "\(n) cards" }
+        if let largest = sizes.max() {
+            guard !sizes.contains(count) else { return nil }
+            return count > largest ? "at most \(cards(largest))" : "needs \(sizes.sorted().map(String.init).joined(separator: " or ")) cards"
+        }
         if let max, count > max { return "at most \(cards(max))" }
         guard let min, count < min else { return nil }
         switch max {
@@ -247,7 +251,8 @@ nonisolated enum DeckMaths {
         func count(_ ids: [String]) -> Int { deck.cards.filter { ids.contains($0.section) }.reduce(0) { $0 + $1.count } }
         var texts: [String: [String]] = [:]
         for section in format.sections {
-            if let text = boundText(count: count([section.id]), min: section.min, max: section.max) {
+            if let text = boundText(count: count([section.id]), min: section.min, max: section.max,
+                                  sizes: section.sizes) {
                 texts[section.id, default: []].append(text)
             }
         }
@@ -256,15 +261,27 @@ nonisolated enum DeckMaths {
                   let text = boundText(count: count(total.sections), min: total.min, max: total.max) else { continue }
             texts[last.id, default: []].append(total.name == last.name ? text : "\(total.name): \(text)")
         }
+        func named(_ keys: Set<String>) -> String {
+            let over = keys.map(nameOf).sorted { $0.caseInsensitiveCompare($1) == .orderedAscending }
+            return over.prefix(3).joined(separator: ", ") + (over.count > 3 ? " and \(over.count - 3) more" : "")
+        }
+        func copyText(_ limit: Int, _ keys: Set<String>) -> String {
+            "more than \(limit) \(limit == 1 ? "copy" : "copies"): \(named(keys))"
+        }
+        for section in format.sections {
+            guard let limit = section.maxCopies else { continue }
+            let copies = deck.cards.filter { $0.section == section.id }
+                .reduce(into: [String: Int]()) { $0[$1.cardKey, default: 0] += $1.count }
+            let over = Set(copies.filter { $0.value > limit && !isBasic($0.key) }.keys)
+            if !over.isEmpty { texts[section.id, default: []].append(copyText(limit, over)) }
+        }
         if let limit = format.copyLimit {
             let counted = deck.cards.filter { format.countedSections.contains($0.section) || format.section($0.section) == nil }
             let copies = counted.reduce(into: [String: Int]()) { $0[$1.cardKey, default: 0] += $1.count }
             let overKeys = Set(copies.filter { $0.value > limit && !isBasic($0.key) }.keys)
-            let over = overKeys.map(nameOf).sorted { $0.caseInsensitiveCompare($1) == .orderedAscending }
             let holders = Set(counted.filter { overKeys.contains($0.cardKey) && $0.count > 0 }.map(\.section))
-            if !over.isEmpty, let first = shownSections(deck, format: format).first(where: { holders.contains($0.id) })?.id {
-                let named = over.prefix(3).joined(separator: ", ") + (over.count > 3 ? " and \(over.count - 3) more" : "")
-                texts[first, default: []].append("more than \(limit) \(limit == 1 ? "copy" : "copies"): \(named)")
+            if !overKeys.isEmpty, let first = shownSections(deck, format: format).first(where: { holders.contains($0.id) })?.id {
+                texts[first, default: []].append(copyText(limit, overKeys))
             }
         }
         return texts.mapValues { $0.joined(separator: " · ") }

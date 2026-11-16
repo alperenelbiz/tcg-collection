@@ -268,15 +268,55 @@ struct DeckMathsTests {
     }
 
     @Test func aSectionWithoutNumbersNeverWarns() {
-        let side = (1...30).map { card("s\($0)", "side", 1) }
-        #expect(warnings(deck(side), game: cyberpunk)["side"] == nil)
+        let side = (1...30).map { card("s\($0)", "sideboard", 1) }
+        #expect(warnings(deck(side), game: riftbound)["sideboard"] == "at most 10 cards")
+        let free = (1...30).map { card("s\($0)", "side", 1) }
+        #expect(warnings(deck(free), game: cyberpunk)["side"] == "at most 7 cards")
     }
 
-    /// Riftbound: the Champion counts in the Main Deck's at least 40; the warning stands on the Main Deck with its name.
+    /// A20: Riftbound's Main Deck with its Champion is exactly 40.
+    @Test func riftboundsMainWithItsChampionIsExactlyForty() {
+        func main(_ n: Int) -> [DeckCard] { [card("champ", "champion", 1)] + (0..<n).map { card("m\($0)", "main", 1) } }
+        #expect(warnings(deck(main(37)), game: riftbound)["main"] == "Main Deck with its Champion: needs 40 cards")
+        #expect(warnings(deck(main(40)), game: riftbound)["main"] == "Main Deck with its Champion: at most 40 cards")
+        #expect(warnings(deck(main(39)), game: riftbound)["main"] == nil)
+    }
+
+    /// A21: Cyberpunk's Side Deck holds 0 or 7 cards.
+    @Test func cyberpunksSideDeckHoldsZeroOrSeven() {
+        func side(_ n: Int) -> Deck { deck(n == 0 ? [] : (1...n).map { card("s\($0)", "side", 1) }) }
+        #expect(warnings(side(0), game: cyberpunk)["side"] == nil)
+        #expect(warnings(side(7), game: cyberpunk)["side"] == nil)
+        #expect(warnings(side(3), game: cyberpunk)["side"] == "needs 0 or 7 cards")
+        #expect(warnings(side(9), game: cyberpunk)["side"] == "at most 7 cards")
+    }
+
+    /// A21: the Legends have different names: one card twice is "more than 1 copy", after the size warning.
+    @Test func cyberpunksLegendsAreDifferentCards() {
+        let twice = warnings(deck([card("a", "legends", 2), card("b", "legends", 1)]), game: cyberpunk, names: ["a": "Alt"])
+        #expect(twice["legends"] == "more than 1 copy: Alt")
+        let short = warnings(deck([card("a", "legends", 2)]), game: cyberpunk, names: ["a": "Alt"])
+        #expect(short["legends"] == "needs 3 cards · more than 1 copy: Alt")
+        let three = warnings(deck([card("a", "legends", 1), card("b", "legends", 1), card("c", "legends", 1)]),
+                             game: cyberpunk)
+        #expect(three["legends"] == nil)
+    }
+
+    /// A21: 3 copies over the Main Deck and the Side Deck together; the warning stands on the Main Deck.
+    @Test func cyberpunksCopyLimitCountsMainAndSideTogether() {
+        let names = ["x": "Xolo"]
+        let over = warnings(deck([card("x", "main", 3), card("x", "side", 1)]), game: cyberpunk, names: names)
+        #expect(over["main"]?.hasSuffix("more than 3 copies: Xolo") == true)
+        #expect(over["side"] == "needs 0 or 7 cards")
+        let fine = warnings(deck([card("x", "main", 2), card("x", "side", 1)]), game: cyberpunk, names: names)
+        #expect(fine["main"] == "needs 40–50 cards")
+    }
+
+    /// Riftbound: the Champion counts in the Main Deck's exactly 40; the warning stands on the Main Deck with its name.
     @Test func aTotalOverTwoSectionsWarnsOnItsLastSection() {
         let main39 = (1...13).map { card("c\($0)", "main", 3) }
         let short = warnings(deck(main39), game: riftbound)
-        #expect(short["main"] == "Main Deck with its Champion: needs at least 40 cards")
+        #expect(short["main"] == "Main Deck with its Champion: needs 40 cards")
         #expect(short["champion"] == "needs 1 card")
         let full = warnings(deck(main39 + [card("champ", "champion", 1)]), game: riftbound)
         #expect(full["main"] == nil)
@@ -332,7 +372,7 @@ struct DeckMathsTests {
     @Test func theCopyWarningStandsOnTheFirstSectionHoldingACardOverTheLimit() {
         let names = ["x": "Xolo"]
         let rift = warnings(deck([card("x", "main", 4)]), game: riftbound, names: names)
-        #expect(rift["main"] == "Main Deck with its Champion: needs at least 40 cards · more than 3 copies: Xolo")
+        #expect(rift["main"] == "Main Deck with its Champion: needs 40 cards · more than 3 copies: Xolo")
         #expect(rift["champion"] == "needs 1 card")
         let ygo = warnings(deck([card("x", "main", 2), card("x", "side", 2)]), game: yugioh, names: names)
         #expect(ygo["main"] == "needs 40–60 cards · more than 3 copies: Xolo")
@@ -353,9 +393,10 @@ struct DeckMathsTests {
         let split = warnings(deck(main + [card("x", "main", 2), card("x", "side2", 2)]), game: yugioh,
                              names: ["x": "Xolo"])
         #expect(split == ["main": "more than 3 copies: Xolo"])
-        // Cyberpunk's Side Deck is a known section that is not counted: it stays out.
-        let cyber = (1...14).map { card("c\($0)", "main", 3) } + [card("l", "legends", 3), card("x", "side", 4)]
-        #expect(warnings(deck(cyber), game: cyberpunk).isEmpty)
+        // Cyberpunk's Side Deck is counted with the Main Deck (A21).
+        let cyber = (1...14).map { card("c\($0)", "main", 3) } + [card("l", "legends", 1), card("x", "side", 4)]
+        #expect(warnings(deck(cyber), game: cyberpunk, names: ["x": "Xolo"])
+                == ["legends": "needs 3 cards", "side": "needs 0 or 7 cards · more than 3 copies: Xolo"])
     }
 
     /// Fix round 1: two deck cards with one id are one line, their counts summed into the first.
@@ -381,7 +422,7 @@ struct DeckMathsTests {
                 == ["commander": "needs 1–2 cards", "deck": "Commander deck: needs 100 cards"])
         #expect(warnings(deck([], format: "constructed"), game: magic) == ["deck": "needs at least 60 cards"])
         #expect(warnings(deck([]), game: riftbound)
-                == ["legend": "needs 1 card", "champion": "needs 1 card", "main": "Main Deck with its Champion: needs at least 40 cards",
+                == ["legend": "needs 1 card", "champion": "needs 1 card", "main": "Main Deck with its Champion: needs 40 cards",
                     "runes": "needs 12 cards", "battlefields": "needs 3 cards"])
         #expect(warnings(deck([]), game: cyberpunk) == ["legends": "needs 3 cards", "main": "needs 40–50 cards"])
     }

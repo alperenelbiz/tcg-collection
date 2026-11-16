@@ -46,11 +46,11 @@ struct DeckFormatTests {
 
     @Test func riftboundNumbers() {
         let format = riftbound.format("standard")
-        // The Main Deck's 40 include the Chosen Champion (CR 103.3): a total over both sections, no bound on Main alone.
+        // The Main Deck's 40 include the Chosen Champion (CR 103.3): a total over both sections, exactly 40 (A20), no bound on Main alone.
         #expect(shape(format) == ["legend|Legend|1|1|false", "champion|Champion|1|1|true", "main|Main Deck|-|-|false",
                                   "runes|Runes|12|12|false", "battlefields|Battlefields|3|3|false",
                                   "sideboard|Sideboard|-|10|true"])
-        #expect(format.totals == [DeckTotal(sections: ["champion", "main"], min: 40, max: nil,
+        #expect(format.totals == [DeckTotal(sections: ["champion", "main"], min: 40, max: 40,
                                             name: "Main Deck with its Champion")])
         #expect(format.copyLimit == 3); #expect(format.countedSections == ["champion", "main", "sideboard"])
     }
@@ -58,7 +58,8 @@ struct DeckFormatTests {
     @Test func cyberpunkNumbers() {
         let format = cyberpunk.format("standard")
         #expect(shape(format) == ["legends|Legends|3|3|false", "main|Main Deck|40|50|false", "side|Side Deck|-|-|true"])
-        #expect(format.copyLimit == 3); #expect(format.countedSections == ["main"])
+        #expect(format.section("side")?.sizes == [0, 7])
+        #expect(format.copyLimit == 3); #expect(format.countedSections == ["main", "side"])
     }
 
     @Test func onlyCommanderAndRiftboundHaveTotals() {
@@ -81,7 +82,7 @@ struct DeckFormatTests {
         var all: [String: [String]] = [:]
         for game in Games.all {
             for format in game.formats {
-                all["\(game.id)/\(format.id)"] = format.sections.map { "\($0.id) \(bound($0.min, $0.max))" }
+                all["\(game.id)/\(format.id)"] = format.sections.map { "\($0.id) \(bound($0.min, $0.max))" + ($0.sizes.isEmpty ? "" : " sizes \($0.sizes.map(String.init).joined(separator: ","))") }
                     + format.totals.map { "\($0.sections.joined(separator: "+")) \(bound($0.min, $0.max))" }
             }
         }
@@ -90,9 +91,17 @@ struct DeckFormatTests {
             "magic-the-gathering/commander": ["commander 1…2", "deck -…-", "commander+deck 100…100"],
             "magic-the-gathering/constructed": ["deck 60…-", "sideboard -…15"],
             "riftbound/standard": ["legend 1…1", "champion 1…1", "main -…-", "runes 12…12", "battlefields 3…3",
-                                   "sideboard -…10", "champion+main 40…-"],
-            "cyberpunk/standard": ["legends 3…3", "main 40…50", "side -…-"],
+                                   "sideboard -…10", "champion+main 40…40"],
+            "cyberpunk/standard": ["legends 3…3", "main 40…50", "side -…- sizes 0,7"],
         ])
+    }
+
+    @Test func cyberpunkCopyRulesAreTheOwnersAnswer() throws {
+        let format = Games.game("cyberpunk")!.format("standard")
+        #expect(format.countedSections == ["main", "side"])
+        #expect(format.section("legends")?.maxCopies == 1)
+        #expect(format.section("main")?.maxCopies == nil)
+        #expect(format.section("side")?.byHandOnly == true)
     }
 
     @Test func aFormatWithoutTotalsDefaultsToNone() {
