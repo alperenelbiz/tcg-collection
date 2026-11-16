@@ -442,6 +442,261 @@ final class RealCollectionTests: UITestCase {
         return (try XCTUnwrap(Int(key[..<dash]), key), String(key[key.index(after: dash)...]))
     }
 
+    // MARK: Profiles (phase 4B task 6)
+
+    /// The four games in their fixed order, by id and by the name the game picker shows.
+    private static let pickerNames = ["magic-the-gathering": "Magic: The Gathering", "yu-gi-oh": "Yu-Gi-Oh!",
+                                      "riftbound": "Riftbound", "cyberpunk": "Cyberpunk TCG"]
+    private static let gameOrder = ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"]
+
+    /// The games the profiles test turned off in Settings, until it has turned them on again: its teardown block turns them
+    /// on through the app after a failure too, so a later test of this class on the same root finds every game followed.
+    private var profilesTurnedOff: [String] = []
+
+    /// Games and roles on a real collection, offline (A28–A30, G1–G6, G10, G11; Review Focus 1). Skipped unless
+    /// `TCG_REAL_STORE` is set and its root has `user/riftbound.json`; no file of `user/` may hold a `profile` key (else it
+    /// fails at once: a fresh copy each run, a folder as the build before phase 4B wrote it). Every game but Riftbound is
+    /// turned off and on: at least one of them must have a file and one must have none (read from the folder at run time).
+    /// Three launches, each on Riftbound's Collection:
+    /// 1. No `-onboarding` flag: the Collection's subtitle agrees with the file; no first-run question, no folder sheet; the
+    ///    picker lists the four games; Decks ("New Deck…") and Sets are in the sidebar; the status line says offline. Quit:
+    ///    every file of `user/` is byte-equal to the bytes read before the launch, and no file was added (A30). A Debug
+    ///    build never asks without `-onboarding YES`, so this launch proves "no write", not "no question in Release".
+    /// 2. `-onboarding YES`: still no question (the folder has game files: G11), the files still byte-equal while it runs,
+    ///    and Settings shows the normal note (onboarding is not due). Settings: every game but Riftbound unticked; the picker
+    ///    follows (only Riftbound), Riftbound's checkbox is off (G3). Quit: a file that was there differs only by
+    ///    `profile` (`{"followed": false, "player": true, "collector": true}`); a game that had none now has
+    ///    `{"version": 1, "collection": [], "profile": …}`; `riftbound.json` and `settings.json` are byte-equal.
+    /// 3. One game followed: the launch's time to the Collection; while the games are off no filter-list or set-index file of
+    ///    theirs changes (no scan, G5). Settings: each game ticked again; the picker lists four games. Quit: each file that
+    ///    was there differs from before only by `profile`, now all on; the files the test made stay, all on (G1: the key is
+    ///    written once a file has it); `riftbound.json` and `settings.json` byte-equal.
+    /// No number or name of the owner is in the test. Attachment `real-profiles-timings` (each time measured from outside,
+    /// polled every 0.2 s: an upper bound).
+    func testProfilesOnTheRealCollection() throws {
+        let root = try realStoreRoot()
+        let folder = root.appending(path: "user")
+        guard FileManager.default.fileExists(atPath: folder.appending(path: "riftbound.json").path) else {
+            throw XCTSkip("\(folder.path)/riftbound.json is not there: this test runs on a root whose Riftbound collection is imported")
+        }
+        let before = try userFiles(folder)
+        for (name, data) in before where name.hasSuffix(".json") {
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            XCTAssertNil(object?["profile"], "\(name) has a profile: give the test a fresh copy")
+        }
+        let others = Self.gameOrder.filter { $0 != "riftbound" }
+        let withFile = others.filter { before["\($0).json"] != nil }
+        let withoutFile = others.filter { before["\($0).json"] == nil }
+        XCTAssertFalse(withFile.isEmpty, "no game but Riftbound has a file in \(folder.path)")
+        XCTAssertFalse(withoutFile.isEmpty, "every game has a file in \(folder.path)")
+        var times: [String] = []
+        let seconds = { (from: Date) in String(format: "%.1f s", Date().timeIntervalSince(from)) }
+        profilesTurnedOff = []
+        addTeardownBlock { @MainActor [unowned self] in
+            self.restoreProfiles(root: root)
+        }
+
+        // 1. The first launch of this build on the folder: nothing written, nothing asked, everything shown.
+        var launched = Date()
+        var app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        let rows = try storedCollection(game: "riftbound")         // read only: `root` is set by the launch
+        XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
+        times.append("launch -> the Collection's subtitle, four games followed: \(seconds(launched))")
+        XCTAssertFalse(element(app, "onboarding-sheet").exists, "the first-run question on a folder with game files")
+        XCTAssertFalse(element(app, "user-folder-sheet").exists)
+        XCTAssertEqual(gamePickerItems(app), Self.gameOrder.compactMap { Self.pickerNames[$0] })
+        XCTAssertTrue(element(app, "sidebar-new-deck").exists, "no Decks section")
+        XCTAssertTrue(element(app, "sidebar-sets").exists, "no Sets row")
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil { status.exists && self.text(status).hasPrefix("Offline") }, status.exists ? text(status) : "no status line")
+        shot("real-profiles-1-first-launch")
+        quit(app)
+        try assertUnchanged(folder, before, "after the first launch")
+
+        // 2. `-onboarding YES` on that folder: no question. Then Settings turns every other game off.
+        app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection", "-onboarding", "YES"])
+        XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
+        XCTAssertFalse(waitUntil(timeout: 3) { self.element(app, "onboarding-sheet").exists }, "the first-run question with -onboarding YES")
+        try assertUnchanged(folder, before, "while the -onboarding YES launch runs")
+        var pane = openSettings(app)
+        XCTAssertEqual(text(element(app, "settings-note")),
+                       "A game or a role you turn off is hidden. Its cards, lists and decks stay in your folder.")
+        profilesTurnedOff = others
+        for game in others {
+            let box = element(app, "profile-followed-\(game)")
+            XCTAssertTrue(isTicked(box) && box.isEnabled, game)
+            let clicked = Date()
+            box.click()
+            XCTAssertTrue(waitUntil { !self.isTicked(box) }, game)
+            XCTAssertTrue(waitUntil { self.storedProfile(game) == Self.off }, "\(game): \(String(describing: storedProfile(game)))")
+            times.append("untick \(game) -> its file says not followed: \(seconds(clicked))")
+        }
+        var riftbound = element(app, "profile-followed-riftbound")
+        XCTAssertTrue(isTicked(riftbound))
+        XCTAssertFalse(riftbound.isEnabled, "the last followed game can be turned off")
+        shot("real-profiles-2-settings-one-game", of: pane)
+        XCTAssertEqual(gamePickerItems(app), ["Riftbound"])
+        XCTAssertTrue(element(app, "sidebar-new-deck").exists && element(app, "sidebar-sets").exists, "Riftbound's roles are on")
+        quit(app)
+        try assertProfiles(folder, before, withFile: withFile, withoutFile: withoutFile, profile: Self.off)
+
+        // 3. One game followed: no scan of the others. Then Settings turns them on again.
+        let support = root.appending(path: "support")
+        let scanFiles = others.flatMap { ["sets-\($0).json", "facets-\($0).json"] }
+        let scansBefore = fileStamps(support, scanFiles)
+        launched = Date()
+        app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
+        times.append("launch -> the Collection's subtitle, one game followed: \(seconds(launched))")
+        XCTAssertEqual(gamePickerItems(app), ["Riftbound"])
+        // Riftbound's own set index is the only scan this launch may make: wait for it, then look at the others' files.
+        XCTAssertTrue(waitUntil(timeout: 120) { FileManager.default.fileExists(atPath: support.appending(path: "sets-riftbound.json").path) },
+                      "no set index of Riftbound")
+        XCTAssertEqual(fileStamps(support, scanFiles), scansBefore, "a filter-list or set-index file of a game not followed changed")
+        times.append("files of the games not followed, unchanged during the launch: \(scansBefore.keys.sorted().joined(separator: ", "))")
+        pane = openSettings(app)
+        for game in others {
+            let box = element(app, "profile-followed-\(game)")
+            XCTAssertTrue(!isTicked(box) && box.isEnabled, game)
+            box.click()
+            XCTAssertTrue(waitUntil { self.isTicked(box) }, game)
+            XCTAssertTrue(waitUntil { self.storedProfile(game) == Self.on }, "\(game): \(String(describing: storedProfile(game)))")
+        }
+        riftbound = element(app, "profile-followed-riftbound")
+        XCTAssertTrue(waitUntil { riftbound.isEnabled }, "Riftbound stays the last followed game")
+        shot("real-profiles-3-settings-four-games", of: pane)
+        XCTAssertEqual(gamePickerItems(app), Self.gameOrder.compactMap { Self.pickerNames[$0] })
+        quit(app)
+        try assertProfiles(folder, before, withFile: withFile, withoutFile: withoutFile, profile: Self.on)
+        profilesTurnedOff = []
+
+        times.append("files of user/ before: \(before.count); after: \(try userFiles(folder).count) (made: \(withoutFile.map { "\($0).json" }.joined(separator: ", ")))")
+        let report = times.joined(separator: "\n")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "real-profiles-timings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print("RealCollectionTests profiles\n\(report)")
+    }
+
+    /// A profile as written: a game turned off in Settings (its roles stay on), and every member on.
+    private static let off = ["followed": false, "player": true, "collector": true]
+    private static let on = ["followed": true, "player": true, "collector": true]
+
+    /// The regular files of `folder` by name, with their bytes.
+    private func userFiles(_ folder: URL) throws -> [String: Data] {
+        var files: [String: Data] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: folder.path) {
+            let url = folder.appending(path: name)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+            files[name] = try Data(contentsOf: url)
+        }
+        return files
+    }
+
+    /// Every file of `folder` is byte-equal to `before`, and none was added or removed.
+    private func assertUnchanged(_ folder: URL, _ before: [String: Data], _ when: String,
+                                 file: StaticString = #filePath, line: UInt = #line) throws {
+        let now = try userFiles(folder)
+        XCTAssertEqual(now.keys.sorted(), before.keys.sorted(), "the files of user/ \(when)", file: file, line: line)
+        for (name, data) in before where now[name] != data {
+            XCTFail("\(name) changed \(when): \(data.count) bytes before, \(now[name]?.count ?? 0) now", file: file, line: line)
+        }
+    }
+
+    /// After a quit: every game of `withFile` has `profile` and is otherwise its object of `before`; every game of
+    /// `withoutFile` has a file `{"version": 1, "collection": [], "profile": …}`; every other file is byte-equal to `before`.
+    private func assertProfiles(_ folder: URL, _ before: [String: Data], withFile: [String], withoutFile: [String],
+                                profile: [String: Bool], file: StaticString = #filePath, line: UInt = #line) throws {
+        let now = try userFiles(folder)
+        let changed = Set((withFile + withoutFile).map { "\($0).json" })
+        XCTAssertEqual(Set(now.keys), Set(before.keys).union(changed), "the files of user/", file: file, line: line)
+        for (name, data) in before where !changed.contains(name) {
+            XCTAssertEqual(now[name], data, "\(name) changed", file: file, line: line)
+        }
+        for game in withFile {
+            var object = try XCTUnwrap(storedUserFile(game: game), game, file: file, line: line)
+            XCTAssertEqual(object["profile"] as? [String: Bool], profile, game, file: file, line: line)
+            object["profile"] = nil
+            let old = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(before["\(game).json"])) as? [String: Any])
+            XCTAssertEqual(object as NSDictionary, old as NSDictionary, "\(game).json differs by more than its profile",
+                           file: file, line: line)
+        }
+        for game in withoutFile {
+            let object = try XCTUnwrap(storedUserFile(game: game), "\(game).json was not made", file: file, line: line)
+            XCTAssertEqual(Set(object.keys), ["version", "collection", "profile"], game, file: file, line: line)
+            XCTAssertEqual(object["version"] as? Int, 1, game, file: file, line: line)
+            XCTAssertEqual((object["collection"] as? [Any])?.count, 0, game, file: file, line: line)
+            XCTAssertEqual(object["profile"] as? [String: Bool], profile, game, file: file, line: line)
+        }
+    }
+
+    /// Size and modification date of each of `names` in `folder` that exists.
+    private func fileStamps(_ folder: URL, _ names: [String]) -> [String: String] {
+        var stamps: [String: String] = [:]
+        for name in names {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: folder.appending(path: name).path) else { continue }
+            let date = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+            stamps[name] = "\(attributes[.size] ?? 0) bytes, \(date)"
+        }
+        return stamps
+    }
+
+    /// A game file's `profile` object as written; nil with no file or no key.
+    private func storedProfile(_ game: String) -> [String: Bool]? {
+        (try? storedUserFile(game: game))??["profile"] as? [String: Bool]
+    }
+
+    /// The app's main window (the one with the game picker), also while Settings is in front.
+    private func mainWindow(_ app: XCUIApplication) -> XCUIElement {
+        app.windows.containing(.any, identifier: "game-picker").firstMatch
+    }
+
+    /// A checkbox's value (0 or 1).
+    private func isTicked(_ box: XCUIElement) -> Bool { (box.value as? NSNumber)?.boolValue ?? false }
+
+    /// Opens Settings (Cmd+,) and returns its pane.
+    private func openSettings(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
+        app.typeKey(",", modifierFlags: .command)
+        let pane = element(app, "settings-games")
+        XCTAssertTrue(pane.waitForExistence(timeout: 10), "no Settings pane", file: file, line: line)
+        return pane
+    }
+
+    /// The game picker's items, the first of each (an open menu may list them twice), then the menu closed.
+    private func gamePickerItems(_ app: XCUIApplication) -> [String] {
+        let picker = element(app, "game-picker")
+        picker.click()
+        _ = app.menuItems["Riftbound"].firstMatch.waitForExistence(timeout: 5)
+        var seen: [String] = []
+        for item in picker.menuItems.allElementsBoundByIndex.map(\.title) where !item.isEmpty && !seen.contains(item) {
+            seen.append(item)
+        }
+        app.typeKey(.escape, modifierFlags: [])
+        return seen
+    }
+
+    /// The teardown of the profiles test: every game it turned off whose file still has a member off is turned on again
+    /// through the app (the sandboxed runner cannot write into the root), in Settings. Nothing is removed: a file the test
+    /// made stays.
+    private func restoreProfiles(root: URL) {
+        let games = profilesTurnedOff.filter { game in storedProfile(game).map { $0 != Self.on } ?? false }
+        guard !games.isEmpty else { return }
+        self.app?.terminate()
+        let running = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        XCTAssertTrue(element(running, "game-picker").waitForExistence(timeout: 60), "no window")
+        _ = openSettings(running)
+        for game in games {
+            for member in ["followed", "player", "collector"] where storedProfile(game)?[member] == false {
+                element(running, "profile-\(member)-\(game)").click()
+                XCTAssertTrue(waitUntil { self.storedProfile(game)?[member] == true }, "\(game) \(member) stays off")
+            }
+        }
+        quit(running)
+        profilesTurnedOff = []
+    }
+
     // MARK: Sets (phase 4A task 5)
 
     /// The printing the sets test added (`<productID>-<finish>`, the cell's suffix), its product name and its set, until the
