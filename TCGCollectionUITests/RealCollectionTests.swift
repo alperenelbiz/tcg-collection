@@ -726,6 +726,25 @@ final class RealCollectionTests: UITestCase {
         print("RealCollectionTests sharing\n\(report)")
     }
 
+    /// Deck ▸ Active on the deck page on screen; false when the item never showed. Another app that comes to the front
+    /// (seen: the Claude desktop app's window, reported by XCUITest as an interrupting element) makes this app inactive,
+    /// and an inactive app's open menu closes: the item is gone before the click. So the app is brought to the front
+    /// before each try, and the menu is opened again (at most 3 tries) when its item does not show.
+    private func chooseActive(_ app: XCUIApplication) -> Bool {
+        for _ in 0..<3 {
+            app.activate()
+            guard app.wait(for: .runningForeground, timeout: 5) else { continue }
+            element(app, "deck-menu").click()
+            let item = app.menuItems["Active"].firstMatch
+            if item.waitForExistence(timeout: 3), item.isHittable {
+                item.click()
+                return true
+            }
+            app.typeKey(.escape, modifierFlags: [])              // a menu left open, if any
+        }
+        return false
+    }
+
     /// Sets the decks `ids` of the Riftbound file not active again, through the app (Deck ▸ Active on each deck page), and
     /// quits it. Only the ones still active; nothing when none is. Uses the app of the test while it runs, else launches it
     /// on `root` (a teardown after a failure: final fix A7).
@@ -746,10 +765,7 @@ final class RealCollectionTests: UITestCase {
             element(app, "sidebar-deck-\(id)").click()
             XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasPrefix(name + " – ") && self.element(app, "deck-screen").exists },
                           "the deck page of \(id) did not open: \(app.windows.firstMatch.title)")
-            element(app, "deck-menu").click()
-            let item = app.menuItems["Active"].firstMatch
-            XCTAssertTrue(item.waitForExistence(timeout: 5), "no Active item")
-            item.click()
+            XCTAssertTrue(chooseActive(app), "no Active item")
             XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == id }?["active"] as? Bool == false },
                           "\(id) stays active")
         }
@@ -824,10 +840,7 @@ final class RealCollectionTests: UITestCase {
         }, "no new deck in the file")
         let deckID = try XCTUnwrap(id)
         XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10), "the new deck's page did not open")
-        element(app, "deck-menu").click()
-        let active = app.menuItems["Active"].firstMatch
-        XCTAssertTrue(active.waitForExistence(timeout: 5), "no Active item")
-        active.click()
+        XCTAssertTrue(chooseActive(app), "no Active item")
         XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == deckID }?["active"] as? Bool == true },
                       "\(deckID) is not active")
         return (app, deckID)
