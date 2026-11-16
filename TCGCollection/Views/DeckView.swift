@@ -305,13 +305,14 @@ nonisolated enum DeckPage {
         }
     }
 
-    /// E8: the pending cards (`CardNeed.pending`) among the cards `read` covers; nil without a read: the owned copies are
-    /// not known, so no card is counted as pending. All in memory: the active decks and answers of the library, the
-    /// owned counts of the sidebar's last join.
+    /// E8: the pending cards (`CardNeed.pending`) among the cards `read` has printings of; nil without a read: the owned
+    /// copies are not known, so no card is counted as pending. A card the read did not look up, or looked up without a
+    /// printing (final fix A3: its owned copies cannot be known), is never counted. All in memory: the active decks and
+    /// answers of the library, the owned counts of the sidebar's last join.
     static func pendingCount(decks: [Deck], sharing: [String: Bool], read: DeckRead?) -> Int? {
         guard let read else { return nil }
         return needs(decks: decks, sharing: sharing, read: read).values
-            .filter { $0.pending && read.keys.contains($0.cardKey) }.count
+            .filter { $0.pending && !(read.printings[$0.cardKey] ?? []).isEmpty }.count
     }
 
     /// E6: `onMove`'s destination (an offset in the list before the move) as the index after the removal

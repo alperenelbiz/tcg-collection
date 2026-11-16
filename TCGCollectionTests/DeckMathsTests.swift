@@ -267,11 +267,38 @@ struct DeckMathsTests {
         #expect(warnings(deck([card("b", "battlefields", 4)]), game: riftbound)["battlefields"] == "at most 3 cards")
     }
 
+    /// No section of the four games' data is unbounded: each has its own bound or stands in a total (Commander's `deck`,
+    /// Riftbound's `main`). So the test uses the two sections that truly have no number: a section the format lacks (a
+    /// file from elsewhere: no bound, no total) and a section without numbers in a format made for the test. Neither warns
+    /// at any count.
     @Test func aSectionWithoutNumbersNeverWarns() {
+        for n in [1, 30, 200] {
+            let maybe = (1...n).map { card("m\($0)", "maybe", 1) }
+            #expect(warnings(deck(maybe), game: yugioh)["maybe"] == nil)
+        }
+        let free = DeckFormat(id: "free", name: "Free", sections: [DeckSection(id: "pile", name: "Pile", min: nil, max: nil,
+                                                                                 byHandOnly: false)],
+                              copyLimit: nil, countedSections: ["pile"])
+        for n in [0, 1, 500] {
+            let pile = deck([card("p", "pile", n)])
+            #expect(DeckMaths.warnings(pile, format: free, isBasic: notBasic, nameOf: { $0 }).isEmpty)
+        }
+    }
+
+    /// A section with only a maximum (Riftbound's Sideboard, Cyberpunk's Side Deck's largest size) says "at most …" over it.
+    @Test func aSectionOverItsOnlyMaximumSaysAtMost() {
         let side = (1...30).map { card("s\($0)", "sideboard", 1) }
         #expect(warnings(deck(side), game: riftbound)["sideboard"] == "at most 10 cards")
         let free = (1...30).map { card("s\($0)", "side", 1) }
         #expect(warnings(deck(free), game: cyberpunk)["side"] == "at most 7 cards")
+    }
+
+    /// A basic card is exempt from a section's `maxCopies` too: two copies of a basic card among the Legends say nothing
+    /// of copies (only the size, as for any card).
+    @Test func aBasicCardIsExemptFromASectionsMaxCopies() {
+        let legends = deck([card("a", "legends", 2), card("b", "legends", 1)])
+        #expect(warnings(legends, game: cyberpunk, isBasic: { $0 == "a" })["legends"] == nil)
+        #expect(warnings(legends, game: cyberpunk, names: ["a": "Alt"])["legends"] == "more than 1 copy: Alt")
     }
 
     /// A20: Riftbound's Main Deck with its Champion is exactly 40.
@@ -306,7 +333,7 @@ struct DeckMathsTests {
     @Test func cyberpunksCopyLimitCountsMainAndSideTogether() {
         let names = ["x": "Xolo"]
         let over = warnings(deck([card("x", "main", 3), card("x", "side", 1)]), game: cyberpunk, names: names)
-        #expect(over["main"]?.hasSuffix("more than 3 copies: Xolo") == true)
+        #expect(over["main"] == "needs 40–50 cards · more than 3 copies: Xolo")
         #expect(over["side"] == "needs 0 or 7 cards")
         let fine = warnings(deck([card("x", "main", 2), card("x", "side", 1)]), game: cyberpunk, names: names)
         #expect(fine["main"] == "needs 40–50 cards")

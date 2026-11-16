@@ -92,7 +92,8 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 ///   keeps the unknown keys of the card it was.
 /// - A sharing answer (E1) needs a string `cardKey` and a boolean `shared`. The first entry of a card key wins; a later
 ///   one is kept as written, with the entries that cannot be parsed, and goes when the card's parsed answer is removed
-///   (the rule of a second deck of one id), so a removed answer cannot come back at the next read.
+///   (the rule of a second deck of one id), so a removed answer cannot come back at the next read; it stays gone when the
+///   card is answered again in the same run. Only a second entry with a boolean `shared` goes (final fix A4).
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
 
@@ -107,13 +108,18 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         didSet { notePrintingChanges(from: oldValue) }
     }
     /// The user's sharing answers (E1), one per card key, in file order.
-    var sharing: [SharingEntry]
+    var sharing: [SharingEntry] {
+        didSet { noteSharingRemovals() }
+    }
     private let raw: JSONObjectBox
     /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
     private var pinsChanged: Set<String> = []
     /// The deck cards (deck id, card key) whose printing was set or cleared since the read: a `productID` this build
     /// could not read is not written back for them (A18).
     private var printingsChanged: Set<DeckCardRef> = []
+    /// The cards whose answer read from the file was removed since the read (final fix A4): their raw duplicates are not
+    /// written back, also when the card is answered again later in the run.
+    private var sharingRemoved: Set<String> = []
 
     init() {
         collection = []
@@ -251,16 +257,25 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         }
     }
 
-    /// The sharing entries read that could not be parsed, minus each second entry of a card whose parsed answer was
-    /// removed since the read: it goes with that answer, so the removed answer cannot come back at the next read (the rule
-    /// of `unparseableDecksKept`).
+    /// The sharing entries read that could not be parsed, minus each second answer of a card whose parsed answer was
+    /// removed since the read (`sharingRemoved`, also when the card was answered again since): it goes with that answer, so
+    /// the removed answer cannot come back at the next read (the rule of `unparseableDecksKept`). Only a true second answer
+    /// goes (its `shared` a JSON boolean, final fix A4); an entry of that card with an unreadable answer or without one is
+    /// kept.
     private var unparseableSharingKept: [Any] {
-        let removed = Set(raw.sharing.objects.keys).subtracting(sharing.map(\.cardKey))
-        guard !removed.isEmpty else { return raw.sharing.unparseable }
+        guard !sharingRemoved.isEmpty else { return raw.sharing.unparseable }
         return raw.sharing.unparseable.filter { element in
-            guard let key = (element as? [String: Any])?["cardKey"] as? String else { return true }
-            return !removed.contains(key)
+            guard let object = element as? [String: Any], let key = object["cardKey"] as? String,
+                  object["shared"].flatMap(Self.boolean) != nil else { return true }
+            return !sharingRemoved.contains(key)
         }
+    }
+
+    /// Notes the cards whose answer read from the file is no longer in `sharing` (final fix A4).
+    private mutating func noteSharingRemovals() {
+        guard !raw.sharing.objects.isEmpty else { return }
+        let current = Set(sharing.map(\.cardKey))
+        sharingRemoved.formUnion(raw.sharing.objects.keys.filter { !current.contains($0) })
     }
 
     /// How many cards of the deck `id` this build could not read (kept raw inside the deck, written back as read); 0 for a
@@ -302,7 +317,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     /// unreadable pins set or cleared since).
     static func == (lhs: GameUserFile, rhs: GameUserFile) -> Bool {
         lhs.hasSameLists(as: rhs)
-            && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged && lhs.printingsChanged == rhs.printingsChanged)
+            && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged && lhs.printingsChanged == rhs.printingsChanged
+                 && lhs.sharingRemoved == rhs.sharingRemoved)
                 || (try? lhs.data()) == (try? rhs.data()))
     }
 

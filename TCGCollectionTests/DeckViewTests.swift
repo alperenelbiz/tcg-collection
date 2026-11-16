@@ -518,6 +518,29 @@ struct DeckViewTests {
         let available = DeckPage.available(to: second, needs: needs, read: read)
         #expect(available == ["calm rune": 12, "new card": 0])
         #expect(DeckPage.sidebarCount(second, read: read, available: available) == nil)
+        // The page line of the card the read does not cover says its count only, never "missing".
+        let content = DeckPage.content(second, game: riftbound, read: read, available: available, joinFailed: false,
+                                       catalogHasProducts: true, catalogSettled: true, price: none)
+        let newCard = try #require(content.sections.flatMap { $0.groups.flatMap(\.lines) }.first { $0.card.cardKey == "new card" })
+        #expect(DeckPage.countText(newCard) == "×2")
+    }
+
+    /// Review Focus 4 on the deck page and the sidebar: a basic card (a rune) in three active decks with none owned: no
+    /// "missing" on any page line, no sidebar count for any of the three decks.
+    @Test func aBasicCardInThreeDecksIsNeverMissing() throws {
+        let read = read(["calm rune"])
+        let decks = ["Wind", "Cheap", "Third"].map { named($0, [card("calm rune", "runes", 6)]) }
+        let needs = DeckPage.needs(decks: decks, sharing: [:], read: read)
+        #expect(needs["calm rune"]?.pending == false && needs["calm rune"]?.fromDecks == 0)
+        for deck in decks {
+            let available = DeckPage.available(to: deck, needs: needs, read: read)
+            let content = DeckPage.content(deck, game: riftbound, read: read, available: available, joinFailed: false,
+                                           catalogHasProducts: true, catalogSettled: true, price: none)
+            let lines = content.sections.flatMap { $0.groups.flatMap(\.lines) }
+            #expect(lines.map(DeckPage.countText) == ["×6"])
+            #expect(DeckPage.sidebarCount(deck, read: read, available: available) == nil)
+        }
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:], read: read) == 0)
     }
 
     /// E6: a drag's destination (an offset in the list before the move, `onMove`) as the index after the removal
@@ -575,5 +598,13 @@ struct DeckViewTests {
                                       read: read(["kai sa rebel", "dockside lock up"], owned: ["kai sa rebel": 1])) == 2)
         #expect(DeckPage.pendingCount(decks: decks, sharing: ["kai sa rebel": true],
                                       read: read(["kai sa rebel", "dockside lock up"], owned: ["kai sa rebel": 1])) == 1)
+    }
+
+    /// Final fix A3: a card the read looked up but has no printing of (the owner's rows of it point at products the read
+    /// lacks), used by two active decks: its owned copies cannot be known, so it is never counted as pending.
+    @Test func aCardWithoutAPrintingIsNeverCountedAsPending() {
+        let decks = [named("a", [card("ghost", "main", 2)]), named("b", [card("ghost", "main", 2)])]
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:], read: read(["ghost"])) == 0)
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:], read: read(["ghost", "kai sa rebel"])) == 0)
     }
 }

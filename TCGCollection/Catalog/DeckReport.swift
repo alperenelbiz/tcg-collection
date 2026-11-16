@@ -6,8 +6,8 @@ import SwiftData
 /// rule), and the times of the deck reads on the store the report runs on: a paste from "Read" to its table
 /// (`PasteDeckModel.read`) with misspelt names and how well the nearest names find them, a deck page's first join, the reads
 /// of a deck's search, and the work of one render of a deck page; Wanted with two active decks of 60 cards (phase 3B task 8).
-/// Printed after `CatalogReport`; the written numbers are in `docs/reports/2026-11-catalog-report.md`, "Decks, phase 3A
-/// check" and "Sharing, phase 3B check".
+/// Printed after `CatalogReport`. It prints counts (kinds, groups, card types, hits), times and key / printing
+/// counts; no card name (the decks it measures are made from the store and the owner's rows, and stay in memory).
 @MainActor
 enum DeckReport {
     static func text(model: AppModel) async throws -> String {

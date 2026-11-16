@@ -70,6 +70,14 @@ final class WantedScreenState: GameScreenState {
 
     /// True when the search text has a word to match.
     var searching: Bool { !CardName.searchKey(text).isEmpty }
+
+    /// Final fix A1: the sheet "Sharing decisions" closed (its `onDismiss`), or Wanted went away under it (its
+    /// `onDisappear`: a game switch, another screen): the model's flag and the sheet's rows go with it, so `showsSheet`
+    /// never stays true for a sheet that is not there.
+    func endSharing(model: AppModel) {
+        model.showsSharing = false
+        sharingNeeds = []
+    }
 }
 
 /// The window's Wanted state.
@@ -128,11 +136,12 @@ struct WantedView: View {
             }
             .launchPDF(state.export, screen: .wanted, ready: launchReady, model: model) { pdfJob(all) }
             .task(id: join) { await state.join.run(join, model: model) }
-            .sheet(isPresented: Bindable(model).showsSharing) {
+            .sheet(isPresented: Bindable(model).showsSharing, onDismiss: { state.endSharing(model: model) }) {
                 SharingSheet(gameID: game, needs: state.sharingNeeds)
                     .environment(model)
                     .preferredColorScheme(.dark)
             }
+            .onDisappear { state.endSharing(model: model) }
     }
 
     /// "Decisions (n)…": the sheet on the cards the cells show as pending (`pending`, their keys), with their needs made as
@@ -205,11 +214,12 @@ struct WantedView: View {
     }
 
     /// As on the card page: the step goes onto the library's current hand-added count, so two clicks before the next render
-    /// both count; 0 takes the hand entry off the list. A new entry (`+` on a card only from decks) saves the deck card's
-    /// name (`card.entry.name`).
+    /// both count; 0 takes the hand entry off the list. A new entry (`+` on a card only from decks) saves the shown
+    /// printing's card name (the card page's title form) when there is a printing, else the deck card's saved name
+    /// (`card.entry.name`; final fix A5: never the card key that `CardNeed.name` falls back to when a real name exists).
     static func step(by delta: Int, card: WantedCard, game: String, library: UserLibrary) {
         library.setWanted(library.wantedCount(game: game, cardKey: card.id) + delta, game: game, cardKey: card.id,
-                          name: card.entry.name)
+                          name: card.shown?.cardName ?? card.entry.name)
     }
 }
 

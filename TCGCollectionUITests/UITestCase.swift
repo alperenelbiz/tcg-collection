@@ -16,7 +16,7 @@ class UITestCase: XCTestCase {
     /// app, which is the Release build (`com.alperenelbiz.tcgcollection2`).
     nonisolated static let debugBundleID = "com.alperenelbiz.tcgcollection2.debug"
 
-    private var app: XCUIApplication?
+    private(set) var app: XCUIApplication?
     /// The store root of the running test (`-store`).
     private(set) var root: URL?
     /// False when the root was given to `launch(storeRoot:)`: tearDown leaves it.

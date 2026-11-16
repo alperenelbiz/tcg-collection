@@ -19,6 +19,10 @@ import XCTest
 /// `TCG_REAL_STORE` and an imported Riftbound file. XCTest runs a class's tests in name order, so with both variables
 /// it runs after the import, on the files the import wrote.
 final class RealCollectionTests: UITestCase {
+    /// The decks `testSharedCopiesOnTheRealCollection` made and set active: its teardown block sets them not active again,
+    /// also after a failure (final fix A7).
+    private var sharingDecks: [String] = []
+
     func testTheTwoFilesImportOnTheRealCatalog() throws {
         let root = try realStoreRoot()
         let files = try realCSVDirectory()
@@ -645,13 +649,19 @@ final class RealCollectionTests: UITestCase {
         XCTAssertGreaterThanOrEqual(others.count, 8, "\(names)")
         quit(app)
 
-        // 2. and 3. Two decks by paste, each set active.
+        // 2. and 3. Two decks by paste, each set active. A failed run sets them not active too (final fix A7), so a later
+        // test of this class on the same root sees no deck's need.
         var deckIDs: [String] = []
+        sharingDecks = []
+        addTeardownBlock { @MainActor [unowned self] in
+            self.setNotActive(self.sharingDecks, root: root)
+        }
         for (index, extra) in [others[0..<4], others[4..<8]].enumerated() {
             let paste = (["\(card.owned) \(card.name)"] + extra.map { "1 \($0)" }).joined(separator: "\n") + "\n"
             let (running, id) = try pasteNewDeck(root: root, text: paste, copies: card.owned + 4, known: idsOf(decksBefore) + deckIDs)
             app = running
             deckIDs.append(id)
+            sharingDecks = deckIDs
             if index == 1 {
                 let count = element(app, "sidebar-deck-missing-\(id)")
                 XCTAssertTrue(waitUntil(timeout: 30) { count.exists && self.text(count) == "\(card.owned)" },
@@ -697,19 +707,7 @@ final class RealCollectionTests: UITestCase {
         shot("real-sharing-3-wanted-after-share")
 
         // Both decks not active again (a later test of this class on the same root).
-        for id in deckIDs {
-            let name = try XCTUnwrap(storedDecks().first { $0["id"] as? String == id }?["name"] as? String)
-            element(app, "sidebar-deck-\(id)").click()
-            XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasPrefix(name + " – ") && self.element(app, "deck-screen").exists },
-                          "the deck page of \(id) did not open: \(app.windows.firstMatch.title)")
-            element(app, "deck-menu").click()
-            let active = app.menuItems["Active"].firstMatch
-            XCTAssertTrue(active.waitForExistence(timeout: 5), "no Active item")
-            active.click()
-            XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == id }?["active"] as? Bool == false },
-                          "\(id) stays active")
-        }
-        quit(app)
+        setNotActive(deckIDs, root: root)
 
         // After the last quit: the other lists as before, the answer, two more decks, not active.
         let final = try XCTUnwrap(storedUserFile(game: "riftbound"))
@@ -726,6 +724,36 @@ final class RealCollectionTests: UITestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         print("RealCollectionTests sharing\n\(report)")
+    }
+
+    /// Sets the decks `ids` of the Riftbound file not active again, through the app (Deck ▸ Active on each deck page), and
+    /// quits it. Only the ones still active; nothing when none is. Uses the app of the test while it runs, else launches it
+    /// on `root` (a teardown after a failure: final fix A7).
+    private func setNotActive(_ ids: [String], root: URL) {
+        let active = ids.filter { id in storedDecks().first { $0["id"] as? String == id }?["active"] as? Bool == true }
+        guard !active.isEmpty else { return }
+        let app: XCUIApplication
+        if let running = self.app, running.state == .runningForeground || running.state == .runningBackground {
+            app = running
+        } else {
+            app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
+        }
+        for id in active {
+            guard let name = storedDecks().first(where: { $0["id"] as? String == id })?["name"] as? String else {
+                XCTFail("\(id) is not in the file")
+                continue
+            }
+            element(app, "sidebar-deck-\(id)").click()
+            XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasPrefix(name + " – ") && self.element(app, "deck-screen").exists },
+                          "the deck page of \(id) did not open: \(app.windows.firstMatch.title)")
+            element(app, "deck-menu").click()
+            let item = app.menuItems["Active"].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "no Active item")
+            item.click()
+            XCTAssertTrue(waitUntil { self.storedDecks().first { $0["id"] as? String == id }?["active"] as? Bool == false },
+                          "\(id) stays active")
+        }
+        quit(app)
     }
 
     /// The copies owned of the card `name`: the Collection's search for it, when every shown printing has that name (the

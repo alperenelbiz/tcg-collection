@@ -218,8 +218,10 @@ nonisolated enum DeckMaths {
         return [head, "\(missing) missing", tail].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// The warning of a count that breaks its bound says which way (final fix B2). Under a minimum: `needs 40–60 cards`,
-    /// `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`. Over a maximum: `at most 60 cards`, `at most 1 card`
+    /// The warning of a count that breaks its bound says which way (final fix B2). With `sizes` (E10, the allowed sizes:
+    /// Cyberpunk's Side Deck 0 or 7), only they decide and `min` / `max` are not read: a count over the largest says `at
+    /// most 7 cards`, any other count not in the list `needs 0 or 7 cards`. Else, under a minimum: `needs 40–60 cards`,
+    /// `needs at least 40 cards`, `needs 1 card`, `needs 100 cards`; over a maximum: `at most 60 cards`, `at most 1 card`
     /// (also for an exact size or a range). Nil when the count breaks no bound.
     private static func boundText(count: Int, min: Int?, max: Int?, sizes: [Int] = []) -> String? {
         func cards(_ n: Int) -> String { n == 1 ? "1 card" : "\(n) cards" }
@@ -237,9 +239,11 @@ nonisolated enum DeckMaths {
     }
 
     /// Section id → warning text (rule checks warn, never block). On one section, in this order, joined by " · ":
-    /// - its own bound, when its count breaks it;
+    /// - its own bound (`min`, `max`, or its `sizes`: `boundText`), when its count breaks it;
     /// - each total (`DeckFormat.totals`) that the count of its sections breaks, on the last of its sections the format
     ///   has, prefixed by the total's name when it differs from that section's (`Commander deck: needs 100 cards`);
+    /// - the section's own `maxCopies` (E10: copies of one card inside this section alone; Cyberpunk's Legends, 1):
+    ///   `more than 1 copy: Alt`, the cards over it by name (basics exempt);
     /// - the copy limit (when the format has one): `more than 3 copies: A, B, C and 2 more`, the cards over the limit by
     ///   name (basics exempt). A card's copies count over the format's counted sections together plus every section the
     ///   format does not know (a section from elsewhere has no size bound and no total, but the limit is per card). The

@@ -202,6 +202,77 @@ struct AppModelTests {
         #expect(model.statusNotice == "5 cards need a sharing decision.")
     }
 
+    /// Final fix A2: the pending notice never replaces the for-sale clamp notice; it waits and is said, with the count of
+    /// that moment, once the clamp notice is gone.
+    @MainActor @Test(.timeLimit(.minutes(1))) func thePendingNoticeWaitsBehindTheClampNotice() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-game", "riftbound"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        model.pendingCountChanged(0, game: "riftbound")
+        let key = PrintingKey(productID: 1, finish: "Normal")
+        model.library.setCount(3, game: "riftbound", key: key, name: "A")
+        model.library.setForSale(3, game: "riftbound", key: key, name: "A")
+        model.library.setCount(1, game: "riftbound", key: key, name: "")
+        try await until { model.statusNotice == "2 copies are no longer for sale." }
+        model.pendingCountChanged(1, game: "riftbound")
+        #expect(model.statusNotice == "2 copies are no longer for sale.")
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == "2 copies are no longer for sale.")
+        try await until { model.statusNotice == "2 cards need a sharing decision." }
+        try await until { model.statusNotice == nil }                            // said once
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.statusNotice == nil)
+    }
+
+    /// Final fix A2: behind an import's summary ("Imported: …") the pending notice waits, then is said.
+    @MainActor @Test(.timeLimit(.minutes(1))) func thePendingNoticeWaitsBehindAnImportsSummary() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-game", "riftbound"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        model.pendingCountChanged(0, game: "riftbound")
+        await model.importApplied(.init(gameID: "riftbound", games: ["riftbound"], summary: "2 new"))
+        #expect(model.statusNotice == "Imported: 2 new")
+        model.pendingCountChanged(1, game: "riftbound")
+        #expect(model.statusNotice == "Imported: 2 new")
+        try await until { model.statusNotice == "1 card needs a sharing decision." }
+    }
+
+    /// Final fix A2: a pending notice that waited is not said when the count is back at or under its base by the time the
+    /// other notice is gone.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aWaitingPendingNoticeIsDroppedWhenTheCountFallsBack() async throws {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-game", "riftbound"])
+        await model.start()
+        model.noticeDuration = .milliseconds(300)
+        model.pendingCountChanged(1, game: "riftbound")
+        await model.importApplied(.init(gameID: "riftbound", games: ["riftbound"], summary: "2 new"))
+        model.pendingCountChanged(3, game: "riftbound")
+        model.pendingCountChanged(1, game: "riftbound")
+        #expect(model.statusNotice == "Imported: 2 new")
+        try await until { model.statusNotice == nil }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.statusNotice == nil)
+    }
+
+    /// Final fix A1: the sharing sheet's flag never outlives the sheet: its dismissal, and Wanted going away under it, clear
+    /// the flag and the window's rows, so `showsSheet` is false again when no other sheet is open.
+    @MainActor @Test func theSharingSheetsFlagEndsWithTheSheet() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        let state = WantedScreenState(gameID: "riftbound")
+        let need = CardNeed(cardKey: "x", name: "X", users: [], owned: 0, answer: nil, isBasic: false, sum: 2, need: 2,
+                            inConflict: true, pending: true, fromDecks: 2)
+        state.sharingNeeds = [need]
+        model.showsSharing = true
+        #expect(model.showsSheet)
+        state.endSharing(model: model)                  // the sheet's onDismiss and Wanted's onDisappear
+        #expect(!model.showsSharing && !model.showsSheet && state.sharingNeeds.isEmpty)
+        // With another sheet open, `showsSheet` stays true for that one.
+        state.sharingNeeds = [need]
+        model.showsSharing = true
+        model.showsNewDeck = true
+        state.endSharing(model: model)
+        #expect(!model.showsSharing && model.showsSheet && state.sharingNeeds.isEmpty)
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

@@ -172,13 +172,16 @@ nonisolated enum WantedList {
                           basics: Set(printings.keys.filter(isBasic)))
     }
 
-    /// The active decks' needs (E2–E4) on a read: its owned copies and basic cards; only the cards the read looked up (a
-    /// card it did not has no known owned count). No read: none.
+    /// The active decks' needs (E2–E4) on a read: its owned copies and basic cards; only the cards the read has printings
+    /// of. A card it did not look up has no known owned count; final fix A3: neither has a card it looked up without a
+    /// printing (the owner's rows of it point at products the read lacks), so such a card has no decks' part on Wanted in
+    /// any catalog state: not listed from decks, not pending, not in the totals (as the deck page and the sidebar: D13).
+    /// No read: none.
     static func needs(decks: [Deck], sharing: [String: Bool], read: WantedRead?) -> [String: CardNeed] {
         guard let read else { return [:] }
         let owned = read.ownedByCard, basics = read.basics
         return DeckNeeds.needs(decks: decks, sharing: sharing, owned: { owned[$0] ?? 0 }, isBasic: { basics.contains($0) })
-            .filter { read.keys.contains($0.key) }
+            .filter { !(read.printings[$0.key] ?? []).isEmpty }
     }
 
     /// The copies of one card the active decks miss (`CardNeed.fromDecks`), for a card page: `owned` and `isBasic` are the
@@ -188,10 +191,17 @@ nonisolated enum WantedList {
     }
 
     /// One card's need over the active decks (`DeckNeeds.needs`), for a card page: `owned` and `isBasic` are the page's own
-    /// for that card. Nil when no active deck uses it.
+    /// for that card. Nil when no active deck uses it. Final fix A6: the maths runs over that card's deck lines only (each
+    /// deck's cards filtered to the card key first); a card's need depends on its own lines alone, so the numbers are the
+    /// whole decks'.
     static func need(_ cardKey: String, decks: [Deck], sharing: [String: Bool], owned: Int, isBasic: Bool) -> CardNeed? {
-        DeckNeeds.needs(decks: decks, sharing: sharing, owned: { $0 == cardKey ? owned : 0 },
-                        isBasic: { $0 == cardKey && isBasic })[cardKey]
+        let lines = decks.map { deck in
+            var deck = deck
+            deck.cards = deck.cards.filter { $0.cardKey == cardKey }
+            return deck
+        }
+        return DeckNeeds.needs(decks: lines, sharing: sharing, owned: { $0 == cardKey ? owned : 0 },
+                               isBasic: { $0 == cardKey && isBasic })[cardKey]
     }
 
     /// The copies owned of each card of `printings`, over every printing and finish (`CollectionRules.copiesPerCard`). A

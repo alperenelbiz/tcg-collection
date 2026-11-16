@@ -854,6 +854,32 @@ struct GameUserFileTests {
         #expect(again.sharing == [SharingEntry(cardKey: "b", shared: true)])
     }
 
+    /// Final fix A4 (a): a card whose answer was removed and then answered again in the same run does not get its dropped
+    /// raw duplicate back: the removal is remembered since the read.
+    @Test func aCardAnsweredAgainAfterARemovalDoesNotGetItsDuplicateBack() throws {
+        let json = #"{"version":1,"sharing":[{"cardKey":"a","shared":true},{"cardKey":"a","shared":false}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        file.sharing.removeAll { $0.cardKey == "a" }
+        file.sharing.append(SharingEntry(cardKey: "a", shared: true))
+        let written = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as! [Any]
+        #expect(written.count == 1)
+        #expect((written[0] as! [String: Any])["shared"] as? Bool == true)
+        #expect(try GameUserFile(data: try file.data()).sharing == [SharingEntry(cardKey: "a", shared: true)])
+    }
+
+    /// Final fix A4 (b): only a true second answer of the removed card goes (its `shared` a JSON boolean); an entry of that
+    /// card with an unreadable answer, and one without `shared`, are kept raw.
+    @Test func aRemovedAnswerTakesOnlyItsBooleanDuplicates() throws {
+        let json = #"{"version":1,"sharing":[{"cardKey":"a","shared":true},{"cardKey":"a","shared":false},{"cardKey":"a","shared":"ask"},{"cardKey":"a","note":"no answer"}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        file.sharing.removeAll { $0.cardKey == "a" }
+        let written = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as! [Any]
+        #expect(written.count == 2)
+        #expect((written[0] as! [String: Any])["shared"] as? String == "ask")
+        #expect((written[1] as! [String: Any])["note"] as? String == "no answer")
+        #expect(try GameUserFile(data: try file.data()).sharing.isEmpty)
+    }
+
     /// `sharing` that is neither an array nor null refuses the file; `null` reads as none, and the key is written back as
     /// `[]` (the file had it). A file without the key gets it once there is an answer, and loses it again with none.
     @Test func sharingThatIsNoListRefusesTheFile() throws {

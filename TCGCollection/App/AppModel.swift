@@ -247,6 +247,12 @@ final class AppModel {
     @ObservationIgnored private var importsBeingSaid = 0
     /// E8: the last known count of pending cards and its game (`pendingCountChanged`); nil until the first one.
     @ObservationIgnored private var pendingBase: (game: String, count: Int)?
+    /// Final fix A2: a rise of the pending count that waits behind another notice: its game and the count before the
+    /// rise. Said with the count of the moment once that notice is gone (`sayHeldPendingNotice`), unless the count is
+    /// back at or under `base` by then.
+    @ObservationIgnored private var pendingHeld: (game: String, base: Int)?
+    /// The last pending notice said: a newer one may replace it (it is not "another notice").
+    @ObservationIgnored private var pendingSaid: String?
     /// The last "The sale was not saved: …" said: the for-sale notice does not hide it.
     @ObservationIgnored private var unsavedSaleSaid: String?
     /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
@@ -661,15 +667,34 @@ final class AppModel {
 
     /// E8: the count of pending cards of `game` (the sidebar's, `DeckPage.pendingCount`): nil while it is not known (no read
     /// of the game's active decks yet: their owned copies are unknown). The first known count of the game on screen is the
-    /// base and says nothing; a count that goes up says `pendingNotice` once, unless the status line shows a problem
-    /// sentence or a sale that was not saved (it never hides one; as the for-sale notice). A count of another game than
-    /// the one on screen (a late value after a switch) is not taken; a switch starts a new base.
+    /// base and says nothing; a count that goes up says `pendingNotice` once. A count of another game than the one on
+    /// screen (a late value after a switch) is not taken; a switch starts a new base.
+    /// Final fix A2: the notice never replaces another notice (a problem sentence, "The sale was not saved: …", the
+    /// for-sale notice, "Imported: …", a PDF notice) and is never lost: while one is on, or an import's result is still to
+    /// come, it waits, and is said once that notice is gone with the count of that moment; nothing when the count is back
+    /// at or under the count before the rise by then.
     func pendingCountChanged(_ count: Int?, game: String) {
         guard game == gameID, let count else { return }
         let was = pendingBase?.game == game ? pendingBase?.count : nil
         pendingBase = (game, count)
-        guard let notice = Self.pendingNotice(was: was, now: count) else { return }
-        if let shown = statusNotice, library.problems.contains(shown) || shown == unsavedSaleSaid { return }
+        if pendingHeld?.game != game { pendingHeld = nil }
+        if let was, Self.pendingNotice(was: was, now: count) != nil, pendingHeld == nil { pendingHeld = (game, was) }
+        sayHeldPendingNotice()
+    }
+
+    /// Says the pending notice that waits (`pendingHeld`) when the status line shows no other notice and no import's result
+    /// is to come; drops it when its game is not on screen any more or the count is back at or under its base.
+    private func sayHeldPendingNotice() {
+        guard let held = pendingHeld else { return }
+        guard held.game == gameID, let base = pendingBase, base.game == held.game,
+              let notice = Self.pendingNotice(was: held.base, now: base.count) else {
+            pendingHeld = nil
+            return
+        }
+        if importsBeingSaid > 0 { return }
+        if let shown = statusNotice, shown != pendingSaid { return }
+        pendingHeld = nil
+        pendingSaid = notice
         say(notice)
     }
 
@@ -702,15 +727,18 @@ final class AppModel {
         say(sale)
     }
 
-    /// Calls `sayPendingSaleNotice` whenever the library's notices, the import sheet or the status line's notice change,
-    /// for as long as the model lives.
+    /// Calls `sayPendingSaleNotice`, then `sayHeldPendingNotice`, whenever the library's notices, the import sheet or the
+    /// status line's notice change, for as long as the model lives.
     private func watchSaleNotices() {
         let library = library
         let changes = Observations { [weak self] in
             (library.saleNotice, library.unsavedSaleNotice, self?.importing == nil, self?.statusNotice)
         }
         Task { [weak self] in
-            for await _ in changes { self?.sayPendingSaleNotice() }
+            for await _ in changes {
+                self?.sayPendingSaleNotice()
+                self?.sayHeldPendingNotice()
+            }
         }
     }
 

@@ -240,9 +240,10 @@ struct WantedListTests {
     }
 
     /// E5: the union of the hand-added entries and the cards the active decks miss. A hand-added Twin ×1 that the decks
-    /// miss 2 of: total 3, 2 for decks. A card only from decks (Bee, no printing): an entry of count 0 made in memory with
-    /// the deck card's saved name, total 3. A card the decks use but own enough of, a basic card and a card of a deck that
-    /// is not active are not listed.
+    /// miss 2 of: total 3, 2 for decks. A card only from decks (Bee): an entry of count 0 made in memory with the deck
+    /// card's saved name, total 3. A card the decks use but own enough of, a basic card and a card of a deck that is not
+    /// active are not listed. (`cards` lists the needs it is given; `WantedList.needs` leaves out a card without a printing,
+    /// final fix A3, so on the screen Bee would need a printing.)
     @Test func wantedListsTheHandAddedAndTheDecksMissingCards() throws {
         let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2), deckCard("bee", "Bee Card", count: 3),
                                    deckCard("enough", "Enough", count: 1), deckCard("calm rune", "Calm Rune", count: 2)]),
@@ -297,6 +298,10 @@ struct WantedListTests {
         // A hand entry without a pin takes the decks' choice too.
         let handToo = try #require(try cards([entry(count: 1)], decks: chose1).first)
         #expect(handToo.shown?.productID == 1 && handToo.price == ShownPrice(amount: 4, isLow: false))
+        // A hand entry whose decks chose a printing but miss nothing (2 owned of 2 used): the cheapest, not the decks'.
+        let complete = try #require(try cards([entry(count: 1)], decks: chose1, owned: ["twin": 2]).first)
+        #expect(complete.forDecks == 0)
+        #expect(complete.shown?.productID == 2 && complete.price == ShownPrice(amount: 1.5, isLow: false))
         // The decks' chosen printing's price is its cheapest finish: Twin 2 has Normal $1.50 and Foil $9.00.
         let chose2 = try #require(try cards([], decks: [deck("Wind", [deckCard("twin", "Twin", count: 1, productID: 2)])]).first)
         #expect(chose2.shown?.productID == 2 && chose2.price == ShownPrice(amount: 1.5, isLow: false))
@@ -328,10 +333,9 @@ struct WantedListTests {
         #expect(WantedList.sorted(mixed, by: .priceLow).map(\.id) == ["twin", "other card"])
     }
 
-    /// Review Focus 3: a card only from decks without a printing on a settled catalog is listed with its saved name, no
-    /// price, counted "without a price", and opens nothing (it has no wanted entry to show on a page). On a catalog that is
-    /// not settled it is pending with the downloading line. A deck card the join did not look up is left out until a join
-    /// covers it: its owned copies are not known.
+    /// Final fix A3 (it replaces Review Focus 3): a deck card whose printings the read lacks adds nothing to Wanted, in
+    /// every catalog state: the copies owned of it cannot be known. Not listed, not pending, not in the totals; only the
+    /// cards with a printing are. A deck card the join did not look up is left out until a join covers it.
     @Test func aDeckOnlyCardFollowsTheCatalogStates() throws {
         let decks = [deck("Wind", [deckCard("bee", "Bee Card", count: 2), deckCard("twin", "Twin", count: 1)])]
         func listed(keys: Set<String>, settled: Bool) throws -> WantedContent {
@@ -340,18 +344,76 @@ struct WantedListTests {
                                price: WantedList.price(try table(), game: "riftbound"))
         }
         let settled = try listed(keys: ["bee", "twin"], settled: true)
-        #expect(settled.cards.map(\.id) == ["bee", "twin"] && settled.note == nil)
-        #expect(settled.cards[0].name == "Bee Card" && settled.cards[0].price == nil && settled.cards[0].shown == nil)
-        #expect(settled.cards.map { settled.link(for: $0) } == [.none, .card])
-        #expect(WantedList.totals(settled.cards) == "3 copies · 2 cards · $1.50 + 1 without a price")
+        #expect(settled.cards.map(\.id) == ["twin"] && settled.note == nil)
+        #expect(settled.cards.map { settled.link(for: $0) } == [.card])
+        #expect(WantedList.totals(settled.cards) == "1 copy · 1 card · $1.50")
         let during = try listed(keys: ["bee", "twin"], settled: false)
-        #expect(during.note == CollectionList.catalogDownloading && during.cards.map { during.link(for: $0) } == [.none, .card])
+        #expect(during.cards.map(\.id) == ["twin"] && during.cards.map(\.pending) == [false])
+        #expect(during.cards.map { during.link(for: $0) } == [.card])
         let uncovered = try listed(keys: ["twin"], settled: true)
         #expect(uncovered.cards.map(\.id) == ["twin"])
         // With no read (no products of the game yet) no deck card is listed.
         let none = WantedList.content([], decks: decks, sharing: [:], read: nil, joinFailed: false, catalogHasProducts: false,
                                       catalogSettled: false, price: { _, _ in nil })
         #expect(none.cards.isEmpty)
+    }
+
+    /// Final fix A3: two active decks use a card without a printing (the owner's rows of it point at products the read does
+    /// not have): it is not pending and not listed; a hand-added entry of such a card is listed as in phase 2C, its count
+    /// line the hand part only (`×1`, no "for decks").
+    @Test func aDeckCardWithoutAPrintingHasNoDecksPart() throws {
+        let decks = [deck("Wind", [deckCard("bee", "Bee Card", count: 2)]), deck("Cheap", [deckCard("bee", "Bee Card", count: 2)])]
+        var joined = read(["twin": twin], keys: ["bee", "twin"])
+        joined.ownedByCard = ["twin": 0]
+        let price = WantedList.price(try table(), game: "riftbound")
+        for settled in [true, false] {
+            let fromDecks = WantedList.content([], decks: decks, sharing: [:], read: joined, joinFailed: false,
+                                               catalogHasProducts: true, catalogSettled: settled, price: price)
+            #expect(fromDecks.cards.isEmpty)
+            #expect(WantedList.needs(decks: decks, sharing: [:], read: joined)["bee"] == nil)
+            let hand = WantedList.content([entry("bee", name: "Bee Card", count: 1)], decks: decks, sharing: [:], read: joined,
+                                          joinFailed: false, catalogHasProducts: true, catalogSettled: settled, price: price)
+            #expect(hand.cards.map(\.id) == ["bee"] && hand.cards.map(\.forDecks) == [0] && hand.cards.map(\.pending) == [false])
+            #expect(hand.countText(for: hand.cards[0]) == "×1")
+            #expect(hand.link(for: hand.cards[0]) == (settled ? .unknownCard : .none))
+        }
+    }
+
+    /// Final fix A5: `+` on a cell of a card only from decks saves the shown printing's card name when there is a printing,
+    /// else the deck card's saved name; never the card key when a real name exists.
+    @Test func plusOnADeckOnlyCardSavesTheCardsName() async throws {
+        let library = UserLibrary(folder: tempDir(), watcher: nil)
+        await library.load()
+        // The deck line saved no name: the need's name is the card key.
+        let decks = [deck("Wind", [deckCard("other card", "", count: 2)])]
+        let price = WantedList.price(try table(), game: "riftbound")
+        let listed = WantedList.content([], decks: decks, sharing: [:], read: read(["other card": other], keys: ["other card"]),
+                                        joinFailed: false, catalogHasProducts: true, catalogSettled: true, price: price)
+        let card = try #require(listed.cards.first)
+        WantedView.step(by: 1, card: card, game: "riftbound", library: library)
+        #expect(library.wanted(game: "riftbound").map(\.name) == ["Other Card"])
+        // Without a printing the deck card's saved name (a hand entry of such a card, as the cell shows it).
+        let unprinted = WantedCard(entry: WantedEntry(cardKey: "bee", name: "Bee Card", count: 0), shown: nil, price: nil, owned: 0)
+        WantedView.step(by: 1, card: unprinted, game: "riftbound", library: library)
+        #expect(library.wanted(game: "riftbound").first { $0.cardKey == "bee" }?.name == "Bee Card")
+    }
+
+    /// Final fix A6: the card page's need runs over that card's deck lines only; the numbers equal the unfiltered call's,
+    /// for a card in two of three decks.
+    @Test func theCardPagesNeedEqualsTheWholeDecksNeed() {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 3), deckCard("bee", "Bee", count: 4)]),
+                     deck("Cheap", [deckCard("bee", "Bee", count: 1)]),
+                     deck("Third", [deckCard("twin", "Twin", count: 2), deckCard("other", "Other", count: 1)])]
+        for sharing in [[:], ["twin": true], ["twin": false]] as [[String: Bool]] {
+            for owned in [0, 1, 4, 6] {
+                let whole = DeckNeeds.needs(decks: decks, sharing: sharing, owned: { $0 == "twin" ? owned : 0 },
+                                            isBasic: { _ in false })["twin"]
+                let page = WantedList.need("twin", decks: decks, sharing: sharing, owned: owned, isBasic: false)
+                #expect(page == whole)
+                #expect(WantedList.forDecks("twin", decks: decks, sharing: sharing, owned: owned, isBasic: false)
+                        == whole?.fromDecks)
+            }
+        }
     }
 
     /// The owned copies of the read count: own enough and the card leaves the list; own 2 of 3 and 1 is for decks.
