@@ -193,7 +193,8 @@ struct ForSaleView: View {
     private func soldMessage(_ entry: CollectionEntry, forSale count: Int) -> String? {
         guard let game = Games.game(state.gameID) else { return nil }
         let library = model.library
-        return SaleList.soldMessage(for: entry, forSale: count, game: game, decks: library.decks(game: state.gameID),
+        // G7: no deck message without the player role (no deck in play).
+        return SaleList.soldMessage(for: entry, forSale: count, game: game, decks: model.decksInPlay(game: state.gameID),
                                     sharing: library.sharing(game: state.gameID))
     }
 

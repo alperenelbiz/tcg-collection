@@ -288,7 +288,8 @@ struct OwnedFinishes: View {
                            owned: wanted.owned, isBasic: wanted.isBasic)
                     .padding(.top, 6)
             }
-            if let deckCard {
+            // G7: the "Decks" block (its lines, the sharing line, "Add to deck") only with the player role.
+            if let deckCard, GameSections.showsDecks(model.profile(of: gameID)) {
                 DeckLines(gameID: gameID, card: deckCard, owned: wanted?.owned ?? 0, isBasic: wanted?.isBasic ?? false)
                     .padding(.top, 6)
             }
@@ -377,7 +378,7 @@ struct WantedLine: View {
         // The pin choices need a count (an entry) and a game that can change.
         let pinned = locked || count == 0 ? nil : entry?.pin
         let offersPin = !locked && count > 0
-        let forDecks = locked ? nil : Self.decksText(cardKey, decks: library.decks(game: gameID),
+        let forDecks = locked ? nil : Self.decksText(cardKey, decks: model.decksInPlay(game: gameID),
                                                      sharing: library.sharing(game: gameID), owned: owned, isBasic: isBasic,
                                                      hasPrinting: hasPrinting)
         let pinChoice: (title: String, key: PrintingKey?)? = if offersPin, let pin, pinned == nil || pinned == pin {
@@ -499,7 +500,7 @@ struct DeckLines: View {
         let library = model.library
         let locked = library.countsLocked(game: gameID) != nil
         let game = Games.game(gameID) ?? Games.all[0]
-        let decks = library.decks(game: gameID)
+        let decks = model.decksInPlay(game: gameID)
         let lines = DeckPage.cardLines(decks: decks, cardKey: card.cardKey, game: game)
         VStack(alignment: .leading, spacing: 6) {
             Text("Decks")

@@ -66,6 +66,21 @@ struct RootViewTests {
         #expect(path.wrappedValue.isEmpty)
     }
 
+    /// Phase 4B (G7, G8): a stored or launched screen through the game's profile: a deck without the player role and Sets
+    /// without the collector role open the Collection; with the role, as before (a deck the file lacks opens the
+    /// Collection too).
+    @Test func aCheckedScreenFollowsTheRoles() {
+        let playerOff = GameProfile(player: false), collectorOff = GameProfile(collector: false)
+        #expect(Screen.checked(.deck("a"), profile: .all, deckIDs: ["a"]) == .deck("a"))
+        #expect(Screen.checked(.deck("a"), profile: playerOff, deckIDs: ["a"]) == .collection)
+        #expect(Screen.checked(.deck("c"), profile: .all, deckIDs: ["a"]) == .collection)
+        #expect(Screen.checked(.sets, profile: .all, deckIDs: []) == .sets)
+        #expect(Screen.checked(.sets, profile: collectorOff, deckIDs: []) == .collection)
+        #expect(Screen.checked(.sets, profile: playerOff, deckIDs: []) == .sets)
+        #expect(Screen.checked(.deck("a"), profile: collectorOff, deckIDs: ["a"]) == .deck("a"))
+        #expect(Screen.checked(.wanted, profile: GameProfile(player: false, collector: false), deckIDs: []) == .wanted)
+    }
+
     /// The import shows the imported game's Collection at its root (fix round 2), not a page kept on it: a page opened on
     /// the Collection and kept across a sidebar switch is not what the import shows.
     @Test func anImportShowsTheCollectionsRoot() async {

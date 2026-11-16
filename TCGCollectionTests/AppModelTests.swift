@@ -1567,6 +1567,130 @@ struct AppModelTests {
         #expect(Array(await log.entries.prefix(5)) == ["read magic-the-gathering.json", "read yu-gi-oh.json",
                                                          "read riftbound.json", "read cyberpunk.json", "groups 89"])
     }
+
+    // MARK: Roles (phase 4B task 3: G7–G9)
+
+    /// A Riftbound file with one active deck `rb1` (2 Dockside Lock-Up) and the given profile members.
+    private static func riftboundDeck(profile: String) -> String {
+        #"{"version":1,"collection":[],"decks":[{"id":"rb1","name":"Wind","format":"standard","active":true,"cards":[{"cardKey":"dockside lock up","name":"Dockside Lock-Up","section":"main","count":2}]}],"profile":"# + profile + "}"
+    }
+
+    /// G7, G8: a stored or launched deck screen without the player role, and Sets without the collector role, open the
+    /// Collection; `-pasteDeck` opens no paste sheet without the player role. With the role, as before.
+    @MainActor @Test func aLaunchOnAScreenOfARoleThatIsOffOpensTheCollection() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "riftbound", Self.riftboundDeck(profile: #"{"player":false}"#))
+        let text = root.appending(path: "paste.txt")
+        try Data("2 Dockside Lock-Up".utf8).write(to: text)
+        let deck = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "deck:rb1",
+                          "-pasteDeck", text.path])
+        await deck.start()
+        #expect(deck.screen == .collection)
+        #expect(deck.pasting == nil)
+        #expect(deck.decksInPlay(game: "riftbound").isEmpty); #expect(deck.library.decks(game: "riftbound").count == 1)
+        let sets = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "sets"])
+        await sets.start()
+        #expect(sets.screen == .sets)                                          // the collector role is on
+
+        let other = tempRoot()
+        try writeUserFile(other, "riftbound", Self.riftboundDeck(profile: #"{"collector":false}"#))
+        let off = model(["app", "-store", other.path, "-offline", "YES", "-game", "riftbound", "-screen", "sets"])
+        await off.start()
+        #expect(off.screen == .collection)
+        let on = model(["app", "-store", other.path, "-offline", "YES", "-game", "riftbound", "-screen", "deck:rb1"])
+        await on.start()
+        #expect(on.screen == .deck("rb1"))                                     // the player role is on
+        #expect(on.decksInPlay(game: "riftbound").map(\.id) == ["rb1"])
+    }
+
+    /// Review Focus 3: the player role turned off by another device while a deck page shows, with its sheets open (the
+    /// paste sheet, New Deck, the sharing sheet): the Collection shows at its root, every sheet closes, `showsSheet` is
+    /// false, and nothing is written (the file is the other device's, byte for byte; the deck stays in it). The collector
+    /// role turned off while Sets shows: the Collection. A role of another game changes nothing on screen.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aRoleTurnedOffElsewhereLeavesItsScreenAndClosesItsSheets() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "riftbound", Self.riftboundDeck(profile: "{}"))
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "deck:rb1"])
+        await model.start()
+        #expect(model.screen == .deck("rb1"))
+        model.pasteDeck(into: "rb1")
+        model.showsNewDeck = true
+        model.newDeckCard = DeckCardToAdd(cardKey: "dockside lock up", name: "Dockside Lock-Up", kind: nil)
+        model.pendingPaste = ("Deck", "standard")
+        model.showsSharing = true
+        #expect(model.pasting != nil && model.showsSheet)
+
+        // Another game's role: nothing here moves.
+        let magic = AppPaths.userTestRoot(root).appending(path: "magic-the-gathering.json")
+        try Data(#"{"version":1,"collection":[],"profile":{"player":false,"collector":false}}"#.utf8).write(to: magic)
+        await model.library.fileChanged(magic)?.value
+        await model.waitForProfileWork()
+        #expect(model.screen == .deck("rb1") && model.pasting != nil && model.showsSharing)
+
+        let file = AppPaths.userTestRoot(root).appending(path: "riftbound.json")
+        let written = Data(Self.riftboundDeck(profile: #"{"player":false}"#).utf8)
+        try written.write(to: file)
+        await model.library.fileChanged(file)?.value
+        try await until { model.screen == .collection }
+        #expect(model.showsRoot(.collection))
+        #expect(model.pasting == nil); #expect(!model.showsNewDeck); #expect(model.newDeckCard == nil)
+        #expect(model.pendingPaste == nil); #expect(!model.showsSharing); #expect(!model.showsSheet)
+        #expect(model.library.decks(game: "riftbound").map(\.id) == ["rb1"])
+        await model.library.flush()
+        #expect(try Data(contentsOf: file) == written)
+
+        // The collector role, while Sets shows.
+        model.screen = .sets
+        let noCollector = Data(Self.riftboundDeck(profile: #"{"player":false,"collector":false}"#).utf8)
+        try noCollector.write(to: file)
+        await model.library.fileChanged(file)?.value
+        try await until { model.screen == .collection }
+        await model.library.flush()
+        #expect(try Data(contentsOf: file) == noCollector)
+    }
+
+    /// G8: a game switch to a game without the collector role while Sets shows opens that game's Collection; G9: with both
+    /// roles off the Collection, Wanted, For Sale and All cards stay on a switch.
+    @MainActor @Test func aGameSwitchFollowsTheRolesOfTheNewGame() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "cyberpunk", #"{"version":1,"collection":[],"profile":{"player":false,"collector":false}}"#)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound", "-screen", "sets"])
+        await model.start()
+        model.gameID = "cyberpunk"
+        #expect(model.screen == .collection)
+        for screen in [Screen.collection, .wanted, .forSale, .allCards] {
+            model.gameID = "riftbound"
+            model.screen = screen
+            model.gameID = "cyberpunk"
+            #expect(model.screen == screen, "\(screen)")
+        }
+    }
+
+    /// G8: without the collector role the game's set index is not scanned (its due mark stays, no file is written); the
+    /// role turned on asks for the scan, and the index is made.
+    @MainActor @Test(.timeLimit(.minutes(1))) func noSetIndexScanWithoutTheCollectorRole() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "riftbound", #"{"version":1,"collection":[],"profile":{"collector":false}}"#)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-game", "riftbound"])
+        var scanned: [String] = []
+        model.setIndexScanHook = { scanned.append($0) }
+        await model.start()
+        await model.waitForSetIndexes()
+        #expect(try await model.reader.progress(game: "riftbound").fetched >= 1)     // its catalog is synced
+        #expect(!scanned.contains("riftbound"), "\(scanned)")
+        #expect(!FileManager.default.fileExists(atPath: model.paths.sets("riftbound").path))
+        #expect(model.setIndexIsDue("riftbound"))
+        for game in ["magic-the-gathering", "yu-gi-oh", "cyberpunk"] {
+            #expect(FileManager.default.fileExists(atPath: model.paths.sets(game).path), "\(game)")
+        }
+
+        model.library.setProfile(.all, game: "riftbound")
+        try await until { scanned.contains("riftbound") }
+        await model.waitForSetIndexes()
+        #expect(FileManager.default.fileExists(atPath: model.paths.sets("riftbound").path))
+        #expect(!model.setIndexIsDue("riftbound"))
+    }
 }
 
 /// The fixture network (every game) with its requests counted: set lists and sets by category, archives by day, other

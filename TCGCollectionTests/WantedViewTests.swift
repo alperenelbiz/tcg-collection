@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TCGCollection2
 
@@ -58,5 +59,52 @@ struct WantedViewTests {
         // A printing that left the catalog, also on the page of a card that left it (nothing shown).
         #expect(text(1, "Normal") == "Pinned to a printing that left the catalog")
         #expect(text(719834, "1st Edition", shown: nil) == "Pinned to Beyond the Brave · BETB-EN001 · Super Rare")
+    }
+
+    /// Phase 4B (G7): without the player role Wanted is the hand-added list. Two active decks miss Dockside Lock-Up (2
+    /// each, none owned: one card pending) and Twin is wanted once by hand. With the role off (the file's profile) the list
+    /// is Twin alone at `×1`: no decks' part, nothing pending, and the join reads no deck card. The role turned on brings
+    /// the decks' part back from the file.
+    @Test func withoutThePlayerRoleWantedIsTheHandAddedList() async throws {
+        let root = tempRoot()
+        let user = AppPaths.userTestRoot(root)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data("""
+        {"version": 1, "collection": [],
+         "wanted": [{"cardKey": "twin", "name": "Twin", "count": 1}],
+         "decks": [{"id": "a", "name": "Wind", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2}]},
+                   {"id": "b", "name": "Cheap", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2}]}],
+         "profile": {"player": false}}
+        """.utf8).write(to: user.appending(path: "riftbound.json"))
+        let model = AppModel(options: LaunchOptions(arguments: ["app", "-store", root.path, "-offline", "YES", "-game", "riftbound"]),
+                             catalogClient: FakeCatalog(groups: Data(), products: Data()), archiveClient: FakeArchive(),
+                             fetcher: FakeFetcher())
+        await model.start()
+        #expect(model.library.decks(game: "riftbound").count == 2)                    // the file keeps them
+        #expect(model.decksInPlay(game: "riftbound").isEmpty)
+
+        let wanted = model.library.wanted(game: "riftbound")
+        let printings = ["twin": [product(id: 1, name: "Twin")], "dockside lock up": [product(id: 2, name: "Dockside Lock-Up")]]
+        var read = WantedRead(printings: printings, keys: ["twin", "dockside lock up"], setNames: [:])
+        read.ownedByCard = [:]
+        let none: (WantedEntry, [ProductRecord]) -> ShownPrice? = { _, _ in nil }
+        func listed() -> WantedContent {
+            let decks = model.decksInPlay(game: "riftbound")
+            return WantedList.content(wanted, decks: decks, sharing: model.library.sharing(game: "riftbound"), read: read,
+                                      joinFailed: false, catalogHasProducts: true, catalogSettled: true, price: none)
+        }
+        #expect(WantedList.joinKeys(wanted: wanted, decks: model.decksInPlay(game: "riftbound")) == ["twin"])
+        let off = listed()
+        #expect(off.cards.map(\.id) == ["twin"])
+        #expect(off.cards.map { off.countText(for: $0) } == ["×1"])
+        #expect(off.cards.filter(\.pending).isEmpty)
+
+        model.library.setProfile(.all, game: "riftbound")
+        #expect(WantedList.joinKeys(wanted: wanted, decks: model.decksInPlay(game: "riftbound")) == ["twin", "dockside lock up"])
+        let on = listed()
+        #expect(on.cards.map(\.id).sorted() == ["dockside lock up", "twin"])
+        #expect(on.cards.first { $0.id == "dockside lock up" }?.pending == true)
     }
 }

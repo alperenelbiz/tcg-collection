@@ -1454,6 +1454,29 @@ struct UserLibraryTests {
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    /// Phase 4B task 3 (G7): with the player role off a change of another list keeps the decks and the sharing answers
+    /// byte-equal: the role hides them, it never drops them.
+    @MainActor @Test func aCollectionChangeWithThePlayerRoleOffKeepsTheDecksAndAnswers() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let json = #"{"version":1,"collection":[],"decks":[{"id":"d","name":"D","format":"standard","active":true,"cards":[{"cardKey":"a","name":"A","section":"main","count":3,"productID":7,"k":1}]},{"name":"no id"}],"sharing":[{"cardKey":"a","shared":true},{"x":1}],"profile":{"player":false}}"#
+        try UserFiles.write(try GameUserFile(data: Data(json.utf8)).data(), to: file)
+        let original = try Data(contentsOf: file)
+        let lib = await deckLibrary(dir)
+        #expect(!lib.profile(game: "riftbound").player)
+        lib.setCount(2, game: "riftbound", key: PrintingKey(productID: 1, finish: "Normal"), name: "A")
+        await lib.flush()
+        let after = try Data(contentsOf: file)
+        #expect(after != original)
+        func part(_ data: Data, _ key: String) throws -> Data {
+            let value = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?[key])
+            return try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+        for key in ["decks", "sharing", "profile"] {
+            #expect(try part(after, key) == part(original, key), "\(key)")
+        }
+        #expect(try stored(dir, "riftbound").map(\.count) == [2])
+    }
+
     /// The rows stored in `<dir>/<game>.json`.
     private func stored(_ dir: URL, _ game: String) throws -> [CollectionRow] {
         try GameUserFile(data: try #require(try UserFiles.read(dir.appending(path: "\(game).json")))).collection

@@ -58,10 +58,10 @@ nonisolated enum Screen: Hashable, Sendable {
     /// conflict) itself, on the screen and its pages. On any other screen the sidebar shows them.
     var isList: Bool { self != .allCards }
 
-    /// `screen`, unless it is a deck that `deckIDs` (the game's decks, once the folder is read) lacks: then the Collection.
-    static func checked(_ screen: Screen, deckIDs: [String]) -> Screen {
-        guard case .deck(let id) = screen, !deckIDs.contains(id) else { return screen }
-        return .collection
+    /// `screen` as a launch may show it once the folder is read (`GameSections.screen`): a deck that `deckIDs` (the game's
+    /// decks) lacks, a deck without the player role and Sets without the collector role open the Collection.
+    static func checked(_ screen: Screen, profile: GameProfile = .all, deckIDs: [String]) -> Screen {
+        GameSections.screen(screen, profile: profile, deckExists: deckIDs.contains)
     }
 }
 
@@ -156,8 +156,10 @@ final class AppModel {
     var gameID: String {
         didSet {
             defaults.set(gameID, forKey: Self.gameKey)
-            // A deck belongs to one game: another game opens the Collection.
+            // A deck belongs to one game: another game opens the Collection. G8: so does Sets of a game without the
+            // collector role.
             if gameID != oldValue, case .deck = screen { screen = .collection }
+            if gameID != oldValue, screen == .sets, !GameSections.showsSets(profile(of: gameID)) { screen = .collection }
         }
     }
     var game: GameDefinition { Games.game(gameID) ?? Games.all[0] }
@@ -405,6 +407,55 @@ final class AppModel {
 
     func isFollowed(_ gameID: String) -> Bool { followedGames.contains { $0.id == gameID } }
 
+    // MARK: Roles (G7–G9)
+
+    /// The game's profile as the library holds it (every member on before the folder is read).
+    func profile(of gameID: String) -> GameProfile { library.profile(game: gameID) }
+
+    /// The game's decks as every deck-derived number and view takes them (`GameSections.decks`): none without the player
+    /// role. The file keeps them.
+    func decksInPlay(game: String) -> [Deck] { GameSections.decks(library.decks(game: game), profile: profile(of: game)) }
+
+    /// The followed games with the collector role (G8): the games whose set index is made.
+    private var collectingGames: [String] {
+        followedGames.map(\.id).filter { GameSections.showsSets(profile(of: $0)) }
+    }
+
+    /// The games `applyRoles` last saw with the collector role; nil before the launch has read the folder.
+    @ObservationIgnored private var lastCollecting: [String]?
+
+    /// G7, G8, Review Focus 3: the roles of the game on screen, applied after a profile change (here or by a reload).
+    /// - A screen of a role that is off (a deck page without the player role, Sets without the collector role) leaves to
+    ///   the Collection, at its root (a switch made by code); the deck's search and the pages on its stack go with it.
+    /// - Without the player role the sheets that only make sense with it close without writing: the sharing sheet, the
+    ///   paste sheet, New Deck (and the paste it asked for), Rename Deck.
+    /// - A game whose collector role was turned on gets its set index asked for when it is due or missing (its scans were
+    ///   dropped meanwhile; the due mark stayed).
+    /// A deck that is gone is not judged here: its page says "This deck was removed." (phase 3A).
+    private func applyRoles() {
+        let profile = profile(of: gameID)
+        let shown = GameSections.screen(screen, profile: profile, deckExists: { _ in true })
+        if shown != screen { showRoot(of: shown) }
+        if !GameSections.showsDecks(profile) {
+            if showsSharing { showsSharing = false }
+            if let paste = pasting, paste.gameID == gameID { pasting = nil }
+            if showsNewDeck { showsNewDeck = false }
+            if newDeckCard != nil { newDeckCard = nil }
+            pendingPaste = nil
+            if renamingDeck { renamingDeck = false }
+        }
+        let collecting = collectingGames
+        defer { lastCollecting = collecting }
+        guard let last = lastCollecting else { return }
+        for game in collecting where !last.contains(game) {
+            if setIndexIsDue(game) {
+                enqueueSetIndex(game, onlyWithProducts: false)
+            } else if setIndexes[game] == nil {
+                enqueueSetIndex(game, onlyWithProducts: true)
+            }
+        }
+    }
+
     /// G6, the one gate of the sync's steps: they start once the followed games are known, after the library's first read
     /// of the folder (or once it found the folder missing: then every game counts as followed). With no folder chosen yet
     /// (the first-run folder sheet) nothing is downloaded. Task 5 adds onboarding here.
@@ -437,6 +488,7 @@ final class AppModel {
             gameID = GameSelection.shown(asked: gameID, followed: followed)
             showRoot(of: .collection)
         }
+        applyRoles()
         guard let last = lastFollowed else {
             lastFollowed = followed
             return
@@ -448,7 +500,7 @@ final class AppModel {
         guard !added.isEmpty else { return }
         for game in added where !turnedOn.contains(game) { turnedOn.append(game) }
         if canSync, !catalogWaits { catalogPending.formUnion(added) }
-        for game in added {
+        for game in added where GameSections.showsSets(profile(of: game)) {
             if setIndexIsDue(game) {
                 enqueueSetIndex(game, onlyWithProducts: false)
             } else if setIndexes[game] == nil {
@@ -772,7 +824,8 @@ final class AppModel {
     /// "Paste…" of a deck page (`deckID`), or "Paste a deck…" of the New Deck sheet (nil: a new deck with `name` and
     /// `format`): opens the paste sheet on the game shown. Not while another sheet is open.
     func pasteDeck(into deckID: String?, name: String = "", format: String = "", text: String = "") {
-        guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet else { return }
+        guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet,
+              GameSections.showsDecks(profile(of: gameID)) else { return }
         let game = Games.game(gameID)
         pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, text: text, library: library,
                                  reader: reader,
@@ -936,10 +989,12 @@ final class AppModel {
             let followed = followedGames.map(\.id)
             gameID = GameSelection.shown(asked: gameID, followed: followed)
             lastFollowed = followed
+            lastCollecting = collectingGames
         }
         watchProfiles()
-        // A stored or launched deck screen whose deck is not in the game's file opens the Collection.
-        let checked = Screen.checked(screen, deckIDs: library.decks(game: gameID).map(\.id))
+        // A stored or launched deck screen whose deck is not in the game's file, or of a role that is off (G7, G8), opens
+        // the Collection.
+        let checked = Screen.checked(screen, profile: profile(of: gameID), deckIDs: library.decks(game: gameID).map(\.id))
         if checked != screen { screen = checked }
         #if DEBUG
         // `-pasteDeck` (with `-store`): the paste sheet with the file's text, on the deck shown, else for a new deck.
@@ -1074,7 +1129,7 @@ final class AppModel {
     /// A launch: every game without a set index gets one made when it has products (F3), and every game marked due (A3)
     /// gets its scan. Nothing waits for it.
     private func requestMissingSetIndexes() {
-        for game in followedGames {
+        for game in followedGames where GameSections.showsSets(profile(of: game.id)) {
             if setIndexIsDue(game.id) {
                 enqueueSetIndex(game.id, onlyWithProducts: false)
             } else if setIndexes[game.id] == nil {
@@ -1127,9 +1182,10 @@ final class AppModel {
     }
 
     /// The next request: the game on screen when it is queued, else the oldest. A request of a game that is not followed
-    /// (any more) is dropped (G5): its due mark stays until the game is followed again.
+    /// (any more, G5) or has no collector role (G8) is dropped: its due mark stays until the game is followed and collected
+    /// again (`profilesChanged`, `applyRoles`).
     private func takeSetIndexRequest() -> SetIndexRequest? {
-        setIndexQueue.removeAll { !isFollowed($0.game) }
+        setIndexQueue.removeAll { !isFollowed($0.game) || !GameSections.showsSets(profile(of: $0.game)) }
         guard let i = setIndexQueue.firstIndex(where: { $0.game == gameID }) ?? setIndexQueue.indices.first else { return nil }
         return setIndexQueue.remove(at: i)
     }

@@ -36,7 +36,7 @@ extension CatalogJoin where Read == WantedRead {
     func run(_ key: CollectionJoin, model: AppModel) async {
         guard let definition = Games.game(key.game) else { return }
         let library = model.library
-        let keys = WantedList.joinKeys(wanted: library.wanted(game: key.game), decks: library.decks(game: key.game))
+        let keys = WantedList.joinKeys(wanted: library.wanted(game: key.game), decks: model.decksInPlay(game: key.game))
         let rows = library.rows(game: key.game)
         await run(key, loaded: library.isLoaded, reader: model.reader) { reader, game in
             let printings = try await reader.printings(game: game, cardKeys: Array(keys))
@@ -103,7 +103,8 @@ struct WantedView: View {
     var body: some View {
         let library = model.library, game = state.gameID
         // Nil until a join of this game has ended. The wanted counts and pins are read here, so a change shows at once.
-        let listed = state.join.content(wanted: library.wanted(game: game), decks: library.decks(game: game),
+        // G7: the decks in play (none without the player role: the hand-added list, nothing pending, no "Decisions…").
+        let listed = state.join.content(wanted: library.wanted(game: game), decks: model.decksInPlay(game: game),
                                         sharing: library.sharing(game: game), price: WantedList.price(model.prices, game: game))
         let all = listed?.cards ?? []
         let shown = WantedList.sorted(WantedList.filtered(all, text: state.text), by: state.sort)
@@ -148,7 +149,7 @@ struct WantedView: View {
     /// the list makes them (the library's decks and answers, the last join's read).
     private func openSharing(_ pending: Set<String>) {
         let library = model.library, game = state.gameID
-        state.sharingNeeds = WantedList.needs(decks: library.decks(game: game), sharing: library.sharing(game: game),
+        state.sharingNeeds = WantedList.needs(decks: model.decksInPlay(game: game), sharing: library.sharing(game: game),
                                               read: state.join.read).values.filter { pending.contains($0.cardKey) }
         model.showsSharing = true
     }

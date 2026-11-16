@@ -460,7 +460,7 @@ struct DeckView: View {
         let game = Games.game(gameID) ?? Games.all[0]
         let deck = library.deck(game: gameID, id: state.deckID)
         let prices = model.prices
-        let decks = library.decks(game: gameID), sharing = library.sharing(game: gameID)
+        let decks = model.decksInPlay(game: gameID), sharing = library.sharing(game: gameID)
         let listed = deck.flatMap {
             state.join.content($0, game: game, decks: decks, sharing: sharing) {
                 prices.cheapest(game: gameID, productIDs: $0.map(\.productID))
@@ -514,6 +514,13 @@ struct DeckView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Its cards stay in your collection.")
+            }
+            // Review Focus 3 (phase 4B): the deck screen left by code (the player role turned off, here or by a reload)
+            // under its Rename sheet or Delete dialog: they close without writing and do not come back with the screen.
+            .onDisappear {
+                guard model.screen != .deck(state.deckID) else { return }
+                state.renaming = false
+                state.confirmsDelete = false
             }
     }
 

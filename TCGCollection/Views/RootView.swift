@@ -221,6 +221,7 @@ private struct Sidebar: View {
 
     private var list: some View {
         @Bindable var model = model
+        let profile = model.profile(of: model.gameID)
         return List(selection: $selection) {
             // G4: the followed games only, in the games' order.
             Picker("Game", selection: $model.gameID) {
@@ -241,10 +242,16 @@ private struct Sidebar: View {
                     .accessibilityIdentifier("sidebar-wanted")
                 row(.forSale, title: "For Sale", icon: "tag")
                     .accessibilityIdentifier("sidebar-for-sale")
-                row(.sets, title: "Sets", icon: "square.stack.3d.up")
-                    .accessibilityIdentifier("sidebar-sets")
+                // G8: only with the collector role; a hidden row leaves no gap.
+                if GameSections.showsSets(profile) {
+                    row(.sets, title: "Sets", icon: "square.stack.3d.up")
+                        .accessibilityIdentifier("sidebar-sets")
+                }
             }
-            SidebarDecks(selection: selection, activeDecks: activeDecks)
+            // G7: only with the player role; a hidden section leaves no heading.
+            if GameSections.showsDecks(profile) {
+                SidebarDecks(selection: selection, activeDecks: activeDecks)
+            }
             Section("Catalog") {
                 row(.allCards, title: "All cards", icon: "square.grid.2x2")
                     .accessibilityIdentifier("sidebar-all-cards")
@@ -253,7 +260,8 @@ private struct Sidebar: View {
         .onChange(of: selection) { _, new in if let new { model.screen = new } }
         .task(id: DeckJoin.deckKey(game: model.gameID, model: model)) {
             let key = DeckJoin.deckKey(game: model.gameID, model: model)
-            let active = model.library.decks(game: key.game).filter(\.active)
+            // G7: no deck in play without the player role: the join does not run.
+            let active = model.decksInPlay(game: key.game).filter(\.active)
             // Without an active deck no row shows a count: nothing to read.
             guard !active.isEmpty else { return }
             await activeDecks.run(key, cardKeys: Set(active.flatMap { $0.cards.map(\.cardKey) }), model: model)
@@ -287,9 +295,10 @@ private struct PendingWatcher: View {
 
     var body: some View {
         let library = model.library, game = model.gameID
-        let decks = library.decks(game: game)
-        let pending: Int? = !library.isLoaded ? nil : !decks.contains(where: \.active) ? 0
-            : DeckPage.pendingCount(decks: decks, sharing: library.sharing(game: game), read: activeDecks.read(game: game))
+        // G7: no count without the player role (nil: no notice, and the base stays).
+        let pending = GameSections.watchedPendingCount(loaded: library.isLoaded, profile: model.profile(of: game),
+                                                       decks: model.decksInPlay(game: game),
+                                                       sharing: library.sharing(game: game), read: activeDecks.read(game: game))
         Color.clear
             .accessibilityHidden(true)
             .onChange(of: Count(game: game, pending: pending), initial: true) { _, now in
@@ -323,7 +332,7 @@ private struct SidebarDecks: View {
 
     var body: some View {
         let library = model.library, game = model.gameID
-        let read = activeDecks.read(game: game), decks = library.decks(game: game)
+        let read = activeDecks.read(game: game), decks = model.decksInPlay(game: game)
         // E4: the active decks are served in deck order (a shared card: each sees every owned copy).
         let needs = DeckPage.needs(decks: decks, sharing: library.sharing(game: game), read: read)
         Section("Decks") {
