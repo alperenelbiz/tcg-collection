@@ -86,6 +86,33 @@ final class SetsFlowTests: UITestCase {
 
     private static let kaisa = 721337, docksideID = 721334, calmRune = 722282, originsCard = 799001
 
+    /// The set page's cost line says `expected`, whole: its frame inside the window (the 900 pt test window).
+    private func costIsWhole(_ app: XCUIApplication, _ expected: String) -> Bool {
+        let cost = element(app, "set-cost")
+        guard cost.exists, text(cost) == expected else { return false }
+        return app.windows.firstMatch.frame.contains(cost.frame) && cost.frame.width > 0
+    }
+
+    /// A set cell's control, scrolled whole into the 450 pt window (the cost line puts the first row's controls at its
+    /// bottom edge) and at rest, so a click lands on it.
+    private func revealControl(_ app: XCUIApplication, _ identifier: String, file: StaticString = #filePath,
+                               line: UInt = #line) -> XCUIElement {
+        // The page's container: XCUITest does not find the scroll view itself.
+        let target = element(app, identifier), page = element(app, "set-screen"), window = app.windows.firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10), "no \(identifier)", file: file, line: line)
+        for _ in 0..<15 where !window.frame.insetBy(dx: 0, dy: 8).contains(target.frame) {
+            page.scroll(byDeltaX: 0, deltaY: -60)
+        }
+        var last = CGRect.null
+        XCTAssertTrue(waitUntil {
+            defer { last = target.frame }
+            return target.frame == last
+        }, "\(identifier) keeps moving", file: file, line: line)
+        XCTAssertTrue(window.frame.contains(target.frame) && target.isHittable, "\(identifier) is not in the window",
+                      file: file, line: line)
+        return target
+    }
+
     /// Opens Radiance's page from the list (My sets) and waits for its cells.
     private func openRadiance(_ app: XCUIApplication) {
         let radiance = row(app, Self.radiance)
@@ -222,13 +249,15 @@ final class SetsFlowTests: UITestCase {
     }
 
     /// A26, F8: Radiance's targets in card-number order (Kai'Sa 063, Dockside Lock-Up 136 Normal and Foil side by side,
-    /// Calm Rune R02a); the owned one says `×1`, the missing ones `missing` (faded); the subtitle counts targets. `+` on a
-    /// missing cell makes it owned at once (label, subtitle), the file has the row, and the list behind the page shows the
-    /// new count after Back.
+    /// Calm Rune R02a); the owned one says `×1`, the missing ones `missing` (faded); the subtitle counts targets, the
+    /// cost line (`set-cost`, whole at 900 pt) prices the missing ones. `+` on a missing cell makes it owned at once
+    /// (label, subtitle, cost), the file has the row, and the list behind the page shows the new count after Back.
     func testASetPageFadesWhatIsMissing() throws {
         let app = try launchSets(owning: [Self.dockside])
         openRadiance(app)
-        XCTAssertTrue(waitUntil { self.title == "Radiance – 1 of 4 · $10.50 to complete + 1 without a price" }, title)
+        XCTAssertTrue(waitUntil { self.title == "Radiance – 1 of 4" }, title)
+        XCTAssertTrue(waitUntil { self.costIsWhole(app, "$10.50 to complete + 1 without a price") },
+                      "\(text(element(app, "set-cost"))) \(element(app, "set-cost").frame)")
         XCTAssertEqual(cellOrder(app), ["set-cell-\(Self.kaisa)-Normal", "set-cell-\(Self.docksideID)-Normal",
                                         "set-cell-\(Self.docksideID)-Foil", "set-cell-\(Self.calmRune)-Normal"])
         XCTAssertEqual(cell(app, Self.docksideID).label, "Dockside Lock-Up, ×1, $5.12")
@@ -242,10 +271,12 @@ final class SetsFlowTests: UITestCase {
         XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 0.5)
         shot("sets-08-set-page")
 
-        element(app, "set-cell-plus-\(Self.docksideID)-Foil").click()
+        revealControl(app, "set-cell-plus-\(Self.docksideID)-Foil").click()
         let foil = cell(app, Self.docksideID, "Foil")
         XCTAssertTrue(waitUntil { foil.label == "Dockside Lock-Up, ×1, Foil, $9.50" }, foil.label)
-        XCTAssertTrue(waitUntil { self.title == "Radiance – 2 of 4 · $1.00 to complete + 1 without a price" }, title)
+        XCTAssertTrue(waitUntil { self.title == "Radiance – 2 of 4" }, title)
+        XCTAssertTrue(waitUntil { self.costIsWhole(app, "$1.00 to complete + 1 without a price") },
+                      text(element(app, "set-cost")))
         XCTAssertEqual(text(element(app, "set-cell-value-\(Self.docksideID)-Foil")), "1")
         let added = StoredRow(productID: Self.docksideID, finish: "Foil", count: 1, name: "Dockside Lock-Up")
         XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound"))?.contains(added) == true },
@@ -273,8 +304,9 @@ final class SetsFlowTests: UITestCase {
         shot("sets-10-missing")
         filter(app, "Owned").click()
         XCTAssertTrue(waitUntil { self.cellOrder(app) == ["set-cell-\(Self.docksideID)-Normal"] }, "\(cellOrder(app))")
-        // The subtitle is the set's, whatever the filter.
-        XCTAssertTrue(title.hasSuffix("1 of 4 · $10.50 to complete + 1 without a price"), title)
+        // The subtitle and the cost line are the set's, whatever the filter.
+        XCTAssertTrue(title.hasSuffix("1 of 4"), title)
+        XCTAssertTrue(costIsWhole(app, "$10.50 to complete + 1 without a price"), text(element(app, "set-cost")))
 
         let search = searchField(app)
         search.click()
@@ -283,6 +315,9 @@ final class SetsFlowTests: UITestCase {
         XCTAssertTrue(empty.waitForExistence(timeout: 10))
         XCTAssertEqual(text(empty), "No card matches \"calm\".")
         XCTAssertTrue(cellOrder(app).isEmpty)
+        // With the search field active, the cost line is still whole, and still the set's.
+        XCTAssertTrue(costIsWhole(app, "$10.50 to complete + 1 without a price"),
+                      "\(text(element(app, "set-cost"))) \(element(app, "set-cost").frame)")
         shot("sets-11-no-match")
         // While the search field is active the picker is in the toolbar's overflow (900 pt): the text changes instead.
         search.typeKey("a", modifierFlags: .command)
@@ -298,16 +333,17 @@ final class SetsFlowTests: UITestCase {
         XCTAssertTrue(origins.waitForExistence(timeout: 10))
         origins.click()
         XCTAssertTrue(cell(app, Self.originsCard).waitForExistence(timeout: 10))
-        XCTAssertTrue(waitUntil { self.title == "Origins – 0 of 1 · 1 without a price" }, title)
+        XCTAssertTrue(waitUntil { self.title == "Origins – 0 of 1" }, title)
+        XCTAssertTrue(waitUntil { self.costIsWhole(app, "1 without a price") }, text(element(app, "set-cost")))
         filter(app, "Owned").click()
         XCTAssertTrue(empty.waitForExistence(timeout: 10))
         XCTAssertEqual(text(empty), "No card of this set in your collection yet.")
         shot("sets-12-nothing-owned")
         filter(app, "All").click()
-        let plus = element(app, "set-cell-plus-\(Self.originsCard)-Normal")
-        XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        let plus = revealControl(app, "set-cell-plus-\(Self.originsCard)-Normal")
         plus.click()
         XCTAssertTrue(waitUntil { self.title == "Origins – 1 of 1" }, title)
+        XCTAssertFalse(element(app, "set-cost").exists, "a cost line on a complete set")
         filter(app, "Missing").click()
         XCTAssertTrue(empty.waitForExistence(timeout: 10))
         XCTAssertEqual(text(empty), "This set is complete.")
@@ -319,8 +355,7 @@ final class SetsFlowTests: UITestCase {
     func testFastClicksOnASetCellAndAQuitReachTheFile() throws {
         let app = try launchSets(owning: [Self.dockside], extra: ["-writeDelay", "1500"])
         openRadiance(app)
-        let plus = element(app, "set-cell-plus-\(Self.kaisa)-Normal")
-        XCTAssertTrue(plus.waitForExistence(timeout: 10))
+        let plus = revealControl(app, "set-cell-plus-\(Self.kaisa)-Normal")
         plus.doubleClick()
         plus.click()
         plus.click()

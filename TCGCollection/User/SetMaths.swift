@@ -167,12 +167,21 @@ nonisolated enum SetMaths {
     /// `187 of 412 · $1,240.50 to complete`, `187 of 412 · $310.00 to complete + 3 without a price`, `187 of 412 · 12
     /// without a price`; `412 of 412` for a complete set (the deck page's form of the tail).
     static func pageSubtitle(_ n: SetNumbers) -> String {
-        let head = "\(n.owned) of \(n.total)"
-        guard !n.isComplete else { return head }
+        let head = pageCount(n)
+        return pageCost(n).map { "\(head) · \($0)" } ?? head
+    }
+
+    /// A set page's toolbar subtitle: `187 of 412` (also for a complete set).
+    static func pageCount(_ n: SetNumbers) -> String { "\(n.owned) of \(n.total)" }
+
+    /// A set page's cost line: `$1,240.50 to complete`, `$310.00 to complete + 3 without a price`, `12 without a price`;
+    /// nil for a complete set.
+    static func pageCost(_ n: SetNumbers) -> String? {
+        guard !n.isComplete else { return nil }
         let money = CollectionList.priceTail(sum: n.missingSum, unpriced: 0).map { "\($0) to complete" }
         let tail = [money, CollectionList.priceTail(sum: nil, unpriced: n.missingUnpriced)].compactMap { $0 }
             .joined(separator: " + ")
-        return tail.isEmpty ? head : "\(head) · \(tail)"
+        return tail.isEmpty ? nil : tail
     }
 
     private static let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September",

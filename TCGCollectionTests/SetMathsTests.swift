@@ -208,6 +208,17 @@ struct SetMathsTests {
         #expect(SetMaths.pageSubtitle(numbers(owned: 412, total: 412, sum: nil, unpriced: 0)) == "412 of 412")
     }
 
+    /// Fix round 1: the toolbar's subtitle is the count alone; the cost is a line of the page's content.
+    @Test func pageCountAndCost() {
+        #expect(SetMaths.pageCount(numbers(owned: 187, total: 412, sum: 1240.5, unpriced: 0)) == "187 of 412")
+        #expect(SetMaths.pageCount(numbers(owned: 412, total: 412, sum: nil, unpriced: 0)) == "412 of 412")
+        #expect(SetMaths.pageCost(numbers(owned: 187, total: 412, sum: 1240.5, unpriced: 0)) == "$1,240.50 to complete")
+        #expect(SetMaths.pageCost(numbers(owned: 187, total: 412, sum: 310, unpriced: 3))
+                == "$310.00 to complete + 3 without a price")
+        #expect(SetMaths.pageCost(numbers(owned: 187, total: 412, sum: nil, unpriced: 12)) == "12 without a price")
+        #expect(SetMaths.pageCost(numbers(owned: 412, total: 412, sum: nil, unpriced: 0)) == nil)
+    }
+
     @Test func releaseTextIsEnglishMonthAndYearInUTC() {
         #expect(SetMaths.releaseText(day(2025, 11, 7)) == "November 2025")
         // The first instant of a month in UTC stays in that month, whatever the device's time zone.

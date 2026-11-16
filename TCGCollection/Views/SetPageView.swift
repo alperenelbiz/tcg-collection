@@ -141,9 +141,9 @@ final class SetPageState {
     }
 }
 
-/// A set's page (A26, F8): the subtitle `187 of 412 · $1,240.50 to complete`, a gallery of its targets in card-number
-/// order where a target the user lacks is faded, each with its owned count control. The toolbar has All / Missing /
-/// Owned and one search field (the product's name). A click on a cell's picture or name opens the card page on that
+/// A set's page (A26, F8): the subtitle `187 of 412`, the line `$1,240.50 to complete` above a gallery of its targets
+/// in card-number order where a target the user lacks is faded, each with its owned count control. The toolbar has All /
+/// Missing / Owned and one search field (the product's name). A click on a cell's picture or name opens the card page on that
 /// printing in Sets' stack.
 struct SetPageView: View {
     @Environment(AppModel.self) private var model
@@ -174,6 +174,11 @@ struct SetPageView: View {
         let key = SetPageKey.of(game: game, groupID: state.groupID, model: model)
         content(phase, shown: shown, owned: owned, canChange: canChange)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The set's whole cost, whatever the filter or the search text shows (nothing for a complete set). In the
+            // content, not the toolbar's subtitle: there it was cut at 900 pt.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                CatalogNote(text: phase == .list || phase == .empty ? SetMaths.pageCost(numbers) : nil, identifier: "set-cost")
+            }
             .safeAreaInset(edge: .top, spacing: 0) {
                 CatalogNote(text: phase == .unavailable ? nil : note, identifier: "set-note")
             }
@@ -181,7 +186,7 @@ struct SetPageView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("set-screen")
             .navigationTitle(name)
-            .navigationSubtitle(phase == .list ? SetMaths.pageSubtitle(numbers) : "")
+            .navigationSubtitle(phase == .list || phase == .empty ? SetMaths.pageCount(numbers) : "")
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
