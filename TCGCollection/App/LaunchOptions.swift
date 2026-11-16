@@ -22,6 +22,10 @@ nonisolated struct LaunchOptions: Sendable {
     /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
     /// it in a Release build and without `-store`.
     var askUserFolder = false
+    /// `-onboarding YES` (DEBUG, with `-store`): the first-run question (games and roles) is asked on a new folder, as in a
+    /// Release build. `Onboarding.isDue` ignores it in a Debug build without `-store`, so the UI tests' fresh roots and a
+    /// Debug run on its own folder never ask.
+    var onboarding = false
     /// `-screen collection|wanted|for-sale|sets|all-cards|deck:<id>`: the sidebar selection of this launch, for tests and
     /// snapshots. Any other value is ignored (the stored selection is used); a deck the game's file lacks opens the
     /// Collection once the folder is read.
@@ -88,6 +92,7 @@ nonisolated struct LaunchOptions: Sendable {
         fixtureDelay = value("-fixtureDelay").flatMap { Int($0) }
         writeDelay = value("-writeDelay").flatMap { Int($0) }
         askUserFolder = value("-askUserFolder") == "YES"
+        onboarding = value("-onboarding") == "YES"
         screen = value("-screen").flatMap(Screen.init(storedValue:))
         importCSV = value("-importCSV").map { URL(fileURLWithPath: $0) }
         importCSVDelay = value("-importCSVDelay").flatMap { Int($0) }

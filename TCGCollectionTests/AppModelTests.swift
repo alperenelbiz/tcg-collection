@@ -1568,6 +1568,170 @@ struct AppModelTests {
                                                          "read riftbound.json", "read cyberpunk.json", "groups 89"])
     }
 
+    // MARK: Onboarding (phase 4B task 5: G6, G11, A30)
+
+    /// The files of `<root>/user` but `settings.json`, sorted.
+    private func gameFiles(_ folder: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0 != "settings.json" }.sorted()
+    }
+
+    /// A game file's `profile` object as written.
+    private func storedProfile(_ folder: URL, _ game: String) throws -> [String: Bool]? {
+        let data = try Data(contentsOf: folder.appending(path: "\(game).json"))
+        return (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["profile"] as? [String: Bool]
+    }
+
+    /// G6, G11: with onboarding due (a new folder, `-onboarding YES`) no catalog, price or index request is made and no
+    /// game file is written until "Continue". `finishOnboarding` with Riftbound and Cyberpunk (Player off) ticked writes the
+    /// four files (two followed as chosen, two not followed with both roles), then only those two games are synced, and
+    /// the game on screen is the first followed one, on its Collection.
+    @MainActor @Test(.timeLimit(.minutes(1))) func onboardingHoldsTheSyncUntilContinueAndStartsTheChosenGames() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-onboarding", "YES", "-game", "yu-gi-oh", "-screen", "all-cards"])
+        let run = Task { await model.start() }
+        try await until { model.library.isLoaded }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(model.showsSheet)
+        #expect(!model.catalogMayStart)
+        #expect(await network.groups.isEmpty); #expect(await network.archives.isEmpty); #expect(await network.fetches.isEmpty)
+        #expect(gameFiles(user).isEmpty)
+        model.chooseCSVFile()
+        #expect(!model.choosesCSVFile)                                         // no other sheet under it
+
+        var draft = Onboarding.draft(games: Games.all)
+        await model.finishOnboarding(draft)                                    // nothing ticked: nothing happens
+        #expect(model.onboardingDue); #expect(gameFiles(user).isEmpty)
+        draft = ProfileRows.toggled(draft, game: "riftbound", member: .followed)
+        draft = ProfileRows.toggled(draft, game: "cyberpunk", member: .followed)
+        draft = ProfileRows.toggled(draft, game: "cyberpunk", member: .player)
+        await model.finishOnboarding(draft)
+        #expect(!model.onboardingDue); #expect(!model.showsOnboarding)
+        #expect(gameFiles(user) == ["cyberpunk.json", "magic-the-gathering.json", "riftbound.json", "yu-gi-oh.json"])
+        #expect(try storedProfile(user, "riftbound") == ["followed": true, "player": true, "collector": true])
+        #expect(try storedProfile(user, "cyberpunk") == ["followed": true, "player": false, "collector": true])
+        #expect(try storedProfile(user, "magic-the-gathering") == ["followed": false, "player": true, "collector": true])
+        #expect(try storedProfile(user, "yu-gi-oh") == ["followed": false, "player": true, "collector": true])
+        #expect(model.gameID == "riftbound"); #expect(model.screen == .collection); #expect(model.showsRoot(.collection))
+        await run.value
+        await model.waitForSetIndexes()
+        #expect(await network.groups == [89, 92])                              // the game on screen first
+        #expect(await !network.products.contains(1)); #expect(await !network.products.contains(2))
+        #expect(await network.fetches.isEmpty)                                 // Yu-Gi-Oh! is not followed: no index
+        #expect(model.followedGames.map(\.id) == ["riftbound", "cyberpunk"])
+
+        // The next launch on that folder finds game files: no second onboarding.
+        let next = fixtureModel(root, network, ["-onboarding", "YES", "-offline", "YES"])
+        await next.start()
+        #expect(!next.onboardingDue); #expect(!next.showsOnboarding)
+    }
+
+    /// Review Focus 5: a model torn down before "Continue" (a quit) leaves the folder with no game file; the next launch
+    /// asks again. Without `-onboarding YES` a Debug build never asks (the UI tests' fresh roots).
+    @MainActor @Test func aQuitBeforeContinueWritesNothingAndAsksAgain() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        do {
+            let first = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+            await first.start()
+            #expect(first.onboardingDue)
+            await first.library.flush()
+        }
+        #expect(gameFiles(user).isEmpty)
+        let again = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await again.start()
+        #expect(again.onboardingDue); #expect(again.showsOnboarding)
+        let without = model(["app", "-store", root.path, "-offline", "YES"])
+        await without.start()
+        #expect(!without.onboardingDue); #expect(!without.showsOnboarding); #expect(without.catalogMayStart)
+    }
+
+    /// The ledger's ruling (A30): a folder whose only game file is an iCloud placeholder (not downloaded) has a game file,
+    /// and a missing folder is not new: neither asks. Nor does a reload that leaves the folder with no game file (another
+    /// device deleted it): the question belongs to a folder's first read.
+    @MainActor @Test func aPlaceholderAMissingFolderAndAReloadDoNotAsk() async throws {
+        let placeholder = tempRoot()
+        let user = AppPaths.userTestRoot(placeholder)
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        try Data().write(to: user.appending(path: ".riftbound.json.icloud"))
+        let one = model(["app", "-store", placeholder.path, "-offline", "YES", "-onboarding", "YES"])
+        await one.start()
+        #expect(one.library.isLoaded); #expect(!one.onboardingDue)
+
+        let missing = tempRoot()
+        let two = model(["app", "-store", missing.path, "-offline", "YES", "-onboarding", "YES"])
+        try FileManager.default.removeItem(at: AppPaths.userTestRoot(missing))   // made by the model's init
+        await two.start()
+        #expect(two.library.folderIsMissing); #expect(!two.onboardingDue); #expect(two.catalogMayStart)
+
+        let reloaded = tempRoot()
+        try writeUserFile(reloaded, "riftbound", #"{"version":1,"collection":[]}"#)
+        let three = model(["app", "-store", reloaded.path, "-offline", "YES", "-onboarding", "YES"])
+        await three.start()
+        #expect(!three.onboardingDue)
+        let file = AppPaths.userTestRoot(reloaded).appending(path: "riftbound.json")
+        try FileManager.default.removeItem(at: file)
+        await three.library.fileChanged(file)?.value
+        #expect(!three.library.hasGameFile)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!three.onboardingDue); #expect(!three.showsOnboarding)
+    }
+
+    /// Review Focus 5: a folder switch ("Collection Folder…") to a new folder makes onboarding due again once that folder
+    /// is read; a switch to a folder with game files does not. A switch while the sheet is open: the sheet stays open
+    /// during the new folder's read (a load does not dismiss it), then follows the new folder.
+    @MainActor @Test func aFolderSwitchAsksOnANewFolderOnly() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES", "-onboarding", "YES"])
+        await model.start()
+        #expect(model.needsUserFolder); #expect(!model.onboardingDue)       // no folder yet: the folder sheet first
+        try await model.useICloudDrive()
+        #expect(model.onboardingDue); #expect(model.showsOnboarding)
+
+        let withFiles = root.appending(path: "with-files")
+        try FileManager.default.createDirectory(at: withFiles, withIntermediateDirectories: true)
+        try Data(#"{"version":1,"collection":[]}"#.utf8).write(to: withFiles.appending(path: "cyberpunk.json"))
+        var during: [(Bool, Bool)] = []
+        model.library.beforeRead = { _ in during.append((model.onboardingDue, model.showsOnboarding)) }
+        try await model.useFolder(withFiles)
+        model.library.beforeRead = nil
+        #expect(!during.isEmpty && during.allSatisfy { $0.0 && $0.1 }, "\(during)")
+        #expect(!model.onboardingDue); #expect(!model.showsOnboarding); #expect(model.catalogMayStart)
+
+        let empty = root.appending(path: "empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        try await model.useFolder(empty)
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(!model.catalogMayStart)
+        #expect(gameFiles(empty).isEmpty)
+    }
+
+    /// Two sheets never change places at once: while the folder sheet is on screen (closing after a choice) the onboarding
+    /// sheet waits, and opens when the folder sheet has gone. "Collection Folder…" while the onboarding sheet is open
+    /// closes it first and opens the folder sheet when it has gone; Cancel there brings the question back.
+    @MainActor @Test func theOnboardingSheetWaitsForTheFolderSheet() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES", "-onboarding", "YES"])
+        await model.start()
+        model.folderSheetOnScreen = true
+        try await model.useICloudDrive()
+        #expect(model.onboardingDue); #expect(!model.showsOnboarding); #expect(model.showsSheet)
+        model.folderSheetClosed()
+        #expect(model.showsOnboarding)
+
+        model.askForFolder()
+        #expect(!model.showsOnboarding); #expect(!model.showsFolderSheet)
+        model.onboardingSheetClosed()
+        #expect(model.showsFolderSheet); #expect(!model.showsOnboarding)
+        model.folderSheetOnScreen = true
+        model.showsFolderSheet = false                                         // Cancel
+        model.folderSheetClosed()
+        #expect(model.showsOnboarding); #expect(model.onboardingDue)
+        // With no onboarding, "Collection Folder…" opens the folder sheet at once.
+        await model.finishOnboarding(ProfileRows.toggled(Onboarding.draft(games: Games.all), game: "riftbound", member: .followed))
+        model.onboardingSheetClosed()
+        model.askForFolder()
+        #expect(model.showsFolderSheet)
+    }
+
     // MARK: Roles (phase 4B task 3: G7–G9)
 
     /// A Riftbound file with one active deck `rb1` (2 Dockside Lock-Up) and the given profile members.

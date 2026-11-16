@@ -339,4 +339,135 @@ final class ProfilesFlowTests: UITestCase {
         let file = try XCTUnwrap(root).appending(path: "user/riftbound.json")
         XCTAssertEqual(try Data(contentsOf: file), Data(newer.utf8))
     }
+
+    // MARK: Onboarding (task 5: A29, G6, G11)
+
+    /// A game file's `profile` object as written.
+    private func storedProfile(_ game: String) throws -> [String: Bool]? {
+        try storedUserFile(game: game)?["profile"] as? [String: Bool]
+    }
+
+    /// G11, G6: `-onboarding YES` on a fresh root: the sheet asks, "Continue" is off, Esc does not close it, and nothing is
+    /// downloaded or written. Settings (Cmd+,) meanwhile has every control off and says why. Riftbound and Yu-Gi-Oh! ticked,
+    /// Player of Yu-Gi-Oh! unticked, "Continue": the picker has those two, the status line shows the download, the
+    /// Collection's empty state offers "Import CSV…" and "Search a card", the four files are as chosen. A second launch
+    /// with the flag asks nothing.
+    func testOnboardingAsksOnceAndStartsTheChosenGames() throws {
+        let app = launch(game: "magic-the-gathering", extra: ["-onboarding", "YES", "-fixtureDelay", "1500", "-screen", "all-cards"])
+        let sheet = element(app, "onboarding-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 20))
+        XCTAssertEqual(text(element(app, "onboarding-title")), "What do you collect?")
+        XCTAssertTrue(app.staticTexts["Tick the games you follow. You can change this later in Settings."].firstMatch.exists)
+        let continueButton = element(app, "onboarding-continue")
+        XCTAssertFalse(continueButton.isEnabled, "Continue before a game is ticked")
+        for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
+            XCTAssertFalse(isTicked(element(app, "profile-followed-\(game)")), game)
+            XCTAssertTrue(element(app, "profile-followed-\(game)").isEnabled, game)
+            XCTAssertFalse(element(app, "profile-player-\(game)").isEnabled, game)
+        }
+        shot("profiles-20-onboarding-sheet", of: sheet)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(waitUntil(timeout: 2) { !sheet.exists }, "Esc closed the sheet")
+
+        // Settings while the question is open: every control off, one sentence in place of the note; nothing written.
+        app.typeKey(",", modifierFlags: .command)
+        let pane = element(app, "settings-games")
+        XCTAssertTrue(pane.waitForExistence(timeout: 10), "no Settings pane")
+        XCTAssertEqual(text(element(app, "settings-note")), "Finish the first-run question in the main window first.")
+        for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
+            for member in ["followed", "player", "collector"] {
+                XCTAssertFalse(pane.descendants(matching: .any)["profile-\(member)-\(game)"].isEnabled, "\(member) \(game)")
+            }
+        }
+        shot("profiles-21-settings-during-onboarding", of: pane)
+        pane.descendants(matching: .any)["profile-followed-riftbound"].click()  // off: nothing happens
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { !pane.exists }, "Settings did not close")
+        XCTAssertTrue(sheet.exists)
+
+        let status = app.staticTexts["status-line"]
+        // The status line is empty (absent) while nothing runs: no catalog line before Continue.
+        let before = status.exists ? text(status) : ""
+        XCTAssertFalse(before.contains("sets") || before.hasPrefix("Catalog"), "a download before Continue: \(before)")
+        for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
+            XCTAssertNil(try storedUserFile(game: game), "\(game) written before Continue")
+        }
+
+        element(app, "profile-followed-riftbound").click()
+        element(app, "profile-followed-yu-gi-oh").click()
+        XCTAssertTrue(waitUntil { self.element(app, "profile-player-yu-gi-oh").isEnabled })
+        element(app, "profile-player-yu-gi-oh").click()
+        XCTAssertTrue(waitUntil { !self.isTicked(self.element(app, "profile-player-yu-gi-oh")) })
+        XCTAssertTrue(isTicked(element(app, "profile-collector-yu-gi-oh")))
+        XCTAssertTrue(isTicked(element(app, "profile-player-riftbound")))
+        XCTAssertTrue(continueButton.isEnabled)
+        shot("profiles-22-onboarding-ticked", of: sheet)
+        XCTAssertNil(try storedUserFile(game: "riftbound"), "a tick wrote a file")
+        continueButton.click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "the sheet stayed open")
+
+        // The download of the chosen games (each fixture set answers after 1.5 s): a progress line, then up to date.
+        XCTAssertTrue(waitUntil(timeout: 20) { status.exists && self.text(status).contains(" sets") },
+                      status.exists ? text(status) : "no status line")
+        let line = text(status)
+        XCTAssertTrue(line.hasPrefix("Yu-Gi-Oh!") || line.hasPrefix("Riftbound"), line)
+        XCTAssertEqual(pickerItems(app), ["Yu-Gi-Oh!", "Riftbound"])
+        XCTAssertEqual(element(app, "game-picker").value as? String, "Yu-Gi-Oh!")
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
+        XCTAssertTrue(element(app, "collection-empty-import").waitForExistence(timeout: 10))
+        XCTAssertTrue(element(app, "collection-search-catalog").exists)
+        shot("profiles-23-after-onboarding")
+        XCTAssertTrue(waitUntil(timeout: 40) { self.text(status).hasPrefix("Catalog up to date") }, text(status))
+        XCTAssertEqual(try storedProfile("riftbound"), ["followed": true, "player": true, "collector": true])
+        XCTAssertEqual(try storedProfile("yu-gi-oh"), ["followed": true, "player": false, "collector": true])
+        XCTAssertEqual(try storedProfile("magic-the-gathering"), ["followed": false, "player": true, "collector": true])
+        XCTAssertEqual(try storedProfile("cyberpunk"), ["followed": false, "player": true, "collector": true])
+
+        quit(app)
+        app.launch()                                             // the same root and flags (`-screen all-cards`)
+        XCTAssertTrue(element(app, "game-picker").waitForExistence(timeout: 20))
+        XCTAssertTrue(cardCells(app).firstMatch.waitForExistence(timeout: 20), "All cards of Yu-Gi-Oh!")
+        XCTAssertFalse(waitUntil(timeout: 3) { sheet.exists }, "a second onboarding")
+        XCTAssertEqual(pickerItems(app), ["Yu-Gi-Oh!", "Riftbound"])
+    }
+
+    /// G11: `-askUserFolder YES -onboarding YES`: the folder sheet first; once it has gone, the onboarding sheet.
+    /// "Collection Folder…" meanwhile closes the question, opens the folder sheet, and Cancel there brings the question
+    /// back; nothing is written.
+    func testOnboardingComesAfterTheFolderSheet() throws {
+        let app = launch(game: "riftbound", extra: ["-askUserFolder", "YES", "-onboarding", "YES"])
+        let folderSheet = element(app, "user-folder-sheet")
+        let sheet = element(app, "onboarding-sheet")
+        XCTAssertTrue(folderSheet.waitForExistence(timeout: 20))
+        XCTAssertFalse(sheet.exists, "the question before the folder")
+        element(app, "user-folder-icloud").click()
+        XCTAssertTrue(waitUntil { !folderSheet.exists }, "the folder sheet stayed open")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no question after the folder sheet")
+        XCTAssertFalse(folderSheet.exists)
+        shot("profiles-24-onboarding-after-folder", of: sheet)
+
+        let appMenu = app.menuBars.menuBarItems.element(boundBy: 1)  // 0 is the Apple menu
+        appMenu.click()
+        let item = app.menuItems["Collection Folder…"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no Collection Folder… in the menu \(appMenu.title)")
+        item.click()
+        XCTAssertTrue(folderSheet.waitForExistence(timeout: 10), "no folder sheet")
+        XCTAssertFalse(sheet.exists)
+        app.sheets.buttons["Cancel"].firstMatch.click()
+        XCTAssertTrue(waitUntil { !folderSheet.exists }, "Cancel did not close the folder sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "the question did not come back")
+        let folder = try XCTUnwrap(root).appending(path: "icloud").appending(path: "TCG Collection")
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        XCTAssertEqual(files, ["settings.json"])
+    }
+
+    /// A Debug build without `-onboarding YES` (every other UI test's fresh root) opens no sheet and syncs at once.
+    func testAFreshRootWithoutTheFlagOpensNoSheet() throws {
+        let app = launch(game: "riftbound", extra: ["-screen", "collection"])
+        XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app), text(app.staticTexts["status-line"]))
+        XCTAssertFalse(element(app, "onboarding-sheet").exists)
+        XCTAssertFalse(element(app, "user-folder-sheet").exists)
+        XCTAssertEqual(pickerItems(app), ["Magic: The Gathering", "Yu-Gi-Oh!", "Riftbound", "Cyberpunk TCG"])
+    }
 }

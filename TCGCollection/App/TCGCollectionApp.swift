@@ -78,7 +78,8 @@ struct TCGCollectionApp: App {
         }
         .commands {
             CommandGroup(after: .appSettings) {
-                Button("Collection Folder…") { model?.showsFolderSheet = true }
+                // While the first-run question is open, it closes first (`askForFolder`).
+                Button("Collection Folder…") { model?.askForFolder() }
                     .disabled(model == nil)
             }
             CommandGroup(after: .newItem) {

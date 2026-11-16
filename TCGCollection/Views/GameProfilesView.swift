@@ -34,6 +34,33 @@ nonisolated enum ProfileRows {
         }
     }
 
+    /// The onboarding draft's rows (G11): every game can be ticked and unticked (no "last followed" rule: "Continue" is
+    /// off until one is ticked), the roles only of a ticked game, no problem line (nothing is written before "Continue").
+    static func draftRows(games: [GameDefinition], profiles: [String: GameProfile]) -> [ProfileRow] {
+        games.map { game in
+            let profile = profiles[game.id] ?? .all
+            return ProfileRow(gameID: game.id, name: game.name, profile: profile, canFollow: true,
+                              canChooseRoles: profile.followed, problem: nil)
+        }
+    }
+
+    /// The Settings pane's rows: `rows`, except while onboarding is due or open (`onboarding`): then every control is off
+    /// and no problem line shows, so no toggle writes a game file before "Continue" (which would then overwrite it).
+    static func settingsRows(games: [GameDefinition], profiles: [String: GameProfile], canChange: [String: Bool],
+                             problems: [String: String], onboarding: Bool) -> [ProfileRow] {
+        guard onboarding else { return rows(games: games, profiles: profiles, canChange: canChange, problems: problems) }
+        return games.map { game in
+            ProfileRow(gameID: game.id, name: game.name, profile: profiles[game.id] ?? .all, canFollow: false,
+                       canChooseRoles: false, problem: nil)
+        }
+    }
+
+    /// The one line under the Settings pane's table: the note, or while onboarding is due or open, where to go first.
+    static func settingsNote(onboarding: Bool) -> String {
+        onboarding ? "Finish the first-run question in the main window first."
+            : "A game or a role you turn off is hidden. Its cards, lists and decks stay in your folder."
+    }
+
     /// `profiles` with one member of one game flipped (a game without an entry starts from all on). Every other member
     /// and game is kept: turning `followed` on keeps the roles the game had.
     static func toggled(_ profiles: [String: GameProfile], game: String, member: Member) -> [String: GameProfile] {
@@ -121,14 +148,14 @@ struct GameProfilesView: View {
 struct GamesSettingsPane: View {
     @Environment(AppModel.self) private var model
 
-    static let note = "A game or a role you turn off is hidden. Its cards, lists and decks stay in your folder."
-
     var body: some View {
         let library = model.library
         let ids = Games.all.map(\.id)
         let profiles = Dictionary(uniqueKeysWithValues: ids.map { ($0, library.profile(game: $0)) })
         let canChange = Dictionary(uniqueKeysWithValues: ids.map { ($0, library.canSetProfile(game: $0)) })
         let problems = Dictionary(uniqueKeysWithValues: ids.map { ($0, Self.problem(library, game: $0)) })
+        // Task 5: while the first-run question is due or open, nothing here can change (it would write before "Continue").
+        let onboarding = model.onboardingDue
         VStack(alignment: .leading, spacing: Theme.ruleSpacing) {
             GameProfilesView(
                 profiles: Binding(
@@ -140,8 +167,9 @@ struct GamesSettingsPane: View {
                         }
                         model.profilesChanged()
                     }),
-                rows: ProfileRows.rows(games: Games.all, profiles: profiles, canChange: canChange, problems: problems))
-            Text(Self.note)
+                rows: ProfileRows.settingsRows(games: Games.all, profiles: profiles, canChange: canChange,
+                                               problems: problems, onboarding: onboarding))
+            Text(ProfileRows.settingsNote(onboarding: onboarding))
                 .font(Theme.lineFont)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)

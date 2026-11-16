@@ -221,6 +221,22 @@ final class AppModel {
     private(set) var needsUserFolder: Bool
     /// "Collection Folder…" asked for the folder sheet.
     var showsFolderSheet = false
+    /// G11: the first-run question (which games, which roles) is to be answered: the folder was read, it is new (no game file
+    /// of any known game) and this run asks (`Onboarding.isDue`). Decided only when a folder's read has ended (the launch's
+    /// load, a folder switch: `decideOnboarding`), never by a reload or during a read, so the owner's folder never sees it
+    /// (A30). While it is true nothing is downloaded or scanned (`catalogMayStart`) and no other sheet opens.
+    private(set) var onboardingDue = false
+    /// The onboarding sheet is presented: `onboardingDue`, once no folder sheet is on screen (two sheets never change places
+    /// at once). It cannot be dismissed; "Continue" (`finishOnboarding`) closes it.
+    private(set) var showsOnboarding = false
+    /// Set by the window while the folder sheet is on screen, from its appearance until its `onDismiss`
+    /// (`folderSheetClosed`): the onboarding sheet waits for it.
+    @ObservationIgnored var folderSheetOnScreen = false
+    /// "Collection Folder…" while the onboarding sheet is open: the folder sheet opens once that one has gone
+    /// (`onboardingSheetClosed`).
+    @ObservationIgnored private var folderAfterOnboarding = false
+    /// True while "Continue" writes the profiles: a second click does nothing.
+    private(set) var finishingOnboarding = false
     /// "Import CSV…" asked for the system's file panel (`chooseCSVFile`).
     var choosesCSVFile = false
     /// The import the sheet shows (`ImportSheet`); nil while no import sheet is open.
@@ -251,6 +267,7 @@ final class AppModel {
     /// (final fix B5).
     private var showsOtherSheet: Bool {
         needsUserFolder || showsFolderSheet || showsNewDeck || renamingDeck || pasting != nil || showsSharing
+            || onboardingDue || showsOnboarding
     }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
@@ -458,9 +475,10 @@ final class AppModel {
 
     /// G6, the one gate of the sync's steps: they start once the followed games are known, after the library's first read
     /// of the folder (or once it found the folder missing: then every game counts as followed). With no folder chosen yet
-    /// (the first-run folder sheet) nothing is downloaded. Task 5 adds onboarding here.
+    /// (the first-run folder sheet) nothing is downloaded, nor while the first-run question is due or open (G11): the
+    /// catalogs of the chosen games download after "Continue".
     var catalogMayStart: Bool {
-        !needsUserFolder && (library.isLoaded || library.folderIsMissing)
+        !needsUserFolder && (library.isLoaded || library.folderIsMissing) && !onboardingDue
     }
 
     /// The followed games' ids that `profilesChanged` last saw on a loaded library; nil before the first.
@@ -741,6 +759,70 @@ final class AppModel {
         needsUserFolder = false
         showsFolderSheet = false
         await library.use(folder: folder)
+        // In the same main-actor turn as the end of the read (no suspension since `isLoaded` was set): the gate never sees
+        // the new folder read without its decision.
+        decideOnboarding()
+    }
+
+    // MARK: Onboarding (G11)
+
+    /// After a folder's read has ended (the launch's load, a folder switch): whether the first-run question is due there,
+    /// and the sheet follows (it opens, or closes when the new folder has game files). The ledger's ruling: `hasGameFile`
+    /// is read only when the library is loaded and the folder is not missing. While a read runs (`isLoaded` false, folder
+    /// there) nothing changes: an open sheet is not dismissed by a load.
+    private func decideOnboarding() {
+        guard library.isLoaded || library.folderIsMissing else { return }
+        let due = Onboarding.isDue(loaded: library.isLoaded && !library.folderIsMissing, hasGameFile: library.hasGameFile,
+                                   isDebugBuild: Self.isDebugBuild, hasStore: options.storeRoot != nil,
+                                   asked: options.onboarding)
+        onboardingDue = due
+        showsOnboarding = due && !folderSheetUp
+    }
+
+    /// The folder sheet is on screen or asked for: the onboarding sheet waits.
+    private var folderSheetUp: Bool { folderSheetOnScreen || needsUserFolder || showsFolderSheet }
+
+    /// The folder sheet has gone (its `onDismiss`): the onboarding sheet opens now when it is due.
+    func folderSheetClosed() {
+        folderSheetOnScreen = false
+        if onboardingDue, !folderSheetUp { showsOnboarding = true }
+    }
+
+    /// "Collection Folder…": the folder sheet; while the onboarding sheet is open, that one closes first and the folder
+    /// sheet opens once it has gone (`onboardingSheetClosed`). Cancel there brings the question back (`folderSheetClosed`).
+    func askForFolder() {
+        if showsOnboarding {
+            folderAfterOnboarding = true
+            showsOnboarding = false
+        } else {
+            showsFolderSheet = true
+        }
+    }
+
+    /// The onboarding sheet has gone (its `onDismiss`): the folder sheet "Collection Folder…" asked for opens now.
+    func onboardingSheetClosed() {
+        guard folderAfterOnboarding else { return }
+        folderAfterOnboarding = false
+        showsFolderSheet = true
+    }
+
+    /// "Continue" (G11): writes every game's profile (a ticked game as chosen; one not ticked not followed, both roles on;
+    /// each its own file, so the next launch finds game files), waits for the writes, closes the sheet, opens the first
+    /// followed game's Collection and lets the sync start (`catalogMayStart`). Nothing when no game is ticked, when the
+    /// question is not due, or while a call runs.
+    func finishOnboarding(_ draft: [String: GameProfile]) async {
+        guard onboardingDue, !finishingOnboarding, Onboarding.canContinue(draft) else { return }
+        finishingOnboarding = true
+        defer { finishingOnboarding = false }
+        for game in Games.all {
+            library.setProfile(Onboarding.written(draft[game.id]), game: game.id, writesKey: true)
+        }
+        await library.flush()
+        let followed = followedGames.map(\.id)
+        if let first = followed.first { gameID = first }
+        showRoot(of: .collection)
+        showsOnboarding = false
+        onboardingDue = false
     }
 
     /// Off the main actor: coordinated work in iCloud Drive can wait for the sync.
@@ -824,7 +906,7 @@ final class AppModel {
     /// "Paste…" of a deck page (`deckID`), or "Paste a deck…" of the New Deck sheet (nil: a new deck with `name` and
     /// `format`): opens the paste sheet on the game shown. Not while another sheet is open.
     func pasteDeck(into deckID: String?, name: String = "", format: String = "", text: String = "") {
-        guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet,
+        guard pasting == nil, importing == nil, !needsUserFolder, !showsFolderSheet, !onboardingDue,
               GameSections.showsDecks(profile(of: gameID)) else { return }
         let game = Games.game(gameID)
         pasting = PasteDeckModel(gameID: gameID, deckID: deckID, name: name, format: format, text: text, library: library,
@@ -984,6 +1066,8 @@ final class AppModel {
         }
         #endif
         await library.load()
+        // G11: in the same turn as the end of the read, before anything waits on the gate.
+        decideOnboarding()
         // G4: a stored or launched game that is not followed opens the first followed one.
         if library.isLoaded {
             let followed = followedGames.map(\.id)

@@ -329,9 +329,10 @@ final class UserLibrary {
 
     /// Refused as `setCount` is. Sets the game's profile in one change (G1, G2); a game without a file gets its file. The
     /// same profile writes nothing (a file without `profile` keeps its bytes), except over a `profile` this build could not
-    /// read, which it replaces (`GameUserFile.setProfile`).
-    func setProfile(_ profile: GameProfile, game: String) {
-        change(game) { $0.setProfile(profile) }
+    /// read, which it replaces (`GameUserFile.setProfile`). `writesKey` (onboarding's "Continue", G11): the `profile` key is
+    /// written also when the profile is all on, so a game without a file gets one and the folder is no longer new.
+    func setProfile(_ profile: GameProfile, game: String, writesKey: Bool = false) {
+        change(game) { $0.setProfile(profile, writesKey: writesKey) }
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.

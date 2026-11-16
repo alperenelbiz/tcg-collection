@@ -76,6 +76,8 @@ nonisolated enum Theme {
     static let pageTitleFont = Font.system(size: 22, weight: .semibold)
     /// A sheet's title.
     static let sheetTitleFont = Font.system(size: 17, weight: .semibold)
+    /// The onboarding sheet's title ("What do you collect?", phase 4B).
+    static let onboardingTitleFont = Font.system(size: 15, weight: .semibold)
     /// A section's title on a deck page ("Main Deck").
     static let deckSectionFont = Font.system(size: 15, weight: .semibold)
     /// A section of a sheet (a game in the import sheet).

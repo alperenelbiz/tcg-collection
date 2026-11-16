@@ -1410,6 +1410,27 @@ struct UserLibraryTests {
         #expect(lib.profile(game: "riftbound") == GameProfile(followed: false, player: false, collector: true))
     }
 
+    /// G11, task 5: "Continue" writes every game's file, also of a game followed with both roles (all on): `writesKey`
+    /// writes the `profile` key although the profile equals the default. Without it, nothing is written (G1).
+    @MainActor @Test func setProfileWritingTheKeyMakesTheFile() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        await lib.load()
+        lib.setProfile(.all, game: "riftbound")
+        await lib.flush()
+        #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "riftbound.json").path))
+        #expect(!lib.hasGameFile)
+        lib.setProfile(.all, game: "riftbound", writesKey: true)
+        await lib.flush()
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appending(path: "riftbound.json"))) as? [String: Any])
+        #expect(object["profile"] as? [String: Bool] == ["followed": true, "player": true, "collector": true])
+        #expect(object["version"] as? Int == 1)
+        #expect(lib.hasGameFile)
+        let version = lib.version
+        lib.setProfile(.all, game: "riftbound", writesKey: true)                // the key is there already: nothing new
+        #expect(lib.version == version)
+    }
+
     /// `hasGameFile` (G11): false on an empty folder, true with one game file, true with a refused one; another file in
     /// the folder does not count.
     @MainActor @Test func hasGameFileSaysWhetherTheFolderHasAGameFile() async throws {

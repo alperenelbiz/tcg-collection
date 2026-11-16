@@ -75,10 +75,21 @@ struct RootView: View {
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
         }
-        // Open while no folder is chosen (it cannot be closed then), or after "Collection Folder…".
+        // Open while no folder is chosen (it cannot be closed then), or after "Collection Folder…". The onboarding sheet
+        // waits until this one has gone (two sheets never change places at once).
         .sheet(isPresented: Binding(get: { model.needsUserFolder || model.showsFolderSheet },
-                                    set: { if !$0 { model.showsFolderSheet = false } })) {
+                                    set: { if !$0 { model.showsFolderSheet = false } }),
+               onDismiss: { model.folderSheetClosed() }) {
             UserFolderSheet()
+                .environment(model)
+                .preferredColorScheme(.dark)
+                .onAppear { model.folderSheetOnScreen = true }
+        }
+        // G11: the first-run question on a new folder. It cannot be dismissed: only "Continue" closes it (the binding takes
+        // no write). "Collection Folder…" meanwhile closes it first and opens the folder sheet once it has gone.
+        .sheet(isPresented: Binding(get: { model.showsOnboarding }, set: { _ in }),
+               onDismiss: { model.onboardingSheetClosed() }) {
+            OnboardingSheet()
                 .environment(model)
                 .preferredColorScheme(.dark)
         }

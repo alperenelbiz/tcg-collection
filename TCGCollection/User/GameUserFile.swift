@@ -335,10 +335,11 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     }
 
     /// Sets the profile (G1). A `profile` this build could not read counts as changed too, also when `profile` is the same
-    /// value: it is written from `profile` from now on (the rule of `setPin`).
-    mutating func setProfile(_ profile: GameProfile) {
+    /// value: it is written from `profile` from now on (the rule of `setPin`). `writesKey` (onboarding's "Continue", G11):
+    /// the key is written from `profile` also when it equals the file's, so a game followed with both roles gets its file.
+    mutating func setProfile(_ profile: GameProfile, writesKey: Bool = false) {
         self.profile = profile
-        if raw.profileIsUnreadable { profileChanged = true }
+        if raw.profileIsUnreadable || writesKey { profileChanged = true }
     }
 
     /// The lists, the decks, the sharing answers and the profile are equal (what the app reads and changes); keys it does

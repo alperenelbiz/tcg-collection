@@ -23,6 +23,13 @@ struct LaunchOptionsTests {
         #expect(!LaunchOptions(arguments: ["app", "-askUserFolder", "NO"]).askUserFolder)
         #expect(!LaunchOptions(arguments: ["app"]).askUserFolder)
     }
+    /// `-onboarding YES` (phase 4B task 5): parsed here; `Onboarding.isDue` honours it only in a Debug build with `-store`.
+    @Test func parsesTheOnboardingFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-onboarding", "YES"]).onboarding)
+        #expect(!LaunchOptions(arguments: ["app", "-onboarding", "NO"]).onboarding)
+        #expect(!LaunchOptions(arguments: ["app", "-onboarding"]).onboarding)
+        #expect(!LaunchOptions(arguments: ["app"]).onboarding)
+    }
     @Test func parsesTheScreenFlag() {
         #expect(LaunchOptions(arguments: ["app", "-screen", "collection"]).screen == .collection)
         #expect(LaunchOptions(arguments: ["app", "-screen", "all-cards"]).screen == .allCards)
