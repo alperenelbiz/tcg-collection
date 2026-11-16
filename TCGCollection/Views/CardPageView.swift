@@ -113,7 +113,9 @@ struct CardPageView: View {
             // The "Decks" block is card-level: the same on every printing's page (the kind from all the printings); only its
             // printing buttons and "Add to deck" use the printing on screen (A18).
             OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
-                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game)),
+                          prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game),
+                                                     owned: ownedCopies(printings, game: game),
+                                                     isBasic: DeckMaths.isBasic(game: game, printings: [cardKey: printings])(cardKey)),
                           deckCard: DeckCardToAdd(cardKey: cardKey, name: shown.cardName,
                                                   kind: model.deckKind(game: game, printings: printings),
                                                   productID: shown.productID))
@@ -141,6 +143,12 @@ struct CardPageView: View {
              PinPrinting(set: setNames[printing.groupID] ?? "", number: printing.number, rarity: printing.rarity,
                          firstFinish: model.prices.prices(game: game.id, productID: printing.productID).first?.finish ?? "Normal"))
         }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The copies owned of the card over all its printings and finishes, for the decks' part of its Wanted line.
+    private func ownedCopies(_ printings: [ProductRecord], game: GameDefinition) -> Int {
+        let ids = Set(printings.map(\.productID))
+        return CollectionRules.copies(model.library.rows(game: game.id).filter { ids.contains($0.productID) })
     }
 
     private func otherPrintings(_ printings: [ProductRecord], game: GameDefinition) -> some View {
@@ -213,9 +221,10 @@ struct OwnedFinishes: View {
     let offered: [String]
     /// The price table's prices of the product; nil for a page without a price column (a product not in the catalog).
     let prices: [FinishPrice]?
-    /// The card of the page, for its Wanted line: its key, the name a new entry saves, and each of its printings as the pin
-    /// line names it (by product id). Nil: no Wanted line (a printing that left the catalog).
-    var wanted: (cardKey: String, name: String, printings: [Int: PinPrinting])? = nil
+    /// The card of the page, for its Wanted line: its key, the name a new entry saves, each of its printings as the pin
+    /// line names it (by product id), the copies owned over all its printings and whether it is a basic card (for the
+    /// decks' part). Nil: no Wanted line (a printing that left the catalog).
+    var wanted: (cardKey: String, name: String, printings: [Int: PinPrinting], owned: Int, isBasic: Bool)? = nil
     /// The card of the page, for its "Decks" block (`DeckLines`). Nil: no block (a printing that left the catalog).
     var deckCard: DeckCardToAdd? = nil
 
@@ -275,7 +284,8 @@ struct OwnedFinishes: View {
             // `Normal` when it has none). The page has no selected finish.
             if let wanted, let first = finishes.first {
                 WantedLine(gameID: gameID, cardKey: wanted.cardKey, name: wanted.name,
-                           pin: PrintingKey(productID: productID, finish: first), printings: wanted.printings)
+                           pin: PrintingKey(productID: productID, finish: first), printings: wanted.printings,
+                           owned: wanted.owned, isBasic: wanted.isBasic)
                     .padding(.top, 6)
             }
             if let deckCard {
@@ -341,7 +351,9 @@ struct CountsLockedLine: View {
 ///   then "Want this printing" (`wanted-pin`, moves the pin here) and "Any printing" (`wanted-unpin`, clears it).
 /// `pin` nil (a card not in the catalog): nothing to pin; a pin the entry still has is named and can be cleared. A new
 /// entry saves `name`. While the game cannot change: no number (`—`), no pin, the control off; the page's locked line
-/// says why.
+/// says why. The control is the hand-added count only (A24); right of it, when the active decks miss the card, "+ <n> for
+/// decks" (`wanted-for-decks`, 12 pt `muted`; `WantedList.forDecks` from the library's decks and sharing answers and the
+/// page's `owned` and `isBasic`).
 struct WantedLine: View {
     let gameID: String
     let cardKey: String
@@ -349,6 +361,9 @@ struct WantedLine: View {
     let pin: PrintingKey?
     /// Each printing of the card as the pin line names it, by product id.
     var printings: [Int: PinPrinting] = [:]
+    /// The copies owned of the card over all its printings, and whether it is a basic card: for the decks' part.
+    var owned: Int = 0
+    var isBasic: Bool = false
 
     @Environment(AppModel.self) private var model
 
@@ -360,15 +375,21 @@ struct WantedLine: View {
         // The pin choices need a count (an entry) and a game that can change.
         let pinned = locked || count == 0 ? nil : entry?.pin
         let offersPin = !locked && count > 0
+        let forDecks = locked ? 0 : WantedList.forDecks(cardKey, decks: library.decks(game: gameID),
+                                                        sharing: library.sharing(game: gameID), owned: owned, isBasic: isBasic)
+        let pinChoice: (title: String, key: PrintingKey?)? = if offersPin, let pin, pinned == nil || pinned == pin {
+            (pinned == pin ? "Any printing" : "Want this printing", pinned == pin ? nil : pin)
+        } else { nil }
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 16) {
-                Text("Wanted")
-                    .foregroundStyle(Theme.text)
-                CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "",
-                             spoken: (remove: "Want one fewer", add: "Want one more")) { step(by: $0 - count) }
-                if offersPin, let pin, pinned == nil || pinned == pin {
-                    pinButton(pinned == pin ? "Any printing" : "Want this printing", to: pinned == pin ? nil : pin,
-                              identifier: "wanted-pin")
+            // One row when it fits the column; else (the decks' part takes the room) the pin button goes under it, whole.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) {
+                    countRow(count: count, locked: locked, forDecks: forDecks)
+                    if let pinChoice { pinButton(pinChoice.title, to: pinChoice.key, identifier: "wanted-pin").fixedSize() }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 16) { countRow(count: count, locked: locked, forDecks: forDecks) }
+                    if let pinChoice { pinButton(pinChoice.title, to: pinChoice.key, identifier: "wanted-pin").fixedSize() }
                 }
             }
             if let pinned, pinned != pin {
@@ -386,6 +407,27 @@ struct WantedLine: View {
         }
         .font(Theme.bodyFont)
         .disabled(locked)
+    }
+
+    /// "Wanted", the hand-added count's control and, when the decks miss the card, "+ <n> for decks".
+    @ViewBuilder private func countRow(count: Int, locked: Bool, forDecks: Int) -> some View {
+        Text("Wanted")
+            .foregroundStyle(Theme.text)
+        CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "",
+                     spoken: (remove: "Want one fewer", add: "Want one more")) { step(by: $0 - count) }
+        if let decks = Self.forDecksText(forDecks) {
+            Text(decks)
+                .font(Theme.lineFont)
+                .foregroundStyle(Theme.muted)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityIdentifier("wanted-for-decks")
+        }
+    }
+
+    /// "+ 2 for decks" beside the control; nil when the decks miss none.
+    static func forDecksText(_ forDecks: Int) -> String? {
+        forDecks > 0 ? "+ \(forDecks) for decks" : nil
     }
 
     /// What the pin line says of `pinned`, seen from the printing `shown` (nil: the page of a card that left the catalog):

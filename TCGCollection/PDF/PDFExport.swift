@@ -22,12 +22,12 @@ nonisolated struct PDFSource: Sendable, Equatable {
         }
     }
 
-    /// Wanted's whole list (C2, C12): per card its name, the wanted count, its price as the screen shows it (the pinned
-    /// printing's, else the cheapest) and the picture of the shown printing. A card without a printing has its saved
-    /// name and no picture.
+    /// Wanted's whole list (C2, C12, E5): per card its name, its total (hand-added and for decks), its price as the screen
+    /// shows it (the pinned printing's, else the decks' printing's, else the cheapest) and the picture of the shown
+    /// printing. A card without a printing has its saved name and no picture.
     static func wanted(_ cards: [WantedCard], game: GameDefinition, ygo: YGOPictureIndex?) -> [PDFSource] {
         cards.map { card in
-            PDFSource(name: card.name, count: card.entry.count, price: card.price,
+            PDFSource(name: card.name, count: card.total, price: card.price,
                       picture: card.shown.flatMap { PictureSource.url(for: $0, game: game, ygo: ygo) })
         }
     }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import TCGCollection2
 
@@ -29,8 +30,8 @@ struct WantedListTests {
     }
 
     private func cards(_ wanted: [WantedEntry], ownedByCard: [String: Int] = [:]) throws -> [WantedCard] {
-        WantedList.cards(wanted, printings: ["twin": twin, "other card": other],
-                         price: WantedList.price(try table(), game: "riftbound"), ownedByCard: ownedByCard)
+        WantedList.cards(wanted, needs: [:], printings: ["twin": twin, "other card": other], ownedByCard: ownedByCard,
+                         price: WantedList.price(try table(), game: "riftbound"))
     }
 
     /// No pin: the card shows its cheapest printing (market prices first) and that price (C12).
@@ -64,8 +65,9 @@ struct WantedListTests {
         let lowOnly = try #require(try cards([entry(pin: PrintingKey(productID: 3, finish: "Foil"))]).first)
         #expect(lowOnly.price == ShownPrice(amount: 0.5, isLow: true))
         let unpriced = [product(id: 4, groupID: 13, name: "Twin")]
-        let none = WantedList.cards([entry(pin: PrintingKey(productID: 4, finish: "Foil"))], printings: ["twin": twin + unpriced],
-                                    price: WantedList.price(try table(), game: "riftbound"), ownedByCard: [:])
+        let none = WantedList.cards([entry(pin: PrintingKey(productID: 4, finish: "Foil"))], needs: [:],
+                                    printings: ["twin": twin + unpriced], ownedByCard: [:],
+                                    price: WantedList.price(try table(), game: "riftbound"))
         #expect(none.map(\.shown?.productID) == [4] && none.map(\.price) == [nil])
     }
 
@@ -89,7 +91,7 @@ struct WantedListTests {
 
     /// No printing has a price: the newest printing (the card page's first) is shown, with no price.
     @Test func withNoPriceTheNewestPrintingIsShown() {
-        let card = WantedList.cards([entry()], printings: ["twin": twin], price: { _, _ in nil }, ownedByCard: [:])
+        let card = WantedList.cards([entry()], needs: [:], printings: ["twin": twin], ownedByCard: [:], price: { _, _ in nil })
         #expect(card.map(\.shown?.productID) == [1] && card.map(\.price) == [nil])
     }
 
@@ -158,7 +160,7 @@ struct WantedListTests {
 
     private func content(_ wanted: [WantedEntry], read: WantedRead?, failed: Bool = false, hasProducts: Bool = true,
                          settled: Bool) throws -> WantedContent {
-        WantedList.content(wanted, read: read, joinFailed: failed, catalogHasProducts: hasProducts,
+        WantedList.content(wanted, decks: [], sharing: [:], read: read, joinFailed: failed, catalogHasProducts: hasProducts,
                            catalogSettled: settled, price: WantedList.price(try table(), game: "riftbound"))
     }
 
@@ -213,5 +215,242 @@ struct WantedListTests {
         #expect(listed.cards.map { listed.countText(for: $0) } == ["×2", "×1 · Set A", "×1"])
         #expect(listed.cards.map { listed.accessibilityText(for: $0) }
                 == ["Twin, ×2, $1.50", "Other Card, ×1, Set A, $10.20", "Third, ×1, no price"])
+    }
+
+    // MARK: Phase 3B task 5: the decks' missing copies on Wanted (E5, A17, A23, A24)
+
+    private func deckCard(_ key: String, _ name: String, count: Int, productID: Int? = nil) -> DeckCard {
+        DeckCard(cardKey: key, name: name, section: "main", count: count, productID: productID)
+    }
+
+    private func deck(_ name: String, active: Bool = true, _ cards: [DeckCard]) -> Deck {
+        Deck(id: "id-\(name)", name: name, format: "standard", active: active, cards: cards)
+    }
+
+    /// The decks' needs as the screen makes them from a read: the read's owned copies and basic cards.
+    private func needs(_ decks: [Deck], owned: [String: Int] = [:], basics: Set<String> = []) -> [String: CardNeed] {
+        DeckNeeds.needs(decks: decks, sharing: [:], owned: { owned[$0] ?? 0 }, isBasic: { basics.contains($0) })
+    }
+
+    private func cards(_ wanted: [WantedEntry], decks: [Deck], owned: [String: Int] = [:],
+                       basics: Set<String> = []) throws -> [WantedCard] {
+        WantedList.cards(wanted, needs: needs(decks, owned: owned, basics: basics),
+                         printings: ["twin": twin, "other card": other], ownedByCard: owned,
+                         price: WantedList.price(try table(), game: "riftbound"))
+    }
+
+    /// E5: the union of the hand-added entries and the cards the active decks miss. A hand-added Twin ×1 that the decks
+    /// miss 2 of: total 3, 2 for decks. A card only from decks (Bee, no printing): an entry of count 0 made in memory with
+    /// the deck card's saved name, total 3. A card the decks use but own enough of, a basic card and a card of a deck that
+    /// is not active are not listed.
+    @Test func wantedListsTheHandAddedAndTheDecksMissingCards() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2), deckCard("bee", "Bee Card", count: 3),
+                                   deckCard("enough", "Enough", count: 1), deckCard("calm rune", "Calm Rune", count: 2)]),
+                     deck("Off", active: false, [deckCard("sleeper", "Sleeper", count: 4)])]
+        let list = try cards([entry(count: 1)], decks: decks, owned: ["enough": 1], basics: ["calm rune"])
+        #expect(list.map(\.id) == ["twin", "bee"])
+        #expect(list.map(\.total) == [3, 3] && list.map(\.forDecks) == [2, 3] && list.map(\.entry.count) == [1, 0])
+        #expect(list[1].name == "Bee Card" && list[1].entry.name == "Bee Card" && list[1].entry.pin == nil)
+        #expect(list[1].shown == nil && list[1].price == nil)
+        #expect(list.map(\.pending) == [false, false])
+        #expect(list[0].users.map(\.deckName) == ["Wind"] && list[0].users.map(\.missing) == [2])
+        // A hand-added card no deck uses: forDecks 0, total its count.
+        let alone = try cards([entry("other card", name: "Other Card", count: 2)], decks: [])
+        #expect(alone.map(\.total) == [2] && alone.map(\.forDecks) == [0] && alone.map(\.users) == [[]])
+    }
+
+    /// A pending card (two active decks, more used than owned, no answer) carries `pending`; it counts the sum (E3).
+    @Test func aPendingCardIsMarked() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2)]), deck("Cheap", [deckCard("twin", "Twin", count: 2)])]
+        let list = try cards([], decks: decks, owned: ["twin": 1])
+        #expect(list.map(\.pending) == [true] && list.map(\.forDecks) == [3] && list.map(\.total) == [3])
+    }
+
+    /// The cell's count line: `×<total>[ · <n> for decks][ · <set>]`.
+    @Test func theCountLineSaysTheDecksPart() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2), deckCard("other card", "Other Card", count: 3)])]
+        let wanted = [entry(count: 1), entry("third", name: "Third", count: 1)]
+        let keys: Set<String> = ["twin", "other card", "third"]
+        let listed = WantedList.content(wanted, decks: decks, sharing: [:], read: read(["twin": twin, "other card": other], keys: keys),
+                                        joinFailed: false, catalogHasProducts: true, catalogSettled: true,
+                                        price: WantedList.price(try table(), game: "riftbound"))
+        #expect(listed.cards.map { listed.countText(for: $0) } == ["×3 · 2 for decks", "×1", "×3 · 3 for decks"])
+        #expect(listed.cards.map { listed.accessibilityText(for: $0) }
+                == ["Twin, ×3, 2 for decks, $1.50", "Third, ×1, no price", "Other Card, ×3, 3 for decks, $10.20"])
+        let pinned = WantedList.content([entry(count: 1, pin: PrintingKey(productID: 1, finish: "Normal"))], decks: decks,
+                                        sharing: [:], read: read(["twin": twin, "other card": other], keys: keys),
+                                        joinFailed: false, catalogHasProducts: true, catalogSettled: true,
+                                        price: WantedList.price(try table(), game: "riftbound"))
+        #expect(pinned.countText(for: pinned.cards[0]) == "×3 · 2 for decks · Set A")
+    }
+
+    /// A23: the pin wins; else the printing the decks that miss the card chose, when they chose exactly one, with that
+    /// printing's own cheapest finish price; two chosen, or one that left the catalog: the cheapest printing.
+    @Test func theShownPrintingIsThePinThenTheDecksChoice() throws {
+        // The decks chose Twin 1 ($4.00); the card's cheapest is Twin 2 ($1.50).
+        let chose1 = [deck("Wind", [deckCard("twin", "Twin", count: 2, productID: 1)])]
+        let pin3 = try #require(try cards([entry(count: 1, pin: PrintingKey(productID: 3, finish: "Normal"))], decks: chose1).first)
+        #expect(pin3.shown?.productID == 3 && pin3.price == ShownPrice(amount: 0.5, isLow: true) && pin3.showsPin)
+        let decksChoice = try #require(try cards([], decks: chose1).first)
+        #expect(decksChoice.shown?.productID == 1 && decksChoice.price == ShownPrice(amount: 4, isLow: false))
+        #expect(!decksChoice.showsPin)
+        // A hand entry without a pin takes the decks' choice too.
+        let handToo = try #require(try cards([entry(count: 1)], decks: chose1).first)
+        #expect(handToo.shown?.productID == 1 && handToo.price == ShownPrice(amount: 4, isLow: false))
+        // The decks' chosen printing's price is its cheapest finish: Twin 2 has Normal $1.50 and Foil $9.00.
+        let chose2 = try #require(try cards([], decks: [deck("Wind", [deckCard("twin", "Twin", count: 1, productID: 2)])]).first)
+        #expect(chose2.shown?.productID == 2 && chose2.price == ShownPrice(amount: 1.5, isLow: false))
+        // Two decks chose two printings: the cheapest.
+        let two = [deck("Wind", [deckCard("twin", "Twin", count: 1, productID: 1)]),
+                   deck("Cheap", [deckCard("twin", "Twin", count: 1, productID: 3)])]
+        let both = try #require(try cards([], decks: two).first)
+        #expect(both.shown?.productID == 2 && both.price == ShownPrice(amount: 1.5, isLow: false))
+        // The chosen printing left the catalog: the cheapest.
+        let gone = try #require(try cards([], decks: [deck("Wind", [deckCard("twin", "Twin", count: 1, productID: 99)])]).first)
+        #expect(gone.shown?.productID == 2 && gone.price == ShownPrice(amount: 1.5, isLow: false))
+    }
+
+    /// Totals, the copies sort and the search use the total; the price sums are price × total.
+    @Test func totalsSortAndSearchUseTheTotal() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2), deckCard("other card", "Other Card", count: 3)])]
+        let list = try cards([entry(count: 1)], decks: decks)
+        // Twin 3 × $1.50 + Other Card 3 × $10.20.
+        #expect(WantedList.totals(list) == "6 copies · 2 cards · $35.10")
+        let found = WantedList.filtered(list, text: "twin")
+        #expect(found.map(\.id) == ["twin"])
+        #expect(WantedList.totals(found, of: list) == "3 of 6 copies · 1 of 2 cards · $4.50")
+        // Copies: Twin's total 3 (hand 1) is over Other Card's hand-only 2.
+        let mixed = try cards([entry(count: 1), entry("other card", name: "Other Card", count: 2)],
+                              decks: [deck("Wind", [deckCard("twin", "Twin", count: 2)])])
+        #expect(WantedList.sorted(mixed, by: .count).map(\.id) == ["twin", "other card"])
+        #expect(WantedList.sorted(mixed, by: .name).map(\.id) == ["other card", "twin"])
+        #expect(WantedList.sorted(mixed, by: .priceHigh).map(\.id) == ["other card", "twin"])
+        #expect(WantedList.sorted(mixed, by: .priceLow).map(\.id) == ["twin", "other card"])
+    }
+
+    /// Review Focus 3: a card only from decks without a printing on a settled catalog is listed with its saved name, no
+    /// price, counted "without a price", and opens nothing (it has no wanted entry to show on a page). On a catalog that is
+    /// not settled it is pending with the downloading line. A deck card the join did not look up is left out until a join
+    /// covers it: its owned copies are not known.
+    @Test func aDeckOnlyCardFollowsTheCatalogStates() throws {
+        let decks = [deck("Wind", [deckCard("bee", "Bee Card", count: 2), deckCard("twin", "Twin", count: 1)])]
+        func listed(keys: Set<String>, settled: Bool) throws -> WantedContent {
+            WantedList.content([], decks: decks, sharing: [:], read: read(["twin": twin], keys: keys), joinFailed: false,
+                               catalogHasProducts: true, catalogSettled: settled,
+                               price: WantedList.price(try table(), game: "riftbound"))
+        }
+        let settled = try listed(keys: ["bee", "twin"], settled: true)
+        #expect(settled.cards.map(\.id) == ["bee", "twin"] && settled.note == nil)
+        #expect(settled.cards[0].name == "Bee Card" && settled.cards[0].price == nil && settled.cards[0].shown == nil)
+        #expect(settled.cards.map { settled.link(for: $0) } == [.none, .card])
+        #expect(WantedList.totals(settled.cards) == "3 copies · 2 cards · $1.50 + 1 without a price")
+        let during = try listed(keys: ["bee", "twin"], settled: false)
+        #expect(during.note == CollectionList.catalogDownloading && during.cards.map { during.link(for: $0) } == [.none, .card])
+        let uncovered = try listed(keys: ["twin"], settled: true)
+        #expect(uncovered.cards.map(\.id) == ["twin"])
+        // With no read (no products of the game yet) no deck card is listed.
+        let none = WantedList.content([], decks: decks, sharing: [:], read: nil, joinFailed: false, catalogHasProducts: false,
+                                      catalogSettled: false, price: { _, _ in nil })
+        #expect(none.cards.isEmpty)
+    }
+
+    /// The owned copies of the read count: own enough and the card leaves the list; own 2 of 3 and 1 is for decks.
+    @Test func ownedCopiesFromTheReadLowerTheDecksPart() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 3)])]
+        var joined = read(["twin": twin], keys: ["twin"])
+        joined.ownedByCard = ["twin": 2]
+        let price = WantedList.price(try table(), game: "riftbound")
+        let some = WantedList.content([entry(count: 1)], decks: decks, sharing: [:], read: joined, joinFailed: false,
+                                      catalogHasProducts: true, catalogSettled: true, price: price)
+        #expect(some.cards.map(\.forDecks) == [1] && some.countText(for: some.cards[0]) == "×2 · 1 for decks")
+        joined.ownedByCard = ["twin": 3]
+        let enough = WantedList.content([], decks: decks, sharing: [:], read: joined, joinFailed: false,
+                                        catalogHasProducts: true, catalogSettled: true, price: price)
+        #expect(enough.cards.isEmpty)
+        // A basic card of the read is never on Wanted from a deck.
+        joined.ownedByCard = [:]
+        joined.basics = ["twin"]
+        #expect(WantedList.content([], decks: decks, sharing: [:], read: joined, joinFailed: false, catalogHasProducts: true,
+                                   catalogSettled: true, price: price).cards.isEmpty)
+    }
+
+    /// The join looks up the hand-added keys and every card key of the active decks (not of a deck that is not active), and
+    /// reads the basic cards once (`DeckMaths.isBasic`, the deciding printing).
+    @Test func theJoinCoversTheDecksCards() throws {
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 2), deckCard("calm rune", "Calm Rune", count: 1),
+                                   deckCard("zero", "Zero", count: 0)]),
+                     deck("Off", active: false, [deckCard("sleeper", "Sleeper", count: 4)])]
+        #expect(WantedList.joinKeys(wanted: [entry("other card", name: "Other Card")], decks: decks)
+                == ["other card", "twin", "calm rune"])
+        let game = try #require(Games.game("riftbound"))
+        let rune = [product(id: 20, groupID: 10, name: "Calm Rune")]
+        let rows = [CollectionRow(productID: 1, finish: "Normal", count: 1, condition: "", name: "Twin")]
+        let joined = WantedList.read(game: game, printings: ["twin": twin, "calm rune": rune], keys: ["twin", "calm rune"],
+                                     rows: rows, setNames: setNames)
+        #expect(joined.basics == ["calm rune"] && joined.ownedByCard == ["twin": 1] && joined.keys == ["twin", "calm rune"])
+    }
+
+    /// A24: the cell's control is the hand-added count. `+` on a card only from decks adds a hand entry with the deck card's
+    /// name; `−` from 1 to 0 on a card the decks miss removes the entry and its pin, and the card stays listed with the
+    /// decks' part and the decks' printing (Review Focus 5). Nothing a deck misses is written to the file.
+    @Test func theCellsControlChangesOnlyTheHandAddedPart() async throws {
+        let folder = tempDir()
+        let json = """
+        {"version": 1, "collection": [],
+         "wanted": [{"cardKey": "twin", "name": "Twin", "count": 1, "pinProductID": 1, "pinFinish": "Normal"}],
+         "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "twin", "name": "Twin", "section": "main", "count": 2, "productID": 3},
+                              {"cardKey": "other card", "name": "Other Card", "section": "main", "count": 3}]}]}
+        """
+        try Data(json.utf8).write(to: folder.appending(path: "riftbound.json"))
+        let library = UserLibrary(folder: folder, watcher: nil)
+        await library.load()
+        let price = WantedList.price(try table(), game: "riftbound")
+        func listed() -> WantedContent {
+            WantedList.content(library.wanted(game: "riftbound"), decks: library.decks(game: "riftbound"),
+                               sharing: library.sharing(game: "riftbound"),
+                               read: read(["twin": twin, "other card": other], keys: ["twin", "other card"]),
+                               joinFailed: false, catalogHasProducts: true, catalogSettled: true, price: price)
+        }
+        let before = listed()
+        #expect(before.cards.map(\.id) == ["twin", "other card"] && before.cards.map(\.entry.count) == [1, 0])
+        // A render writes nothing: the wanted list and the file are as they were.
+        await library.flush()
+        #expect(library.wanted(game: "riftbound").map(\.cardKey) == ["twin"])
+        #expect(try Data(contentsOf: folder.appending(path: "riftbound.json")) == Data(json.utf8))
+
+        WantedView.step(by: -1, card: before.cards[0], game: "riftbound", library: library)
+        let after = listed()
+        #expect(library.wanted(game: "riftbound").isEmpty)
+        // Both are only from decks now, by card key.
+        #expect(after.cards.map(\.id) == ["other card", "twin"] && after.cards.map(\.entry.count) == [0, 0])
+        let twinAfter = try #require(after.cards.last)
+        #expect(twinAfter.forDecks == 2 && twinAfter.shown?.productID == 3 && !twinAfter.showsPin)
+        #expect(after.countText(for: twinAfter) == "×2 · 2 for decks")
+
+        WantedView.step(by: 1, card: after.cards[0], game: "riftbound", library: library)
+        #expect(library.wanted(game: "riftbound").map(\.cardKey) == ["other card"])
+        #expect(library.wanted(game: "riftbound").map(\.name) == ["Other Card"])
+        #expect(library.wanted(game: "riftbound").map(\.count) == [1])
+        let added = listed()
+        #expect(added.cards.first { $0.id == "other card" }.map { added.countText(for: $0) } == "×4 · 3 for decks")
+        await library.flush()
+        let file = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appending(path: "riftbound.json")))
+                                as? [String: Any])
+        let stored = try #require(file["wanted"] as? [[String: Any]])
+        #expect(stored.count == 1 && stored[0]["cardKey"] as? String == "other card" && stored[0]["count"] as? Int == 1)
+    }
+
+    /// The card page's Wanted line: `+ <n> for decks` when the decks miss the card, nothing else; `forDecks` from the
+    /// library's decks and the page's owned copies.
+    @Test func theCardPageSaysTheDecksPart() {
+        #expect(WantedLine.forDecksText(2) == "+ 2 for decks")
+        #expect(WantedLine.forDecksText(1) == "+ 1 for decks")
+        #expect(WantedLine.forDecksText(0) == nil)
+        let decks = [deck("Wind", [deckCard("twin", "Twin", count: 3)]), deck("Off", active: false, [deckCard("twin", "Twin", count: 5)])]
+        #expect(WantedList.forDecks("twin", decks: decks, sharing: [:], owned: 1, isBasic: false) == 2)
+        #expect(WantedList.forDecks("twin", decks: decks, sharing: [:], owned: 3, isBasic: false) == 0)
+        #expect(WantedList.forDecks("twin", decks: decks, sharing: [:], owned: 0, isBasic: true) == 0)
+        #expect(WantedList.forDecks("other", decks: decks, sharing: [:], owned: 0, isBasic: false) == 0)
     }
 }

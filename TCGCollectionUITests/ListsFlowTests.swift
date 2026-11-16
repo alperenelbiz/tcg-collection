@@ -607,15 +607,20 @@ final class ListsFlowTests: UITestCase {
         XCTAssertFalse(text(app.staticTexts["status-line"]).hasPrefix("The PDF could not be saved"), "a cancel was said as a failure")
     }
 
-    /// `-exportPDF` on Wanted: one page with the title, the two cards with their wanted counts, the priced card's price
-    /// (its cheapest printing's, $5.12) first, the total, and that card's picture in the first cell.
+    /// `-exportPDF` on Wanted: one page with the title, the cards with their totals, the priced card's price (its
+    /// cheapest printing's, $5.12) first, the total, and that card's picture in the first cell. Phase 3B task 5: an active
+    /// deck misses 2 Dockside Lock-Up (hand-added 3: ×5) and 2 Kai'Sa, Rebel (only from the deck: ×2); the total line sums
+    /// the totals.
     func testMakeAPDFOfWanted() throws {
         let app = try launch(game: "riftbound", extra: { ["-screen", "wanted", "-exportPDF", $0.appending(path: "pdf/wanted.pdf").path] }) { root in
             try FileManager.default.createDirectory(at: root.appending(path: "pdf"), withIntermediateDirectories: true)
             try self.writeUserFile(game: "riftbound", json: """
             {"version": 1, "collection": [],
              "wanted": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "count": 3},
-                        {"cardKey": "calm rune", "name": "Calm Rune", "count": 2}]}
+                        {"cardKey": "calm rune", "name": "Calm Rune", "count": 2}],
+             "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2},
+                                  {"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2}]}]}
             """)
         }
         let out = try XCTUnwrap(root).appending(path: "pdf/wanted.pdf")
@@ -625,8 +630,8 @@ final class ListsFlowTests: UITestCase {
         XCTAssertEqual(pdf.pageCount, 1)
         let page = try XCTUnwrap(pdf.page(at: 0))
         let pageText = page.string ?? ""
-        for shown in ["Riftbound — Wanted — ", "Dockside Lock-Up", "×3", "$5.12", "Calm Rune", "×2",
-                      "5 copies · $15.36 + 1 without a price"] {
+        for shown in ["Riftbound — Wanted — ", "Dockside Lock-Up", "×5", "$5.12", "Calm Rune", "×2", "Rebel",
+                      "9 copies · $25.60 + 2 without a price"] {
             XCTAssertTrue(pageText.contains(shown), "\(shown) is not on the page: \(pageText)")
         }
         let dockside = try XCTUnwrap(pageText.range(of: "Dockside Lock-Up")), calm = try XCTUnwrap(pageText.range(of: "Calm Rune"))
@@ -634,6 +639,113 @@ final class ListsFlowTests: UITestCase {
         keep(data, name: "pdf-07-wanted", page: page)
         try assertPictureInFirstCell(of: data)
         XCTAssertTrue(element(app, "wanted-pdf").waitForExistence(timeout: 10))
+    }
+
+    /// Phase 3B task 5 (E5, A17, A24): an active deck misses 2 Dockside Lock-Up (none owned, none hand-added). Wanted lists
+    /// it `×2 · 2 for decks` and the subtitle counts it; its control shows the hand-added 0 with `−` off. `+` on the cell:
+    /// `×3 · 2 for decks`, and the file's `wanted` has that card ×1 (nothing of the decks' part). The deck set not active:
+    /// only the hand-added part stays (`×1`); active again: `×3 · 2 for decks`. The card page says "+ 2 for decks" beside
+    /// its Wanted control; owning 2 there makes the cell `×1`.
+    func testADecksMissingCardIsOnWanted() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "wanted"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1, "collection": [],
+             "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 2}]}]}
+            """)
+        }
+        let cell = app.buttons["wanted-cell-dockside lock up"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "the decks' card is not a link on Wanted")
+        XCTAssertTrue(waitUntilSynced(app))
+        let title = { app.windows.firstMatch.title }
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×2, 2 for decks, $5.12" }, cell.label)
+        XCTAssertTrue(waitUntil { title().hasSuffix("2 copies · 1 card · $10.24") }, title())
+        let value = element(app, "wanted-cell-value-dockside lock up")
+        XCTAssertEqual(text(value), "0")
+        XCTAssertFalse(element(app, "wanted-cell-minus-dockside lock up").isEnabled, "− is on at a hand-added 0")
+        XCTAssertEqual(try storedWanted(game: "riftbound"), [])
+        shot("lists-40-wanted-from-a-deck")
+
+        element(app, "wanted-cell-plus-dockside lock up").click()
+        XCTAssertTrue(waitUntil { self.text(value) == "1" }, text(value))
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×3, 2 for decks, $5.12" }, cell.label)
+        XCTAssertTrue(waitUntil { title().hasSuffix("3 copies · 1 card · $15.36") }, title())
+        XCTAssertTrue(waitUntil { (try? self.storedWanted(game: "riftbound"))
+                == [StoredWanted(cardKey: "dockside lock up", name: "Dockside Lock-Up", count: 1)] },
+                      "\(String(describing: try? storedWanted(game: "riftbound")))")
+        shot("lists-41-wanted-hand-and-deck")
+
+        // The deck set not active: only the hand-added part stays; active again: the decks' part is back.
+        toggleActive(app)
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×1, $5.12" }, cell.label)
+        XCTAssertTrue(waitUntil { title().hasSuffix("1 copy · 1 card · $5.12") }, title())
+        toggleActive(app)
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×3, 2 for decks, $5.12" }, cell.label)
+
+        // The card page: the control is the hand-added 1, "+ 2 for decks" beside it; owning 2 takes the decks' part away.
+        cell.click()
+        let forDecks = element(app, "wanted-for-decks")
+        XCTAssertTrue(forDecks.waitForExistence(timeout: 10))
+        XCTAssertEqual(text(forDecks), "+ 2 for decks")
+        XCTAssertEqual(text(element(app, "wanted-value")), "1")
+        // The pin button stays whole: it goes under the count row when "+ 2 for decks" takes the room; the window stays
+        // 900 pt and the button inside it.
+        let pin = element(app, "wanted-pin"), window = app.windows.firstMatch.frame
+        XCTAssertEqual(pin.label, "Want this printing")
+        XCTAssertEqual(window.width, 900, accuracy: 1, "the Wanted line widened the window")
+        XCTAssertLessThanOrEqual(pin.frame.maxX, window.maxX, "the pin button leaves the window: \(pin.frame)")
+        XCTAssertGreaterThanOrEqual(pin.frame.width, 100, "the pin button is cut: \(pin.frame)")
+        shot("lists-42-card-page-for-decks")
+        let ownPlus = element(app, "count-plus-Normal")
+        ownPlus.click()
+        XCTAssertTrue(waitUntil { self.text(forDecks) == "+ 1 for decks" }, text(forDecks))
+        ownPlus.click()
+        XCTAssertTrue(waitUntil { !forDecks.exists }, "the decks' part stayed after owning enough")
+        XCTAssertEqual(text(element(app, "wanted-value")), "1")
+        goBack(app)
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×1, $5.12" }, cell.label)
+        XCTAssertTrue(waitUntil { title().hasSuffix("1 copy · 1 card · $5.12") }, title())
+        shot("lists-43-wanted-owned-enough")
+        XCTAssertEqual(try storedWanted(game: "riftbound"), [StoredWanted(cardKey: "dockside lock up", name: "Dockside Lock-Up", count: 1)])
+    }
+
+    /// Opens the deck rb1 and flips Deck ▸ Active, then shows Wanted again.
+    private func toggleActive(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        element(app, "sidebar-deck-rb1").click()
+        XCTAssertTrue(element(app, "deck-cell-dockside lock up-main").waitForExistence(timeout: 10), "the deck page did not open",
+                      file: file, line: line)
+        element(app, "deck-menu").click()
+        let active = app.menuItems["Active"].firstMatch
+        XCTAssertTrue(active.waitForExistence(timeout: 5), "no Active item", file: file, line: line)
+        active.click()
+        element(app, "sidebar-wanted").click()
+    }
+
+    /// A23: Swiftwind Panther Warrior has two printings; its page opens on the newest, 719835 ($3.10, the card's cheapest).
+    /// An active deck misses 1 copy and its line holds 719834: the Wanted cell shows that printing and its own cheapest
+    /// finish price (Unlimited $9.00), and opens that printing's page. The prices are this test's own (`writePinPrices`).
+    func testTheDecksPrintingShowsOnWanted() throws {
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "wanted"]) { root in
+            try self.writePinPrices(in: root)
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "collection": [],
+             "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "swiftwind panther warrior", "name": "Swiftwind Panther Warrior", "section": "main",
+                                   "count": 1, "productID": 719834}]}]}
+            """)
+        }
+        let cell = app.buttons["wanted-cell-swiftwind panther warrior"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "the decks' card is not a link on Wanted")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { cell.label == "Swiftwind Panther Warrior, ×1, 1 for decks, $9.00" }, cell.label)
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix("1 copy · 1 card · $9.00") }, app.windows.firstMatch.title)
+        shot("lists-44-wanted-decks-printing")
+        cell.click()
+        let facts = app.staticTexts["card-facts-line"]
+        XCTAssertTrue(facts.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil { self.text(facts).contains("Super Rare") }, text(facts))
+        XCTAssertEqual(text(element(app, "wanted-for-decks")), "+ 1 for decks")
+        XCTAssertEqual(try storedWanted(game: "yu-gi-oh"), [])
     }
 
     /// C11: an export goes on while a card page is open on the list's stack, and ends in the save panel when the list is on

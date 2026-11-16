@@ -20,24 +20,29 @@ extension WantedList {
 typealias WantedJoin = CatalogJoin<WantedRead>
 
 extension CatalogJoin where Read == WantedRead {
-    /// What Wanted lists (`WantedList.content`); nil until a join of this game has ended. The catalog counts as settled as
-    /// it was for the join that made `read`, as for the Collection.
-    func content(wanted: [WantedEntry], price: (WantedEntry, [ProductRecord]) -> ShownPrice?) -> WantedContent? {
+    /// What Wanted lists (`WantedList.content`): the hand-added entries and the cards the active `decks` miss (E5); nil
+    /// until a join of this game has ended. The catalog counts as settled as it was for the join that made `read`, as for
+    /// the Collection.
+    func content(wanted: [WantedEntry], decks: [Deck], sharing: [String: Bool],
+                 price: (WantedEntry, [ProductRecord]) -> ShownPrice?) -> WantedContent? {
         guard let joined else { return nil }
-        return WantedList.content(wanted, read: read, joinFailed: failed, catalogHasProducts: catalogHasProducts,
-                                  catalogSettled: joined.catalogSettled, price: price)
+        return WantedList.content(wanted, decks: decks, sharing: sharing, read: read, joinFailed: failed,
+                                  catalogHasProducts: catalogHasProducts, catalogSettled: joined.catalogSettled, price: price)
     }
 
-    /// Reads the printings of the game's wanted cards (one store call) and its set names, and counts the copies owned of
-    /// each of those cards (`run`; the join's key changes with every change of the collection).
+    /// Reads the printings of the game's wanted cards and of every card of its active decks (one store call) and its set
+    /// names, and counts the copies owned of each of those cards and finds the basic ones (`run`; the join's key changes
+    /// with every change of the collection, the decks and the sharing answers).
     func run(_ key: CollectionJoin, model: AppModel) async {
-        let keys = Set(model.library.wanted(game: key.game).map(\.cardKey)), rows = model.library.rows(game: key.game)
-        await run(key, loaded: model.library.isLoaded, reader: model.reader) { reader, game in
+        guard let definition = Games.game(key.game) else { return }
+        let library = model.library
+        let keys = WantedList.joinKeys(wanted: library.wanted(game: key.game), decks: library.decks(game: key.game))
+        let rows = library.rows(game: key.game)
+        await run(key, loaded: library.isLoaded, reader: model.reader) { reader, game in
             let printings = try await reader.printings(game: game, cardKeys: Array(keys))
             let sets = try await reader.sets(game: game)
             let names = Dictionary(sets.map { ($0.groupID, $0.name) }, uniquingKeysWith: { first, _ in first })
-            return WantedRead(printings: printings, keys: keys, setNames: names,
-                              ownedByCard: WantedList.ownedByCard(rows: rows, printings: printings))
+            return WantedList.read(game: definition, printings: printings, keys: keys, rows: rows, setNames: names)
         }
     }
 }
@@ -88,7 +93,8 @@ struct WantedView: View {
     var body: some View {
         let library = model.library, game = state.gameID
         // Nil until a join of this game has ended. The wanted counts and pins are read here, so a change shows at once.
-        let listed = state.join.content(wanted: library.wanted(game: game), price: WantedList.price(model.prices, game: game))
+        let listed = state.join.content(wanted: library.wanted(game: game), decks: library.decks(game: game),
+                                        sharing: library.sharing(game: game), price: WantedList.price(model.prices, game: game))
         let all = listed?.cards ?? []
         let shown = WantedList.sorted(WantedList.filtered(all, text: state.text), by: state.sort)
         let phase = ListPhase.of(listing: listed.map { !$0.cards.isEmpty }, game: game, library: library)
@@ -150,8 +156,9 @@ struct WantedView: View {
         }
     }
 
-    /// C6: the cell, 8 pt, then one line with the wanted count (`−` at 1 takes the card and its pin off the list). The
-    /// control is off while the game cannot change.
+    /// C6, A24: the cell (its count line the total, `×3 · 2 for decks`), 8 pt, then one line with the hand-added count
+    /// (`−` at 1 takes the hand entry and its pin off the list; a card the decks miss stays with their part; `−` is off at
+    /// 0). The control is off while the game cannot change.
     private func cell(_ card: WantedCard, listed: WantedContent, canChange: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             WantedCell(gameID: state.gameID, card: card, left: listed.countText(for: card),
@@ -160,7 +167,7 @@ struct WantedView: View {
             HStack(spacing: 8) {
                 CountControl(count: card.entry.count, label: "\(card.name), wanted", prefix: "wanted-cell", key: card.id,
                              spoken: (remove: "Want one fewer \(card.name)", add: "Want one more \(card.name)")) {
-                    step(by: $0 - card.entry.count, card: card)
+                    Self.step(by: $0 - card.entry.count, card: card, game: state.gameID, library: model.library)
                 }
                 Spacer(minLength: 0)
             }
@@ -168,16 +175,16 @@ struct WantedView: View {
         }
     }
 
-    /// As on the card page: the step goes onto the library's current count, so two clicks before the next render both
-    /// count; 0 takes the card off the list.
-    private func step(by delta: Int, card: WantedCard) {
-        let library = model.library, game = state.gameID
+    /// As on the card page: the step goes onto the library's current hand-added count, so two clicks before the next render
+    /// both count; 0 takes the hand entry off the list. A new entry (`+` on a card only from decks) saves the deck card's
+    /// name (`card.entry.name`).
+    static func step(by delta: Int, card: WantedCard, game: String, library: UserLibrary) {
         library.setWanted(library.wantedCount(game: game, cardKey: card.id) + delta, game: game, cardKey: card.id,
                           name: card.entry.name)
     }
 }
 
-/// A Wanted cell (`CardCell`): the card's name, `left` (`×n`, or `×n · <set>` when pinned) and its price. A card with a
+/// A Wanted cell (`CardCell`): the card's name, `left` (`×n`, `×n · 2 for decks`, `… · <set>` when pinned) and its price. A card with a
 /// printing opens its card page on the shown printing; one that left a settled catalog opens its small page; a pending one
 /// opens nothing and takes no hover. The caller gives it its identifier.
 struct WantedCell: View {

@@ -239,6 +239,20 @@ struct PDFExportTests {
                     PDFSource(name: "Gone Card", count: 1, price: nil, picture: nil)])
     }
 
+    /// Phase 3B task 5: an item's count is the card's total (hand-added and for decks); the total line sums the totals.
+    @Test func wantedItemsCountTheTotal() throws {
+        let game = try #require(Games.game("riftbound"))
+        let use = DeckUse(deckID: "rb1", deckName: "Wind", use: 2, got: 0, productIDs: [])
+        let cards = [WantedCard(entry: WantedEntry(cardKey: "dockside lock up", name: "Dockside Lock-Up", count: 1), shown: nil,
+                                price: ShownPrice(amount: 5, isLow: false), owned: 0, forDecks: 2, users: [use]),
+                     WantedCard(entry: WantedEntry(cardKey: "kai sa rebel", name: "Kai'Sa, Rebel", count: 0), shown: nil,
+                                price: nil, owned: 0, forDecks: 3)]
+        let items = PDFSource.wanted(cards, game: game, ygo: nil)
+        #expect(items.map(\.count) == [3, 3])
+        #expect(ListPDF.totalLine(items.map { PDFItem(name: $0.name, count: $0.count, price: $0.price, picture: nil) })
+                == "6 copies · $15.00 + 1 without a price")
+    }
+
     /// A job's title and file name take the given day.
     @Test func aJobNamesItsListAndDay() throws {
         let game = try #require(Games.game("riftbound"))
