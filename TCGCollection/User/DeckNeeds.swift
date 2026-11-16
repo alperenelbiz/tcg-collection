@@ -1,7 +1,10 @@
 import Foundation
 
 /// One active deck's use of a card (E2, E4): its copies over all sections, the copies it may count as owned, and the
-/// printings stored on its lines of the card (A18, without nils).
+/// printings stored on its lines of the card (A18, without nils). `missing` is this deck's own shortfall. For a card that
+/// is not shared or is pending the decks' `missing` counts sum to `fromDecks`. For a shared card each deck is counted
+/// alone (`use − min(use, owned)`), so the sum can be larger than `fromDecks`: buying `fromDecks` copies completes every
+/// deck.
 nonisolated struct DeckUse: Sendable, Equatable {
     let deckID: String
     let deckName: String
@@ -17,7 +20,8 @@ nonisolated struct DeckUse: Sendable, Equatable {
 /// - `owned`: copies over all the card's printings.
 /// - `answer`: the stored sharing answer (true: shared), nil when none.
 /// - `sum`: the users' use summed. `need` (E2): the largest use whenever the answer is "shared", else `sum`.
-///   `fromDecks`: `max(0, need − owned)`; 0 for a basic card. On a card not in conflict an answer changes `need` only:
+///   `fromDecks`: `max(0, need − owned)`; 0 for a basic card. It equals the users' `missing` summed only when the card
+///   is not shared or is pending (see `DeckUse`). On a card not in conflict an answer changes `need` only:
 ///   `fromDecks` and every deck's `got` are the same for every answer (E3).
 /// - `inConflict`: not basic, 2 or more users, `sum` over `owned`. `pending`: in conflict without an answer.
 nonisolated struct CardNeed: Sendable, Equatable {
@@ -97,7 +101,8 @@ nonisolated enum DeckNeeds {
 
     /// The copies a deck may count as owned, per card key (E4): for an active deck from `needs`; for a deck that is not
     /// active, all owned copies. Only the cards the deck uses (a count over 0) are keys. An active deck that `needs` does
-    /// not list as a user of a card (`needs` made from another deck list) also gets all owned copies of it.
+    /// not list as a user of a card (`needs` made from another deck list) also gets all owned copies of it. An active
+    /// deck gets its whole use of a basic card, whatever is owned: a basic card is never missing.
     static func available(to deck: Deck, needs: [String: CardNeed], owned: (String) -> Int) -> [String: Int] {
         let keys = Set(deck.cards.filter { $0.count > 0 }.map(\.cardKey))
         return Dictionary(uniqueKeysWithValues: keys.map { key in

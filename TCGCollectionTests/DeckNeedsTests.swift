@@ -20,8 +20,11 @@ struct DeckNeedsTests {
         try #require(needs(decks, answer: answer, owned: owned, basic: basic)["x"])
     }
 
-    /// The sum of `missing` over the users equals `fromDecks` (E4).
+    /// The sum of `missing` over the users equals `fromDecks` (E4) for a card that is not shared or is pending: the decks
+    /// are served in deck order from one pile. A shared card does not follow it (each deck is counted alone); the helper
+    /// is applied only to cards whose answer is not true.
     private func checkSum(_ need: CardNeed) {
+        #expect(need.answer != true)
         #expect(need.users.reduce(0) { $0 + $1.missing } == need.fromDecks)
     }
 
@@ -59,13 +62,45 @@ struct DeckNeedsTests {
         #expect(!n.pending)
         #expect(got(n) == ["A": 3, "B": 2])      // the controller's ruling: got = min(use, owned); B uses 2
         #expect(missing(n) == ["A": 0, "B": 0])
-        checkSum(n)
     }
 
     @Test func sharedWithFewerCopiesThanTheLargestUse() throws {
         let n = try need(a32, answer: true, owned: 2)
         #expect(n.fromDecks == 1)
         #expect(missing(n) == ["A": 1, "B": 0])
+    }
+
+    /// For a shared card each deck is counted alone: its missing is `use − min(use, owned)`. The missing counts can sum
+    /// to more than `fromDecks`, since the decks share the copies: buying `fromDecks` copies completes every deck.
+    @Test func sharedMissingCountsEachDeckAlone() throws {
+        let n = try need(a32, answer: true, owned: 1)
+        #expect(n.need == 3)
+        #expect(n.fromDecks == 2)
+        #expect(got(n) == ["A": 1, "B": 1])
+        #expect(missing(n) == ["A": 2, "B": 1])     // sum 3 > fromDecks 2: with 1 + 2 = 3 owned, A and B both have all
+        let none = try need([deck("A", [x(3)]), deck("B", [x(3)])], answer: true, owned: 0)
+        #expect(none.fromDecks == 3)
+        #expect(missing(none) == ["A": 3, "B": 3])  // sum 6 > fromDecks 3: 3 shared copies complete both decks
+    }
+
+    @Test func theNameFallsBackToTheNextUserThenToTheCardKey() throws {
+        let next = try need([deck("A", [x(1, name: "")]), deck("B", [x(1, name: "From B")])])
+        #expect(next.name == "From B")
+        let key = try need([deck("A", [x(1, name: "")]), deck("B", [x(1, name: "")])])
+        #expect(key.name == "x")
+    }
+
+    @Test func anAnswerForACardNoDeckUsesIsNotInTheResult() {
+        let all = DeckNeeds.needs(decks: [deck("A", [x(1)])], sharing: ["gone": true, "x": false], owned: { _ in 3 },
+                                  isBasic: { _ in false })
+        #expect(Set(all.keys) == ["x"])
+    }
+
+    @Test func aNegativeOwnedCountsAsZero() throws {
+        let n = try need([deck("A", [x(2)]), deck("B", [x(1)])], owned: -4)
+        #expect(n.owned == 0)
+        #expect(n.fromDecks == 3)
+        #expect(missing(n) == ["A": 2, "B": 1])
         checkSum(n)
     }
 
@@ -94,7 +129,7 @@ struct DeckNeedsTests {
             #expect(n.users.map(\.got) == plain.users.map(\.got))
             #expect(n.users.map(\.got) == [2, 1])
             #expect(n.users == plain.users)
-            checkSum(n)
+            if answer != true { checkSum(n) }
         }
     }
 
