@@ -795,6 +795,34 @@ struct AppModelTests {
         #expect(scanned.isEmpty)                                                     // a file and no mark: no scan
     }
 
+    /// Final fix follow-up: a store that runs in memory (its file could not be opened) never writes an index file: a
+    /// marked game is not scanned (the empty store would write `{}` over a good file), and its mark stays; a game
+    /// without a file is not scanned either.
+    @MainActor @Test func aStoreInMemoryWritesNoIndexAndKeepsTheMarks() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try ForeignSchema.writeStore(at: paths.catalogStore)                        // kept: the model runs in memory
+        let good = SetIndex(sets: [77: [5, 6]])
+        try good.write(to: paths.sets("riftbound"))
+        let bytes = try Data(contentsOf: paths.sets("riftbound"))
+        let preferences = try #require(UserDefaults(suiteName: paths.support.appending(path: "preferences").path))
+        AppModel.markSetIndexDue("riftbound", in: preferences)
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.storeFailure != nil)
+        var scanned: [String] = []
+        model.setIndexScanHook = { scanned.append($0) }
+        await model.start()
+        await model.waitForSetIndexes()
+        model.requestSetIndex("yu-gi-oh")                                            // a request in this run too
+        await model.waitForSetIndexes()
+        #expect(scanned.isEmpty)
+        #expect(try Data(contentsOf: paths.sets("riftbound")) == bytes)
+        #expect(model.setIndexes["riftbound"] == good)                               // the file is still read
+        #expect(model.setIndexIsDue("riftbound"))
+        #expect(!FileManager.default.fileExists(atPath: paths.sets("yu-gi-oh").path))
+        #expect(model.setIndexesInWork.isEmpty)
+    }
+
     /// A3: the mark of an index stored while the game's catalog step is still to come stays until that step ends; a step
     /// that does not change the game then clears it (no scan needed), so an online launch does not scan the game again.
     @MainActor @Test func aDueMarkStoredDuringItsStepIsClearedWhenTheStepChangesNothing() async throws {

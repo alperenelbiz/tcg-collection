@@ -957,7 +957,10 @@ final class AppModel {
     }
     #endif
 
+    /// No scan while the store runs in memory (its file could not be opened, `storeFailure`): the empty store would write
+    /// an empty index over a good file and clear the mark. The marks stay for a launch on an open store.
     private func enqueueSetIndex(_ game: String, onlyWithProducts: Bool) {
+        guard storeFailure == nil else { return }
         setIndexQueue.removeAll { $0.game == game }
         setIndexQueue.append(SetIndexRequest(game: game, onlyWithProducts: onlyWithProducts))
         updateSetIndexesInWork()

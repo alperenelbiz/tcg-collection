@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
+private final class MergeThreads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [Bool] = []
+    func add(_ item: Bool) { lock.lock(); items.append(item); lock.unlock() }
+    var all: [Bool] { lock.lock(); defer { lock.unlock() }; return items }
+}
+
 struct CatalogStoreTests {
     @Test func searchFindsACardByAnyWordOrder() async throws {
         let s = try await filledStore()
@@ -340,6 +347,21 @@ struct CatalogStoreTests {
         let range = CatalogStore(modelContainer: writer.modelContainer)
         #expect(try await range.setIndexRows(game: "riftbound", after: nil, through: nil).isEmpty)
         #expect(await range.runsOnMainThread() == false)
+    }
+
+    /// Final fix follow-up: the scan's merge and sort run off the main thread when it is called from the main actor, as
+    /// `AppModel.scanSetIndex` calls it (a plain `nonisolated async` function would run on its caller's actor).
+    @MainActor @Test func theSetIndexMergeNeverRunsOnTheMainThread() async throws {
+        let s = try CatalogStore.inMemory()
+        try await s.replaceProducts(of: 1, with: [product(id: 1, number: "2"), product(id: 2, number: "1")], at: .now)
+        let game = "riftbound"
+        let seen = MergeThreads()
+        CatalogStore.setIndexMergeHook = { if $0 == game { seen.add(pthread_main_np() != 0) } }
+        defer { CatalogStore.setIndexMergeHook = nil }
+        #expect(pthread_main_np() != 0)                                             // the caller is on the main thread
+        #expect(try await CatalogStore.setIndex(game: game, container: s.modelContainer) == SetIndex(sets: [1: [2, 1]]))
+        #expect(!seen.all.isEmpty)
+        #expect(!seen.all.contains(true))
     }
 
     /// Two sets (3 and 2 products, numbers out of order, one without a number): each in card-number order; another

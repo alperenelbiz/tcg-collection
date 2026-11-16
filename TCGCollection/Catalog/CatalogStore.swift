@@ -537,6 +537,11 @@ actor CatalogStore: ModelActor {
         return FacetLists(rarities: rarities.sorted(), types: types)
     }
 
+    #if DEBUG
+    /// Test only: called with the game where the scan's merge starts (it records the thread).
+    nonisolated(unsafe) static var setIndexMergeHook: (@Sendable (String) -> Void)?
+    #endif
+
     /// The set index's rows of `game` whose card key is in `(after, through]` (nil: no end on that side, so `""` is in the
     /// first range): one read of the `(gameID, cardKey)` index's range, no sort, no paging. A part of
     /// `setIndex(game:container:)`; run it on a throwaway store on the container, never on `reader` or the writer.
@@ -565,7 +570,10 @@ actor CatalogStore: ModelActor {
     /// LIMIT 2000`) had no index that orders by product id within a game: SQLite walked the game's `(gameID, cardKey)`
     /// index and sorted the rest of the game in a temporary B-tree for every page (`EXPLAIN QUERY PLAN`; about 0.13 s a
     /// page, 59 pages for Magic). A key range is one walk of that index, without a sort.
-    nonisolated static func setIndex(game: String, container: ModelContainer) async throws -> SetIndex {
+    ///
+    /// `@concurrent`: with approachable concurrency a plain `nonisolated async` function runs on its caller's actor, and
+    /// the model calls it from the main actor; the merge and the sort must not run there (final fix follow-up).
+    @concurrent nonisolated static func setIndex(game: String, container: ModelContainer) async throws -> SetIndex {
         let ends = nameRangeEnds.map { Optional($0) }
         let lows: [String?] = [nil] + ends, highs: [String?] = ends + [nil]
         let rows = try await withThrowingTaskGroup(of: [SetIndexRow].self) { group in
@@ -577,6 +585,9 @@ actor CatalogStore: ModelActor {
             return all
         }
         try Task.checkCancellation()
+        #if DEBUG
+        setIndexMergeHook?(game)
+        #endif
         var bySet: [Int: [(number: String, name: String, id: Int)]] = [:]
         for row in rows { bySet[row.groupID, default: []].append((row.number, row.name, row.productID)) }
         return SetIndex(sets: bySet.mapValues(SetOrder.sorted))
