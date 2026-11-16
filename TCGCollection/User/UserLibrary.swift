@@ -141,6 +141,15 @@ final class UserLibrary {
         Dictionary(shown(game).sharing.map { ($0.cardKey, $0.shared) }, uniquingKeysWith: { first, _ in first })
     }
 
+    /// The game's profile (G1, G2): whether the user follows it and his roles in it. All on for a game without a file, a
+    /// refused file (its profile is not read) and an unknown game.
+    func profile(game: String) -> GameProfile { shown(game).profile }
+
+    /// After the folder's first read: whether it has a file of any known game, read or refused (newer, unreadable, not
+    /// downloaded from iCloud), or one written here since (G11: a folder without one is new). False before the read and
+    /// for a missing folder.
+    var hasGameFile: Bool { !files.isEmpty || !refused.isEmpty }
+
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
     }
@@ -302,6 +311,17 @@ final class UserLibrary {
                 }
             }
         }
+    }
+
+    /// Whether `setProfile` can change the game's profile: as `canChange` (G2: a game whose file this app must not rewrite
+    /// keeps its read profile).
+    func canSetProfile(game: String) -> Bool { canChange(game: game) }
+
+    /// Refused as `setCount` is. Sets the game's profile in one change (G1, G2); a game without a file gets its file. The
+    /// same profile writes nothing (a file without `profile` keeps its bytes), except over a `profile` this build could not
+    /// read, which it replaces (`GameUserFile.setProfile`).
+    func setProfile(_ profile: GameProfile, game: String) {
+        change(game) { $0.setProfile(profile) }
     }
 
     /// Memory first, then a write of the whole file is queued. Refused without a trace when the game cannot change.

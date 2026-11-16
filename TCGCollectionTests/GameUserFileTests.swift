@@ -924,4 +924,128 @@ struct GameUserFileTests {
         let backText = String(decoding: try back.data(), as: UTF8.self)
         #expect(sharingPart(backText) == sharingPart(oursText))
     }
+
+    // MARK: Phase 4B task 1: the game's profile (G1)
+
+    /// A file in the phase 4A form: every list, decks and sharing answers, no `profile`.
+    private let phase4AJSON = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A"}],"wanted":[{"cardKey":"a","name":"A","count":1}],"forSale":[{"productID":1,"finish":"Normal","count":1,"name":"A"}],"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":0.07,"priceIsLow":false}],"decks":[{"id":"d","name":"D","format":"standard","active":true,"cards":[{"cardKey":"a","name":"A","section":"main","count":3}]}],"sharing":[{"cardKey":"a","shared":true}],"future":1}"#
+
+    /// The `profile` value written by `file`, or nil when the key is not there.
+    private func profileValue(_ file: GameUserFile) throws -> Any? {
+        (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["profile"]
+    }
+
+    /// A30: a phase 4A file (no `profile`) reads with every member on, and a read and `data()` keep its exact bytes.
+    @Test func aPhase4AFileReadsWithEveryProfileOnAndKeepsItsBytes() throws {
+        let canonical = try GameUserFile(data: Data(phase4AJSON.utf8)).data()
+        let file = try GameUserFile(data: canonical)
+        #expect(file.profile == .all)
+        #expect(file.profile == GameProfile(followed: true, player: true, collector: true))
+        #expect(file.decks.count == 1); #expect(file.sharing.count == 1); #expect(file.sold.count == 1)
+        #expect(try file.data() == canonical)
+        #expect(try profileValue(file) == nil)
+    }
+
+    /// A profile is read, written and read again unchanged; an unknown key inside it survives a change of another member.
+    @Test func aProfileRoundTrips() throws {
+        let json = #"{"version":1,"collection":[],"profile":{"followed":true,"player":false,"collector":true,"note":"kept"}}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.profile == GameProfile(followed: true, player: false, collector: true))
+        let data = try file.data()
+        #expect(try GameUserFile(data: data) == file)
+        #expect(try GameUserFile(data: data).data() == data)
+        file.profile.collector = false
+        let written = try #require(try profileValue(file) as? [String: Any])
+        #expect(written["note"] as? String == "kept")
+        #expect(written["followed"] as? Bool == true); #expect(written["player"] as? Bool == false)
+        #expect(written["collector"] as? Bool == false)
+        #expect((written["collector"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } == true)
+        #expect(try GameUserFile(data: try file.data()).profile == GameProfile(followed: true, player: false, collector: false))
+    }
+
+    /// G1: the key is written only when the file had it or the profile is not all on. A role turned off and on again in
+    /// one run keeps the key (the file had it by then: it is written back all on); a file never changed has no key.
+    @Test func aProfileThatIsAllOnIsNotWrittenUnlessTheFileHadIt() throws {
+        let original = try GameUserFile(data: Data(#"{"version":1,"collection":[]}"#.utf8))
+        #expect(try profileValue(original) == nil)
+        var file = original
+        file.profile.player = false
+        #expect((try profileValue(file) as? [String: Any])?["player"] as? Bool == false)
+        file.profile.player = true
+        let written = try #require(try profileValue(file) as? [String: Any])
+        #expect(written as NSDictionary == ["followed": true, "player": true, "collector": true] as NSDictionary)
+        // Setting the same profile is no change: no key.
+        var same = original
+        same.setProfile(.all)
+        #expect(try profileValue(same) == nil); #expect(same == original)
+        // A file that had the key all on keeps it.
+        let had = try GameUserFile(data: Data(#"{"version":1,"collection":[],"profile":{"followed":true,"player":true,"collector":true}}"#.utf8))
+        #expect((try profileValue(had) as? [String: Any])?.count == 3)
+    }
+
+    /// G1, Review Focus 4: a `profile` that is not an object, or a member that is not a JSON boolean, reads as on; a change
+    /// of the collection writes the raw value back; `setProfile` replaces it (also with the same profile).
+    @Test func anUnreadableProfileReadsAsOnAndIsKeptUntilItIsChanged() throws {
+        let cases: [(String, Any)] = [(#""x""#, "x"), (#"{"followed":"no"}"#, ["followed": "no"]), (#"{"player":1}"#, ["player": 1])]
+        for (text, raw) in cases {
+            var file = try GameUserFile(data: Data(#"{"version":1,"collection":[],"profile":\#(text)}"#.utf8))
+            #expect(file.profile == .all, "\(text)")
+            file.collection = [CollectionRow(productID: 1, finish: "Normal", count: 1, condition: "", name: "A")]
+            let kept = try #require(try profileValue(file))
+            #expect((kept as AnyObject).isEqual(raw), "\(text)")
+            #expect(try GameUserFile(data: try file.data()).profile == .all)
+            var replaced = file
+            replaced.setProfile(.all)
+            #expect(replaced != file, "\(text)")
+            let written = try #require(try profileValue(replaced) as? [String: Any], "\(text)")
+            #expect(written["followed"] as? Bool == true); #expect(written["player"] as? Bool == true)
+            #expect(written["collector"] as? Bool == true)
+            #expect((written["player"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } == true)
+            var off = file
+            off.setProfile(GameProfile(followed: true, player: false, collector: true))
+            #expect(try GameUserFile(data: try off.data()).profile == GameProfile(followed: true, player: false, collector: true))
+        }
+        // An unreadable member next to a readable one: the readable one is read.
+        let mixed = try GameUserFile(data: Data(#"{"profile":{"followed":"no","collector":false}}"#.utf8))
+        #expect(mixed.profile == GameProfile(followed: true, player: true, collector: false))
+        // `null` is no profile.
+        #expect(try GameUserFile(data: Data(#"{"profile":null}"#.utf8)).profile == .all)
+    }
+
+    /// G1: a member that is not there is on.
+    @Test func aMissingMemberIsOn() throws {
+        let file = try GameUserFile(data: Data(#"{"version":1,"profile":{"player":false}}"#.utf8))
+        #expect(file.profile.followed); #expect(!file.profile.player); #expect(file.profile.collector)
+        // Untouched, it is written back as it was.
+        #expect((try profileValue(file) as? [String: Any])?.count == 1)
+    }
+
+    /// Equality and `hasSameLists` see a change of the profile alone, so the library writes it.
+    @Test func aProfileOnlyChangeMakesTheFileDifferent() throws {
+        let file = try GameUserFile(data: Data(phase4AJSON.utf8))
+        var changed = file
+        changed.profile.followed = false
+        #expect(changed != file)
+        #expect(!changed.hasSameLists(as: file))
+    }
+
+    /// A phase 4A build on another device rewrites the file to change a collection count: it parses the whole object,
+    /// changes `collection` and writes with its options. `profile` (an unknown key there) comes back byte-equal and reads
+    /// the same.
+    @Test func aPhase4ARewriteKeepsTheProfile() throws {
+        var file = try GameUserFile(data: Data(phase4AJSON.utf8))
+        file.setProfile(GameProfile(followed: true, player: false, collector: true))
+        let ours = try file.data()
+        var object = try JSONSerialization.jsonObject(with: ours) as! [String: Any]
+        object["version"] = 1
+        object["collection"] = [["productID": 1, "finish": "Normal", "count": 3, "condition": "", "name": "A"]]
+        var rewritten = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        rewritten.append(0x0A)
+        let oursText = String(decoding: ours, as: UTF8.self), rewrittenText = String(decoding: rewritten, as: UTF8.self)
+        let profilePart: (String) -> Substring = { $0[$0.range(of: "\"profile\"")!.lowerBound..<$0.range(of: "\"sharing\"")!.lowerBound] }
+        #expect(profilePart(rewrittenText) == profilePart(oursText))
+        let back = try GameUserFile(data: rewritten)
+        #expect(back.collection.map(\.count) == [3]); #expect(back.profile == file.profile)
+        #expect(profilePart(String(decoding: try back.data(), as: UTF8.self)) == profilePart(oursText))
+    }
 }

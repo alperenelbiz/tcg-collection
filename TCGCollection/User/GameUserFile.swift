@@ -54,12 +54,15 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
     /// Each parsed sharing answer's object by its card key, and the entries that could not be parsed (a second entry of
     /// one card key among them, E1).
     let sharing: RawList<String>
+    /// The file's `profile` is there and this build cannot read all of it (not an object, or a member that is not a JSON
+    /// boolean, G1): it is written back as it was until the profile is set (`setProfile`).
+    let profileIsUnreadable: Bool
 
     init(_ object: [String: Any], collection: RawList<PrintingKey> = .init(), wanted: RawList<String> = .init(),
          unreadablePins: Set<String> = [], forSale: RawList<PrintingKey> = .init(),
          sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = [],
          decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:], hasUnreadablePrintings: Bool = false,
-         sharing: RawList<String> = .init()) {
+         sharing: RawList<String> = .init(), profileIsUnreadable: Bool = false) {
         self.object = object
         self.collection = collection
         self.wanted = wanted
@@ -71,12 +74,14 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
         self.deckCards = deckCards
         self.hasUnreadablePrintings = hasUnreadablePrintings
         self.sharing = sharing
+        self.profileIsUnreadable = profileIsUnreadable
     }
 }
 
-/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, `decks`, `sharing`, and
-/// whatever else a newer app wrote. The version stays 1 (C1, D1, E1): a phase 2B build keeps the three lists, a phase 2B
-/// or 2C build keeps `decks`, and a phase 2B–3A build keeps `sharing`, as unknown keys.
+/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, `decks`, `sharing`,
+/// `profile`, and whatever else a newer app wrote. The version stays 1 (C1, D1, E1, G1): a phase 2B build keeps the three
+/// lists, a phase 2B or 2C build keeps `decks`, a phase 2B–3A build keeps `sharing`, and a phase 2B–4A build keeps
+/// `profile`, as unknown keys.
 /// - A list key the file has (even `[]` or null) is written back; one it does not have is written only once its list
 ///   has an entry, so a phase 2B file keeps its bytes through a read and a rewrite.
 /// - Each entry keeps the keys this app does not know; entries that cannot be parsed are kept, in their order, after
@@ -94,6 +99,10 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 ///   one is kept as written, with the entries that cannot be parsed, and goes when the card's parsed answer is removed
 ///   (the rule of a second deck of one id), so a removed answer cannot come back at the next read; it stays gone when the
 ///   card is answered again in the same run. Only a second entry with a boolean `shared` goes (final fix A4).
+/// - The profile (G1) is an object: a missing key or member is `true`. The key is written back as the file had it until
+///   the profile changes; then it is written over the object read (its unknown keys kept), also when it is all on again.
+///   A `profile` that is not an object, or a member that is not a JSON boolean, reads as `true` and is written back as it
+///   was until the profile is set (`setProfile`, also to the same value: the half pin's rule).
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
 
@@ -111,6 +120,10 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     var sharing: [SharingEntry] {
         didSet { noteSharingRemovals() }
     }
+    /// Whether the user follows the game and his roles in it (G1).
+    var profile: GameProfile {
+        didSet { if profile != oldValue { profileChanged = true } }
+    }
     private let raw: JSONObjectBox
     /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
     private var pinsChanged: Set<String> = []
@@ -120,6 +133,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     /// The cards whose answer read from the file was removed since the read (final fix A4): their raw duplicates are not
     /// written back, also when the card is answered again later in the run.
     private var sharingRemoved: Set<String> = []
+    /// The profile was changed (or set over an unreadable one) since the read: it is written from `profile`, not as read.
+    private var profileChanged = false
 
     init() {
         collection = []
@@ -128,6 +143,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         sold = []
         decks = []
         sharing = []
+        profile = .all
         raw = JSONObjectBox([:])
     }
 
@@ -190,6 +206,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             sharingObjects[entry.cardKey] = entryObject
         }
         self.sharing = sharing
+        let (profile, profileIsUnreadable) = Self.profile(object["profile"])
+        self.profile = profile
         let unreadablePins = Set(cleanWanted.compactMap { entry -> String? in
             let object = wantedObjects[entry.cardKey] ?? [:]
             // A `null` pin key is no pin key (B3): such an entry has no pin, and its next write leaves no pin key.
@@ -206,7 +224,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
                             decks: RawList(objects: deckObjects, unparseable: unparseableDecks),
                             deckCards: deckCards,
                             hasUnreadablePrintings: deckCards.values.contains { $0.objects.contains { Self.hasUnreadablePrinting($0.object) } },
-                            sharing: RawList(objects: sharingObjects, unparseable: unparseableSharing))
+                            sharing: RawList(objects: sharingObjects, unparseable: unparseableSharing),
+                            profileIsUnreadable: profileIsUnreadable)
     }
 
     /// UTF-8, pretty-printed, sorted keys, ending with a newline.
@@ -240,6 +259,15 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         // A key the file did not have stays out while its list is empty.
         for (key, elements) in lists where !elements.isEmpty || raw.object[key] != nil {
             object[key] = elements
+        }
+        // G1: an unchanged profile stays as the file has it (no key, or the value as read, also one this build cannot
+        // read); a changed one is written over the object read, so its unknown keys stay.
+        if profileChanged {
+            var written = (raw.object["profile"] as? [String: Any] ?? [:]).filter { !GameProfile.storedKeys.contains($0.key) }
+            written["followed"] = profile.followed
+            written["player"] = profile.player
+            written["collector"] = profile.collector
+            object["profile"] = written
         }
         var out = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         out.append(0x0A)
@@ -306,11 +334,18 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         printingsChanged.insert(DeckCardRef(deckID: id, key: source.key))
     }
 
-    /// The lists, the decks and the sharing answers are equal (what the app reads and changes); keys it does not know are
-    /// not compared.
+    /// Sets the profile (G1). A `profile` this build could not read counts as changed too, also when `profile` is the same
+    /// value: it is written from `profile` from now on (the rule of `setPin`).
+    mutating func setProfile(_ profile: GameProfile) {
+        self.profile = profile
+        if raw.profileIsUnreadable { profileChanged = true }
+    }
+
+    /// The lists, the decks, the sharing answers and the profile are equal (what the app reads and changes); keys it does
+    /// not know are not compared.
     func hasSameLists(as other: GameUserFile) -> Bool {
         collection == other.collection && wanted == other.wanted && forSale == other.forSale && sold == other.sold
-            && decks == other.decks && sharing == other.sharing
+            && decks == other.decks && sharing == other.sharing && profile == other.profile
     }
 
     /// Equal lists, and equal keys this app does not know. A copy of one read file differs only by its lists (and by the
@@ -318,7 +353,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     static func == (lhs: GameUserFile, rhs: GameUserFile) -> Bool {
         lhs.hasSameLists(as: rhs)
             && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged && lhs.printingsChanged == rhs.printingsChanged
-                 && lhs.sharingRemoved == rhs.sharingRemoved)
+                 && lhs.sharingRemoved == rhs.sharingRemoved && lhs.profileChanged == rhs.profileChanged)
                 || (try? lhs.data()) == (try? rhs.data()))
     }
 
@@ -547,6 +582,25 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     private static func sharingEntry(_ o: [String: Any]) -> SharingEntry? {
         guard let cardKey = o["cardKey"] as? String, let shared = o["shared"].flatMap(boolean) else { return nil }
         return SharingEntry(cardKey: cardKey, shared: shared)
+    }
+
+    /// G1: the profile read from the file's `profile` value, and whether the value is there and not all readable. None or
+    /// null is all on; a value that is not an object is all on and unreadable; a member that is missing or null is on, one
+    /// that is not a JSON boolean is on and makes the value unreadable.
+    private static func profile(_ value: Any?) -> (GameProfile, unreadable: Bool) {
+        guard let value, !(value is NSNull) else { return (.all, false) }
+        guard let object = value as? [String: Any] else { return (.all, true) }
+        var unreadable = false
+        func member(_ key: String) -> Bool {
+            guard let raw = object[key], !(raw is NSNull) else { return true }
+            guard let read = boolean(raw) else {
+                unreadable = true
+                return true
+            }
+            return read
+        }
+        let profile = GameProfile(followed: member("followed"), player: member("player"), collector: member("collector"))
+        return (profile, unreadable)
     }
 
     /// A deck card's `productID` this build cannot read: there, not `null`, not a whole number (A18).

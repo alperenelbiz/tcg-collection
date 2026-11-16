@@ -1267,6 +1267,170 @@ struct UserLibraryTests {
         #expect(lib.version > before); #expect(lib.sharing(game: "riftbound") == ["a": false])
     }
 
+    // MARK: Phase 4B task 1: the game's profile (G1, G2)
+
+    private let playerOff = GameProfile(followed: true, player: false, collector: true)
+
+    /// One profile change is one change: `version` goes up by one, memory and the file hold it; an unknown key inside the
+    /// profile survives. A game without a file, and an unknown game, read all on.
+    @MainActor @Test func setProfileIsOneChange() async throws {
+        let dir = tempDir()
+        try Data(#"{"version":1,"collection":[],"profile":{"player":true,"note":"x"}}"#.utf8)
+            .write(to: dir.appending(path: "riftbound.json"))
+        let lib = await deckLibrary(dir)
+        #expect(lib.profile(game: "riftbound") == .all); #expect(lib.profile(game: "yu-gi-oh") == .all)
+        #expect(lib.profile(game: "no-such-game") == .all)
+        #expect(lib.canSetProfile(game: "riftbound"))
+        let before = lib.version
+        lib.setProfile(GameProfile(followed: false, player: false, collector: true), game: "riftbound")
+        #expect(lib.version == before + 1)
+        #expect(lib.profile(game: "riftbound") == GameProfile(followed: false, player: false, collector: true))
+        await lib.flush()
+        #expect(try storedFile(dir, "riftbound").profile == GameProfile(followed: false, player: false, collector: true))
+        let profile = try jsonObject(dir.appending(path: "riftbound.json"))["profile"] as! [String: Any]
+        #expect(profile["note"] as? String == "x")
+    }
+
+    /// The same profile changes nothing: no version bump, no write; a game without a file and an all-on profile gets no
+    /// file (A30).
+    @MainActor @Test func setProfileWithTheSameProfileWritesNothing() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let lib = await deckLibrary(dir)
+        lib.setProfile(playerOff, game: "riftbound")
+        await lib.flush()
+        let bytes = try Data(contentsOf: file), before = lib.version
+        lib.setProfile(playerOff, game: "riftbound")
+        await lib.flush()
+        #expect(lib.version == before); #expect(try Data(contentsOf: file) == bytes)
+        lib.setProfile(.all, game: "cyberpunk")
+        await lib.flush()
+        #expect(lib.version == before)
+        #expect(try UserFiles.read(dir.appending(path: "cyberpunk.json")) == nil)
+        // An owner's file without `profile` keeps its bytes through an all-on `setProfile`.
+        let owners = dir.appending(path: "yu-gi-oh.json")
+        try ownersFile.write(to: owners)
+        let again = await deckLibrary(dir)
+        again.setProfile(.all, game: "yu-gi-oh")
+        await again.flush()
+        #expect(try Data(contentsOf: owners) == ownersFile)
+    }
+
+    /// G2: the profile of a game without a file writes its file, in the app's form (sorted keys, pretty printed, a
+    /// trailing newline): `{"collection": [], "profile": {…}, "version": 1}`.
+    @MainActor @Test func setProfileOfAGameWithoutAFileMakesItsFile() async throws {
+        let dir = tempDir(), file = dir.appending(path: "cyberpunk.json")
+        let lib = await deckLibrary(dir)
+        #expect(!lib.hasGameFile)
+        lib.setProfile(playerOff, game: "cyberpunk")
+        await lib.flush()
+        let expected = """
+            {
+              "collection" : [
+
+              ],
+              "profile" : {
+                "collector" : true,
+                "followed" : true,
+                "player" : false
+              },
+              "version" : 1
+            }
+
+            """
+        #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self) == expected)
+        #expect(lib.hasGameFile)
+        #expect(lib.profile(game: "cyberpunk") == playerOff)
+    }
+
+    /// Refused while the game cannot change (a refused file, before the first load, an unknown game): nothing in memory,
+    /// nothing written, no version bump. A refused file's profile is not read: all on.
+    @MainActor @Test func setProfileIsRefusedWhileTheGameCannotChange() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let onDisk = Data(#"{"version":2,"profile":{"player":false}}"#.utf8)
+        try onDisk.write(to: file)
+        let lib = await deckLibrary(dir)
+        #expect(!lib.canSetProfile(game: "riftbound"))
+        #expect(lib.profile(game: "riftbound") == .all)
+        let before = lib.version
+        lib.setProfile(playerOff, game: "riftbound")
+        await lib.flush()
+        #expect(lib.version == before); #expect(try Data(contentsOf: file) == onDisk)
+        #expect(lib.profile(game: "riftbound") == .all)
+        let unloadedDir = tempDir()
+        let unloaded = UserLibrary(folder: unloadedDir, watcher: nil, newID: { "x" })
+        #expect(!unloaded.canSetProfile(game: "riftbound"))
+        unloaded.setProfile(playerOff, game: "riftbound")
+        await unloaded.flush()
+        #expect(unloaded.profile(game: "riftbound") == .all); #expect(unloaded.version == 0)
+        #expect(try UserFiles.read(unloadedDir.appending(path: "riftbound.json")) == nil)
+        lib.setProfile(playerOff, game: "no-such-game")
+        #expect(lib.version == before); #expect(!lib.canSetProfile(game: "no-such-game"))
+    }
+
+    /// A profile change leaves `collection`, `wanted`, `forSale`, `sold`, `decks`, `sharing` and unknown keys byte-equal in
+    /// the file; the text is the original with the `profile` key added.
+    @MainActor @Test func aProfileChangeLeavesTheOtherListsByteEqual() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let json = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A","k":1}],"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":3,"note":"x"}],"forSale":[{"productID":1,"finish":"Normal","count":2,"name":"A"}],"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":0.07,"priceIsLow":false},{"productID":9,"price":"1"}],"decks":[{"id":"d","name":"D","format":"standard","active":true,"cards":[{"cardKey":"a","name":"A","section":"main","count":3,"productID":"x"}]},{"name":"no id"}],"sharing":[{"cardKey":"a","shared":true},{"cardKey":"a","shared":false}],"future":{"a":1}}"#
+        try UserFiles.write(try GameUserFile(data: Data(json.utf8)).data(), to: file)
+        let original = try Data(contentsOf: file)
+        let lib = await deckLibrary(dir)
+        lib.setProfile(playerOff, game: "riftbound")
+        await lib.flush()
+        let after = try Data(contentsOf: file)
+        #expect(after != original)
+        func part(_ data: Data, _ key: String) throws -> Data {
+            let value = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?[key])
+            return try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+        for key in ["collection", "wanted", "forSale", "sold", "decks", "sharing", "future"] {
+            #expect(try part(after, key) == part(original, key), "\(key)")
+        }
+        // The `profile` key sorts between `future` and `sharing`.
+        var text = String(decoding: after, as: UTF8.self)
+        let start = try #require(text.range(of: "  \"profile\" : {"))
+        let end = try #require(text.range(of: "  \"sharing\" : ["))
+        text.removeSubrange(start.lowerBound..<end.lowerBound)
+        #expect(text == String(decoding: original, as: UTF8.self))
+        #expect(try storedFile(dir, "riftbound").profile == playerOff)
+    }
+
+    /// A reload that changes only the profile (another device) bumps `version` and shows it.
+    @MainActor @Test func aReloadThatChangesTheProfileBumpsTheVersion() async throws {
+        let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")
+        let lib = await deckLibrary(dir, watcher: watcher)
+        lib.setProfile(playerOff, game: "riftbound")
+        await lib.flush()
+        var other = try storedFile(dir, "riftbound")
+        other.setProfile(GameProfile(followed: false, player: false, collector: true))
+        try UserFiles.write(try other.data(), to: file)
+        let before = lib.version
+        await watcher.fire(file)
+        #expect(lib.version > before)
+        #expect(lib.profile(game: "riftbound") == GameProfile(followed: false, player: false, collector: true))
+    }
+
+    /// `hasGameFile` (G11): false on an empty folder, true with one game file, true with a refused one; another file in
+    /// the folder does not count.
+    @MainActor @Test func hasGameFileSaysWhetherTheFolderHasAGameFile() async throws {
+        let empty = tempDir()
+        try Data(#"{"version":1}"#.utf8).write(to: empty.appending(path: "settings.json"))
+        let unloaded = UserLibrary(folder: empty, watcher: nil)
+        #expect(!unloaded.hasGameFile)
+        await unloaded.load()
+        #expect(!unloaded.hasGameFile)
+        let one = tempDir()
+        try ownersFile.write(to: one.appending(path: "magic-the-gathering.json"))
+        #expect(await deckLibrary(one).hasGameFile)
+        let refused = tempDir()
+        try Data(#"{"version":2}"#.utf8).write(to: refused.appending(path: "cyberpunk.json"))
+        let refusedLib = await deckLibrary(refused)
+        #expect(!refusedLib.canChange(game: "cyberpunk")); #expect(refusedLib.hasGameFile)
+        let missing = UserLibrary(folder: empty.appending(path: "gone"), watcher: nil)
+        await missing.load()
+        #expect(!missing.hasGameFile)
+    }
+
     /// The JSON object stored in `file`.
     private func jsonObject(_ file: URL) throws -> [String: Any] {
         let data = try #require(try UserFiles.read(file))
