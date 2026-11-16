@@ -106,8 +106,9 @@ nonisolated enum UserFiles {
 
     // MARK: Conflict versions (Review Focus 1)
 
-    /// Settles the conflict versions iCloud keeps when two devices changed a game file offline. The newest of the current
-    /// and the conflict versions (by modification date) becomes the file; every other version is first written beside it
+    /// Settles the conflict versions iCloud keeps when two devices changed a game file offline. The version `conflictPlan`
+    /// picks (the newest by modification date, but never a version without data over one with data: final fix A1) becomes
+    /// the file; every other version is first written beside it
     /// as `<name>.conflict-<yyyy-MM-dd-HHmmss>.json`. Only then are the conflict versions marked resolved and removed.
     /// Returns the first backup, or nil when nothing was settled. A version is never removed before its backup is written:
     /// when a backup fails, this throws and every version stays as it was. When the current file is one this app must not
@@ -155,18 +156,44 @@ nonisolated enum UserFiles {
         }
     }
 
-    /// The conflict decision. `versions[0]` is the current file: when this app must not rewrite it, everything is left;
-    /// else the newest version wins.
+    /// The conflict decision. `versions[0]` is the current file: when this app must not rewrite it, everything is left.
+    /// Else (final fix A1) a version without data (`holdsData` false: it reads as a game file and every list is empty)
+    /// never wins over a version with data, whatever the dates: when any version holds data, the versions without data
+    /// are left out and the newest of the others wins; when none holds data, the newest wins, as before. A version that
+    /// does not read as a game file is neither: it keeps the rule by date. On a new Mac "Continue" can write a fresh
+    /// empty file before iCloud brings the real one; the conflict must not make that one the file.
     static func conflictPlan(_ versions: [(date: Date, data: Data)]) -> ConflictPlan {
         guard let current = versions.first, refusal(current.data) == nil else { return .leave }
-        return .settle(winner: newest(of: versions))
+        let data = versions.map { holdsData($0.data) }
+        let candidates = data.contains(true) ? versions.indices.filter { data[$0] != false } : Array(versions.indices)
+        return .settle(winner: newest(of: versions, among: candidates))
     }
 
     /// The index of the newest version; a tie keeps the earlier one (index 0 is the current version).
     static func newest(of versions: [(date: Date, data: Data)]) -> Int {
-        var best = 0
-        for (index, version) in versions.enumerated() where version.date > versions[best].date { best = index }
+        newest(of: versions, among: Array(versions.indices))
+    }
+
+    /// The index of the newest version among `candidates` (indexes of `versions`, in order); a tie keeps the earlier one.
+    private static func newest(of versions: [(date: Date, data: Data)], among candidates: [Int]) -> Int {
+        var best = candidates[0]
+        for index in candidates where versions[index].date > versions[best].date { best = index }
         return best
+    }
+
+    /// The lists of a game file that hold the user's data (final fix A1). A `profile` is not data.
+    static let dataLists = ["collection", "wanted", "forSale", "sold", "decks", "sharing"]
+
+    /// Whether bytes that read as a game file of this app's version hold data: true when a list (`dataLists`) has an
+    /// element (an entry this build cannot parse, or one with a count under 1, is still an element), false when every
+    /// list is absent, null or empty. Nil for bytes that do not read as such a file: they keep the rule by date.
+    static func holdsData(_ data: Data) -> Bool? {
+        guard refusal(data) == nil,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return dataLists.contains { key in
+            guard let value = object[key], !(value is NSNull) else { return false }
+            return (value as? [Any])?.isEmpty != true
+        }
     }
 
     /// `riftbound.conflict-2026-11-12-101500.json` for `riftbound.json` (local time, as the catalog's `unreadable-` folders).

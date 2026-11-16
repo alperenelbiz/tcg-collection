@@ -68,6 +68,59 @@ struct UserFilesTests {
         #expect(UserFiles.conflictPlan([(t.addingTimeInterval(60), mine), (t.addingTimeInterval(30), Data(#"{"version":2}"#.utf8))]) == .settle(winner: 0))
     }
 
+    /// Final fix A1: a version without data (it reads as a game file and every list is empty; a `profile` is not data)
+    /// never wins over a version with data, whatever the dates. Among versions with data, or when none has data, the
+    /// newest wins as before. A version that does not read as a game file keeps the rule by date (it is neither).
+    @Test func aVersionWithoutDataNeverWinsAConflict() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        let empty = Data(#"{"version":1,"collection":[],"profile":{"followed":false}}"#.utf8)
+        let emptyAll = Data(#"{"version":1,"collection":[],"wanted":[],"forSale":[],"sold":null,"decks":[],"sharing":[]}"#.utf8)
+        let bare = Data("{}".utf8)
+        let full = Data(#"{"version":1,"collection":[{"productID":7,"finish":"Normal","count":2,"name":"x"}]}"#.utf8)
+        let fullOther = Data(#"{"version":1,"collection":[],"wanted":[{"cardKey":"a","name":"A","count":1}]}"#.utf8)
+        func at(_ seconds: TimeInterval, _ data: Data) -> (date: Date, data: Data) { (t.addingTimeInterval(seconds), data) }
+
+        // Empty newer vs full older: the full one wins, whichever is current.
+        #expect(UserFiles.conflictPlan([at(60, empty), at(0, full)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(0, full), at(60, empty)]) == .settle(winner: 0))
+        #expect(UserFiles.conflictPlan([at(0, full), at(60, emptyAll)]) == .settle(winner: 0))
+        #expect(UserFiles.conflictPlan([at(0, full), at(60, bare)]) == .settle(winner: 0))
+        // Full newer vs empty older: the full one.
+        #expect(UserFiles.conflictPlan([at(0, empty), at(60, full)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(60, full), at(0, empty)]) == .settle(winner: 0))
+        // Two full: the newest.
+        #expect(UserFiles.conflictPlan([at(0, full), at(60, fullOther)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(60, full), at(0, fullOther)]) == .settle(winner: 0))
+        // Two empty: the newest.
+        #expect(UserFiles.conflictPlan([at(0, empty), at(60, emptyAll)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(60, empty), at(0, emptyAll)]) == .settle(winner: 0))
+        // Three versions: the newest of those with data, past newer empty ones.
+        #expect(UserFiles.conflictPlan([at(90, empty), at(0, full), at(30, fullOther), at(120, emptyAll)]) == .settle(winner: 2))
+        // A tie among versions with data keeps the earlier one.
+        #expect(UserFiles.conflictPlan([at(90, empty), at(10, full), at(10, fullOther)]) == .settle(winner: 1))
+        // A conflict version that does not read as a game file keeps the rule by date, beside empty and full versions.
+        let newer = Data(#"{"version":2}"#.utf8)
+        #expect(UserFiles.conflictPlan([at(60, empty), at(0, newer)]) == .settle(winner: 0))
+        #expect(UserFiles.conflictPlan([at(0, empty), at(60, newer)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(0, full), at(60, newer)]) == .settle(winner: 1))
+        #expect(UserFiles.conflictPlan([at(60, full), at(0, newer)]) == .settle(winner: 0))
+        #expect(UserFiles.conflictPlan([at(90, empty), at(0, full), at(60, newer)]) == .settle(winner: 2))
+        #expect(UserFiles.holdsData(newer) == nil)
+        // A current file this app must not rewrite: every version is left, also beside an empty or a full version.
+        #expect(UserFiles.conflictPlan([at(0, Data(#"{"version":2}"#.utf8)), at(60, empty)]) == .leave)
+        #expect(UserFiles.conflictPlan([at(0, Data("not json".utf8)), at(60, full)]) == .leave)
+        // An entry this build cannot parse, or one under count 1, is still data in the file.
+        let raw = Data(#"{"version":1,"collection":[{"weird":true}]}"#.utf8)
+        #expect(UserFiles.conflictPlan([at(60, empty), at(0, raw)]) == .settle(winner: 1))
+        #expect(UserFiles.holdsData(full) == true); #expect(UserFiles.holdsData(fullOther) == true)
+        #expect(UserFiles.holdsData(raw) == true)
+        #expect(UserFiles.holdsData(empty) == false); #expect(UserFiles.holdsData(emptyAll) == false)
+        #expect(UserFiles.holdsData(bare) == false)
+        for list in ["forSale", "sold", "decks", "sharing"] {
+            #expect(UserFiles.holdsData(Data(#"{"version":1,"\#(list)":[1]}"#.utf8)) == true, "\(list)")
+        }
+    }
+
     @Test func theBackupName() throws {
         let date = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 12, hour: 10, minute: 15, second: 0)))
         let file = URL(fileURLWithPath: "/x/riftbound.json")
