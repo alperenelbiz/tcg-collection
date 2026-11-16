@@ -62,20 +62,31 @@ final class SetsScreenState: GameScreenState {
     /// True when the rows are not made for `key` yet, or their last making failed.
     func needsRows(for key: SetsKey) -> Bool { key != rowsKey || failed }
 
+    /// The key of the latest making started: an older making that ends after it stores nothing.
+    @ObservationIgnored private var latestKey: SetsKey?
+
+    /// What the list's phase is told (`ListPhase.of(listing:)`): nil while no making has ended (loading); false for no
+    /// row, also after a first failed read (final fix A4: the note says why, no loading blocks); true with rows.
+    var listing: Bool? {
+        if let rows { return !rows.isEmpty }
+        return failed ? false : nil
+    }
+
     /// Makes the rows once per key, once the folder is read (`loaded`). A making that throws keeps the last rows and
-    /// marks the state failed; a cancelled one (a newer key, the screen gone) stores nothing.
+    /// marks the state failed; a cancelled one (the screen gone) and one overtaken by a newer key's making store nothing.
     func run(_ key: SetsKey, loaded: Bool, make: () async throws -> [SetRow]) async {
         guard loaded, needsRows(for: key) else { return }
+        latestKey = key
         let made: [SetRow]
         do {
             made = try await make()
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, latestKey == key else { return }
             failed = true
             rowsKey = key
             return
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, latestKey == key else { return }
         failed = false
         rowsKey = key
         if rows != made { rows = made }
@@ -106,14 +117,18 @@ final class SetsScreenState: GameScreenState {
                       price: { prices?.shown(key: $0) })
     }
 
-    /// The catalog's line above the list (Review Focus 5): a failed read first, then a catalog still downloading, then a
-    /// game without an index yet; nil when the list is whole.
-    static func note(catalogSettled: Bool, hasIndex: Bool, failed: Bool, hasRows: Bool) -> String? {
-        if failed {
-            return hasRows ? "The catalog could not be read. Showing what was read before." : "The catalog could not be read."
-        }
+    /// The line above the list (final fix A4, Review Focus 5): why it shows nothing or old numbers, in this priority: the
+    /// catalog still downloading; a failed read (with rows: they are the last ones read); the game's index being read or
+    /// made (`AppModel.setIndexInWork`): "being read" without an index, "being updated" under the old rows; no sets (no
+    /// index and none in work, or rows made and none to list). `rows`: the rows made last, nil until a making ended.
+    /// Nil when the list is whole, and while the first rows are made.
+    static func note(catalogSettled: Bool, failed: Bool, hasIndex: Bool, indexInWork: Bool, rows: [SetRow]?) -> String? {
         if !catalogSettled { return "The catalog is still downloading. Sets come when it is ready." }
-        if !hasIndex { return "The catalog has no sets of this game yet." }
+        if failed {
+            return rows?.isEmpty == false ? "The catalog could not be read. Showing what was read before." : "The catalog could not be read."
+        }
+        if indexInWork { return hasIndex ? "Sets are being updated." : "The sets of this game are being read." }
+        if !hasIndex || rows?.isEmpty == true { return "The catalog has no sets of this game yet." }
         return nil
     }
 }
@@ -132,13 +147,14 @@ struct SetsView: View {
         let game = state.gameID, library = model.library
         let rows = state.rows ?? []
         let scope = SetMaths.scope(state.scope, rows: rows)
-        let all = SetMaths.shown(rows, scope: scope, text: "", sort: state.sort)
-        let shown = state.searching ? SetMaths.shown(rows, scope: scope, text: state.text, sort: state.sort) : all
+        // One sort per render (A10): the subtitle's count of the scope's rows needs none.
+        let shown = SetMaths.shown(rows, scope: scope, text: state.searching ? state.text : "", sort: state.sort)
+        let all = state.searching ? SetMaths.count(rows, scope: scope) : shown.count
         // A refused file or a missing folder: no owned count is known, the problem line says why.
-        let phase = ListPhase.of(listing: library.canChange(game: game) ? state.rows.map { !$0.isEmpty } : nil,
-                                 game: game, library: library)
-        let note = SetsScreenState.note(catalogSettled: model.catalogSettled(game: game), hasIndex: model.setIndexes[game] != nil,
-                                        failed: state.failed, hasRows: !rows.isEmpty)
+        let phase = ListPhase.of(listing: library.canChange(game: game) ? state.listing : nil, game: game, library: library)
+        let note = SetsScreenState.note(catalogSettled: model.catalogSettled(game: game), failed: state.failed,
+                                        hasIndex: model.setIndexes[game] != nil, indexInWork: model.setIndexInWork(game),
+                                        rows: state.rows)
         let key = SetsKey.of(game: game, model: model)
         content(phase, shown: shown)
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -150,7 +166,7 @@ struct SetsView: View {
                     .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             }
             .navigationTitle("Sets")
-            .navigationSubtitle(phase == .list ? SetMaths.subtitle(shown: shown.count, of: all.count, searching: state.searching) : "")
+            .navigationSubtitle(phase == .list ? SetMaths.subtitle(shown: shown.count, of: all, searching: state.searching) : "")
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
@@ -175,7 +191,7 @@ struct SetsView: View {
         case .loading:
             LoadingSetRows()
         case .unavailable, .empty:
-            // No set to list: the note says why (still downloading, no index yet), or the problem line.
+            // No set to list: the note says why (still downloading, a failed read, being read, no sets), or the problem line.
             Color.clear
         case .list:
             if shown.isEmpty {

@@ -53,7 +53,7 @@ struct SetsViewTests {
         #expect(state.rows == [row(1, owned: 1, total: 4)])
         #expect(state.failed)
         #expect(state.needsRows(for: key(1)))
-        #expect(SetsScreenState.note(catalogSettled: true, hasIndex: true, failed: state.failed, hasRows: true)
+        #expect(SetsScreenState.note(catalogSettled: true, failed: state.failed, hasIndex: true, indexInWork: false, rows: state.rows)
                 == "The catalog could not be read. Showing what was read before.")
         await state.run(key(1), loaded: true) { [row(1, owned: 2, total: 4)] }
         #expect(!state.failed && state.rows == [row(1, owned: 2, total: 4)])
@@ -61,16 +61,99 @@ struct SetsViewTests {
 
     // MARK: The catalog line
 
-    @Test func theNoteSaysWhatTheCatalogCannotGiveYet() {
-        #expect(SetsScreenState.note(catalogSettled: false, hasIndex: true, failed: false, hasRows: true)
-                == "The catalog is still downloading. Sets come when it is ready.")
-        #expect(SetsScreenState.note(catalogSettled: false, hasIndex: false, failed: false, hasRows: false)
-                == "The catalog is still downloading. Sets come when it is ready.")
-        #expect(SetsScreenState.note(catalogSettled: true, hasIndex: false, failed: false, hasRows: false)
-                == "The catalog has no sets of this game yet.")
-        #expect(SetsScreenState.note(catalogSettled: true, hasIndex: false, failed: true, hasRows: false)
-                == "The catalog could not be read.")
-        #expect(SetsScreenState.note(catalogSettled: true, hasIndex: true, failed: false, hasRows: true) == nil)
+    /// Final fix A4 (Review Focus 5): the list always says why it shows nothing or old numbers, in this priority: not
+    /// settled, failed, being read, being updated, no sets.
+    @Test func theNoteSaysWhyInPriorityOrder() {
+        let some = [row(1, owned: 1, total: 4)]
+        func note(settled: Bool = true, failed: Bool = false, index: Bool = true, inWork: Bool = false,
+                  rows: [SetRow]?) -> String? {
+            SetsScreenState.note(catalogSettled: settled, failed: failed, hasIndex: index, indexInWork: inWork, rows: rows)
+        }
+        // 1. Not settled, whatever else holds.
+        for failed in [false, true] {
+            for index in [false, true] {
+                for inWork in [false, true] {
+                    #expect(note(settled: false, failed: failed, index: index, inWork: inWork, rows: index ? some : nil)
+                            == "The catalog is still downloading. Sets come when it is ready.")
+                }
+            }
+        }
+        // 2. A failed read: alone without rows, "showing" with them; before the index's work.
+        #expect(note(failed: true, inWork: true, rows: nil) == "The catalog could not be read.")
+        #expect(note(failed: true, index: false, inWork: true, rows: nil) == "The catalog could not be read.")
+        #expect(note(failed: true, inWork: true, rows: some) == "The catalog could not be read. Showing what was read before.")
+        // 3. No index yet and its scan queued, running, or due at launch.
+        #expect(note(index: false, inWork: true, rows: nil) == "The sets of this game are being read.")
+        #expect(note(index: false, inWork: true, rows: []) == "The sets of this game are being read.")
+        // 4. An index and a newer one in work: under the old rows.
+        #expect(note(inWork: true, rows: some) == "Sets are being updated.")
+        #expect(note(inWork: true, rows: []) == "Sets are being updated.")
+        // 5. No sets: no index and none in work, or an index with no set row to list (a held catalog, a store in memory).
+        #expect(note(index: false, rows: nil) == "The catalog has no sets of this game yet.")
+        #expect(note(rows: []) == "The catalog has no sets of this game yet.")
+        // Whole: no note; rows not made yet (loading): no note.
+        #expect(note(rows: some) == nil)
+        #expect(note(rows: nil) == nil)
+    }
+
+    /// A4: a first failed read (no rows yet) is no loading state: the list is empty and the sentence says why.
+    @Test func aFirstFailedReadShowsNoLoadingBlocks() async {
+        let state = SetsScreenState(gameID: "riftbound")
+        #expect(state.listing == nil)                                                // loading
+        await state.run(key(), loaded: true) { throw ReadFailed() }
+        #expect(state.rows == nil && state.failed)
+        #expect(state.listing == false)                                              // empty, not loading
+        await state.run(key(), loaded: true) { [] }
+        #expect(state.listing == false)
+        await state.run(key(1), loaded: true) { [row(1, owned: 1, total: 4)] }
+        #expect(state.listing == true)
+    }
+
+    /// B: a cancelled run stores nothing; a newer key's result wins over an older run that ends later.
+    @Test func aCancelledRunStoresNothingAndTheNewerKeyWins() async {
+        let state = SetsScreenState(gameID: "riftbound")
+        let (gate, open) = AsyncStream.makeStream(of: Void.self)
+        let (started, start) = AsyncStream.makeStream(of: Void.self)
+        let older = Task { @MainActor in
+            await state.run(key(0), loaded: true) {
+                start.yield()
+                for await _ in gate {}
+                return [row(1, owned: 0, total: 4)]
+            }
+        }
+        var waiting = started.makeAsyncIterator()
+        _ = await waiting.next()                                                    // the older run is in its making
+        await state.run(key(1), loaded: true) { [row(2, owned: 2, total: 4)] }
+        #expect(state.rows == [row(2, owned: 2, total: 4)])
+        open.finish()
+        await older.value
+        // The older run ended later: its key is older, so its rows do not replace the newer ones.
+        #expect(state.rows == [row(2, owned: 2, total: 4)])
+        #expect(state.rowsKey == key(1))
+
+        let cancelled = SetsScreenState(gameID: "riftbound")
+        let (gate2, open2) = AsyncStream.makeStream(of: Void.self)
+        let (started2, start2) = AsyncStream.makeStream(of: Void.self)
+        let run = Task { @MainActor in
+            await cancelled.run(key(), loaded: true) {
+                start2.yield()
+                for await _ in gate2 {}
+                return [row(3, owned: 1, total: 4)]
+            }
+        }
+        var waiting2 = started2.makeAsyncIterator()
+        _ = await waiting2.next()
+        run.cancel()
+        open2.finish()
+        await run.value
+        #expect(cancelled.rows == nil && cancelled.rowsKey == nil && !cancelled.failed)
+    }
+
+    /// A10: the subtitle's count of all rows of the scope needs no sort.
+    @Test func theScopeCountNeedsNoSort() {
+        let rows = [row(1, owned: 1, total: 4), row(2, owned: 0, total: 4), row(3, owned: 4, total: 4)]
+        #expect(SetMaths.count(rows, scope: .all) == 3)
+        #expect(SetMaths.count(rows, scope: .mine) == 2)
     }
 
     // MARK: The rows

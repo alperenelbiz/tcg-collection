@@ -100,6 +100,11 @@ nonisolated enum SetMaths {
         asked == .mine && rows.contains(where: { $0.numbers.owned > 0 }) ? .mine : .all
     }
 
+    /// How many rows the scope keeps (the Sets list's subtitle while the search text is on): no sort (final fix A10).
+    static func count(_ rows: [SetRow], scope: SetScope) -> Int {
+        scope == .all ? rows.count : rows.count { $0.numbers.owned > 0 }
+    }
+
     /// The rows of the scope whose name or abbreviation holds every folded word of `text` (each word in either), sorted.
     static func shown(_ rows: [SetRow], scope: SetScope, text: String, sort: SetSort) -> [SetRow] {
         let words = CardName.searchKey(text).split(separator: " ")

@@ -863,8 +863,11 @@ struct AppModelTests {
         #expect(second.facets(game: "riftbound") == madeUpLists)                     // no facets scan
         #expect(FacetLists.read(paths.facets("riftbound")) == madeUpLists)
         #expect(held == ["riftbound"])
+        #expect(second.setIndexInWork("riftbound"))                                  // A4: the list says "being read"
+        #expect(!second.setIndexInWork("yu-gi-oh"))
         releaser.finish()
         await second.waitForSetIndexes()
+        #expect(!second.setIndexInWork("riftbound"))
         #expect(second.setIndexes["riftbound"] == made)
         #expect(SetIndex.read(paths.sets("riftbound")) == made)
     }
