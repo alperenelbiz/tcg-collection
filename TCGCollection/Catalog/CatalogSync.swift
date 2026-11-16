@@ -68,7 +68,11 @@ actor CatalogSync {
         self.client = client
     }
 
+    /// `changing` is called once per game, before the step stores or fails the game's first set, and after it removed
+    /// a set of the game (A6): from then on the game's derived files may be stale (the set index's due mark, phase 4A
+    /// final fix A3).
     func run(games: [GameDefinition], now: Date, rebuild: Bool,
+             changing: @Sendable (String) -> Void = { _ in },
              progress: @Sendable (SyncProgress) -> Void) async -> SyncResult {
         var fetched = 0, failed = 0, failedSetLists = 0, removedSets = 0
         var newSets: [String: Int] = [:]
@@ -80,6 +84,8 @@ actor CatalogSync {
                 continue
             }
             removedSets += plan.removed
+            var told = plan.removed > 0
+            if told { changing(game.id) }
             // The progress line counts the whole game: `total` is every set of the game that it keeps, `done` is the
             // sets that are not due any more in this run (B11), so it moves during a re-fetch too.
             var stillDue = plan.due.count, gameFailed = 0
@@ -101,6 +107,10 @@ actor CatalogSync {
                         // The set stays as it was: a cancelled fetch says nothing about it.
                         group.cancelAll()
                         continue
+                    }
+                    if !told {
+                        told = true
+                        changing(game.id)
                     }
                     var stored = false
                     if case .cards(let cards) = fetch {

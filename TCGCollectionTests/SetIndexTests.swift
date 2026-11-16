@@ -108,16 +108,17 @@ struct SetIndexTests {
         let good = dir.appending(path: "good.json")
         try Data(#"{"version":1,"sets":{"1":[1],"10":[2]}}"#.utf8).write(to: good)
         #expect(SetIndex.read(good) == SetIndex(sets: [1: [1], 10: [2]]))
-        #expect(SetIndex.read(good)?.groupOf == [1: 1, 2: 10])
     }
 
-    @Test func groupOfMapsEachProductToItsSet() {
+    /// Final fix A1: the stored value is the sets alone (no product -> set map is made at a decode); a changed `sets`
+    /// is a changed index.
+    @Test func theIndexIsItsSetsAlone() {
         let index = SetIndex(sets: [1: [10, 11], 2: [20]])
-        #expect(index.groupOf == [10: 1, 11: 1, 20: 2])
+        #expect(Mirror(reflecting: index).children.map(\.label) == ["sets"])
         var changed = index
         changed.sets[3] = [30]
         changed.sets[2] = nil
-        #expect(changed.groupOf == [10: 1, 11: 1, 30: 3])
+        #expect(changed.sets == [1: [10, 11], 3: [30]])
         #expect(changed != index)
     }
 }

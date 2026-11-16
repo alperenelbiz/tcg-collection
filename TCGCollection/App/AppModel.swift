@@ -191,13 +191,17 @@ final class AppModel {
     /// The Rarity and Type menu values per game: read from `facets-<game>.json` at launch, rewritten after a catalog
     /// step that changed the game. A game with no entry shows empty menus.
     @ObservationIgnored private var facetLists: [String: FacetLists] = [:]
-    /// Each game's set index (F3): read from `sets-<game>.json` at launch; made again, in the model's own task, after a
-    /// catalog step that changed the game and at launch for a game with products and no file (`requestSetIndex`). A game
-    /// with no entry has no index yet. Observed: the Sets screen reads it.
+    /// Each game's set index (F3): read from `sets-<game>.json` by the launch, off the main actor (final fix A1: the
+    /// window does not wait for it); made again, in the model's own task, after a catalog step that changed the game and
+    /// at launch for a game with products and no file, or marked due (`requestSetIndex`). A game with no entry has no
+    /// index yet. Observed: the Sets screen reads it.
     private(set) var setIndexes: [String: SetIndex] = [:]
-    /// Goes up for a game each time this run stores a new index of it (`scanSetIndex`), so the Sets list makes its rows
-    /// again (`SetsKey`) without comparing two indexes of a whole game. 0 for the index read at launch.
+    /// Goes up for a game each time this run sets an index of it (the launch's read of its file, `scanSetIndex`), so the
+    /// Sets list makes its rows again (`SetsKey`) without comparing two indexes of a whole game.
     private(set) var setIndexVersions: [String: Int] = [:]
+    /// The games whose set index is being read or made (final fix A4): every game until the launch has read the files
+    /// and asked for its scans, then the games queued or scanning. Observed: the Sets list's note says so.
+    private(set) var setIndexesInWork: Set<String> = Set(Games.all.map(\.id))
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
@@ -361,13 +365,10 @@ final class AppModel {
         priceSync = PriceSync(paths: paths, client: archiveClient)
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
-        var indexes: [String: SetIndex] = [:]
         for game in Games.all {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
-            if let index = SetIndex.read(paths.sets(game.id)) { indexes[game.id] = index }
         }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
-        setIndexes = indexes
         screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(storedValue:)) ?? .collection
         #if DEBUG
         launchPDF = options.launchPDF(isDebugBuild: Self.isDebugBuild)
@@ -769,6 +770,7 @@ final class AppModel {
 
     private func launch() async {
         watchSaleNotices()
+        readSetIndexFiles()
         // Once per launch, with the window on screen: at background priority, off the main thread and off the picture
         // store's actor, so neither the window nor a picture load waits for it. Only the run's own picture folder.
         let pictures = pictures
@@ -801,6 +803,7 @@ final class AppModel {
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()
         await writeMissingFacetLists()
+        await setIndexRead?.value
         requestMissingSetIndexes()
         if let storeFailure {
             status = .failed(storeFailure)
@@ -849,32 +852,107 @@ final class AppModel {
     @ObservationIgnored private var setIndexQueue: [SetIndexRequest] = []
     /// The task that runs the queue, one scan at a time; nil while the queue is empty and nothing runs.
     @ObservationIgnored private var setIndexTask: Task<Void, Never>?
+    /// The game whose scan runs now; nil between scans.
+    @ObservationIgnored private var scanningSetIndex: String?
+    /// The launch's read of the `sets-<game>.json` files (A1), made by `launch()`; nil before it.
+    @ObservationIgnored private var setIndexRead: Task<Void, Never>?
+    /// True once the launch has read the files and asked for its scans: `setIndexesInWork` then follows the queue.
+    @ObservationIgnored private var launchAskedForSetIndexes = false
     #if DEBUG
     /// Test only: called with the game before each scan (after a launch request's products check); a throw counts as a
     /// failed scan.
     @ObservationIgnored var setIndexScanHook: (@MainActor (String) async throws -> Void)?
     #endif
 
-    /// A launch: every game without a set index gets one made when it has products (F3). Nothing waits for it.
-    private func requestMissingSetIndexes() {
-        for game in Games.all where setIndexes[game.id] == nil { enqueueSetIndex(game.id, onlyWithProducts: true) }
+    /// The preferences key that marks a game's set index due (final fix A3): set when a catalog step stores, removes or
+    /// fails the game's first set (`CatalogSync.run`'s `changing`) and when a step asks for the game's scan; removed when
+    /// the game's index is stored. It outlives a quit, so the next launch scans the game although its file exists. In the
+    /// preferences of `lastCatalogFetchDay` (with `-store`: the root's own). Its value is a new token at every mark, so a
+    /// scan clears only the mark it started under, never one set while it ran.
+    nonisolated static func setIndexDueKey(_ game: String) -> String { "setIndexDue-\(game)" }
+
+    /// Marks the game's set index due with a new token (any thread: the catalog step calls it from its actor).
+    nonisolated static func markSetIndexDue(_ game: String, in defaults: UserDefaults) {
+        SetIndexDueMarks(defaults: defaults).mark(game)
     }
 
-    /// Asks for a scan of the game's set index after a catalog step that changed it. It runs in the model's own task,
-    /// after the scans before it (the game on screen first), on a throwaway store: nothing waits for it.
+    /// True when the game's set index is marked due (A3).
+    func setIndexIsDue(_ game: String) -> Bool { defaults.string(forKey: Self.setIndexDueKey(game)) != nil }
+
+    /// A3: the mark a scan stored an index under while the game's catalog step was still to come or running: the step
+    /// may change the game after the scan's read, so the mark stays until the step ends without a change of the game
+    /// (`settleHeldSetIndexMarks`) or a later scan clears it.
+    @ObservationIgnored private var heldSetIndexMarks: [String: String] = [:]
+
+    /// After a catalog step: a game the step did not change whose index was stored in this run under the mark that is
+    /// still set (and no scan of it is queued or running) is up to date: its mark goes.
+    private func settleHeldSetIndexMarks(of games: [GameDefinition], changed: Set<String>) {
+        for game in games.map(\.id) where !changed.contains(game) {
+            guard let held = heldSetIndexMarks.removeValue(forKey: game),
+                  held == defaults.string(forKey: Self.setIndexDueKey(game)),
+                  !setIndexQueue.contains(where: { $0.game == game }), scanningSetIndex != game else { continue }
+            defaults.removeObject(forKey: Self.setIndexDueKey(game))
+        }
+    }
+
+    /// True while the game's set index is being read or made (A4): the launch has not read the files and asked for its
+    /// scans yet, or the game's scan is queued or running.
+    func setIndexInWork(_ game: String) -> Bool { setIndexesInWork.contains(game) }
+
+    /// A1: the launch reads the four files off the main actor (decoding Magic's takes about 20–60 ms); the window does
+    /// not wait for it. Each index read is set, and its version raised, on the main actor.
+    private func readSetIndexFiles() {
+        guard setIndexRead == nil else { return }
+        let paths = paths
+        setIndexRead = Task { [weak self] in
+            let read = await Task.detached(priority: .userInitiated) {
+                var found: [String: SetIndex] = [:]
+                for game in Games.all {
+                    if let index = SetIndex.read(paths.sets(game.id)) { found[game.id] = index }
+                }
+                return found
+            }.value
+            // A scan stored this run is newer than its file (none runs before the launch asks for one; kept as a rule).
+            for (game, index) in read where self?.setIndexes[game] == nil {
+                self?.setIndexes[game] = index
+                self?.setIndexVersions[game, default: 0] += 1
+            }
+        }
+    }
+
+    /// A launch: every game without a set index gets one made when it has products (F3), and every game marked due (A3)
+    /// gets its scan. Nothing waits for it.
+    private func requestMissingSetIndexes() {
+        for game in Games.all {
+            if setIndexIsDue(game.id) {
+                enqueueSetIndex(game.id, onlyWithProducts: false)
+            } else if setIndexes[game.id] == nil {
+                enqueueSetIndex(game.id, onlyWithProducts: true)
+            }
+        }
+        launchAskedForSetIndexes = true
+        updateSetIndexesInWork()
+    }
+
+    /// Asks for a scan of the game's set index after a catalog step that changed it, and marks it due until the index is
+    /// stored (A3). It runs in the model's own task, after the scans before it (the game on screen first), on throwaway
+    /// stores: nothing waits for it.
     func requestSetIndex(_ game: String) {
+        Self.markSetIndexDue(game, in: defaults)
         enqueueSetIndex(game, onlyWithProducts: false)
     }
 
-    /// Drops every queued scan and stops the running one; the stopped scan stores nothing.
+    /// Drops every queued scan and stops the running one; the stopped scan stores nothing (its due mark stays).
     func cancelSetIndexes() {
         setIndexQueue = []
         setIndexTask?.cancel()
+        updateSetIndexesInWork()
     }
 
     #if DEBUG
-    /// Test only: returns when no set index scan is queued or running.
+    /// Test only: returns when the launch's read of the files is done and no set index scan is queued or running.
     func waitForSetIndexes() async {
+        await setIndexRead?.value
         while let task = setIndexTask { await task.value }
     }
     #endif
@@ -882,7 +960,16 @@ final class AppModel {
     private func enqueueSetIndex(_ game: String, onlyWithProducts: Bool) {
         setIndexQueue.removeAll { $0.game == game }
         setIndexQueue.append(SetIndexRequest(game: game, onlyWithProducts: onlyWithProducts))
+        updateSetIndexesInWork()
         runSetIndexes()
+    }
+
+    /// `setIndexesInWork` from the queue and the running scan, once the launch has asked for its scans; set only when it
+    /// changes, so the Sets list is told only then.
+    private func updateSetIndexesInWork() {
+        guard launchAskedForSetIndexes else { return }
+        let now = Set(setIndexQueue.map(\.game) + [scanningSetIndex].compactMap { $0 })
+        if now != setIndexesInWork { setIndexesInWork = now }
     }
 
     /// The next request: the game on screen when it is queued, else the oldest.
@@ -895,30 +982,47 @@ final class AppModel {
         guard setIndexTask == nil, !setIndexQueue.isEmpty else { return }
         setIndexTask = Task { [weak self] in
             while !Task.isCancelled, let self, let request = self.takeSetIndexRequest() {
+                self.scanningSetIndex = request.game
                 await self.scanSetIndex(request)
+                self.scanningSetIndex = nil
+                self.updateSetIndexesInWork()
             }
             // A cancel leaves its task here; requests made since then get a new one.
+            self?.scanningSetIndex = nil
             self?.setIndexTask = nil
+            self?.updateSetIndexesInWork()
             self?.runSetIndexes()
         }
     }
 
-    /// One scan on a throwaway store (never `reader`): keeps the index and writes `sets-<game>.json`. A failed or
-    /// cancelled scan keeps the old index and the old file.
+    /// One scan on throwaway stores (never `reader`): keeps the index, then writes `sets-<game>.json` off the main actor
+    /// (A1) and clears the game's due mark once the file is written (A3): the mark it started under only, and not while
+    /// the game's catalog step is still to come or running (then `heldSetIndexMarks`). A failed or cancelled scan keeps the
+    /// old index, the old file and the mark; a failed write (atomic) leaves the old file and the mark.
     private func scanSetIndex(_ request: SetIndexRequest) async {
-        let scan = CatalogStore(modelContainer: store.modelContainer)
+        let game = request.game, dueKey = Self.setIndexDueKey(game)
+        let mark = defaults.string(forKey: dueKey)
         if request.onlyWithProducts {
-            guard (try? await scan.progress(game: request.game))?.fetched ?? 0 > 0 else { return }
+            let scan = CatalogStore(modelContainer: store.modelContainer)
+            guard (try? await scan.progress(game: game))?.fetched ?? 0 > 0 else { return }
         }
         do {
             #if DEBUG
-            try await setIndexScanHook?(request.game)
+            try await setIndexScanHook?(game)
             #endif
-            let index = try await CatalogStore.setIndex(game: request.game, container: store.modelContainer)
+            let index = try await CatalogStore.setIndex(game: game, container: store.modelContainer)
             guard !Task.isCancelled else { return }
-            setIndexes[request.game] = index
-            setIndexVersions[request.game, default: 0] += 1
-            try? index.write(to: paths.sets(request.game))
+            setIndexes[game] = index
+            setIndexVersions[game, default: 0] += 1
+            let file = paths.sets(game)
+            let written = await Task.detached(priority: .utility) { (try? index.write(to: file)) != nil }.value
+            guard written, let mark, defaults.string(forKey: dueKey) == mark,
+                  !setIndexQueue.contains(where: { $0.game == game }) else { return }
+            if catalogPending.contains(game) {
+                heldSetIndexMarks[game] = mark
+            } else {
+                defaults.removeObject(forKey: dueKey)
+            }
         } catch {
             return
         }
@@ -1017,7 +1121,8 @@ final class AppModel {
         // A stream keeps the progress lines in order and ends before the step's result is used.
         let (updates, sink) = AsyncStream.makeStream(of: SyncProgress.self)
         finishedOnScreen = 0
-        async let result = Self.run(catalogSync, games: games, now: now, rebuild: rebuild, reportingTo: sink)
+        let marks = SetIndexDueMarks(defaults: defaults)
+        async let result = Self.run(catalogSync, games: games, now: now, rebuild: rebuild, marks: marks, reportingTo: sink)
         var touched = Set<String>()
         for await progress in updates {
             touched.insert(progress.gameID)
@@ -1035,15 +1140,21 @@ final class AppModel {
             for game in changed { requestSetIndex(game.id) }
             catalogVersion += 1
             filtersVersion += 1
+            settleHeldSetIndexMarks(of: games, changed: Set(changed.map(\.id)))
+        } else {
+            settleHeldSetIndexMarks(of: games, changed: [])
         }
         if done.fetched > 0 { defaults.set(SyncPlan.utcDay(now), forKey: Self.lastFetchDayKey) }
         return done
     }
 
+    /// The step itself, off the main actor. A game's set index is marked due (A3) before the step stores or fails its
+    /// first set, and after a removal: a quit during the step leaves the mark for the next launch.
     private nonisolated static func run(_ sync: CatalogSync, games: [GameDefinition], now: Date, rebuild: Bool,
+                                        marks: SetIndexDueMarks,
                                         reportingTo sink: AsyncStream<SyncProgress>.Continuation) async -> SyncResult {
         defer { sink.finish() }
-        return await sync.run(games: games, now: now, rebuild: rebuild) { sink.yield($0) }
+        return await sync.run(games: games, now: now, rebuild: rebuild, changing: { marks.mark($0) }) { sink.yield($0) }
     }
 
     private func show(_ progress: SyncProgress) {
@@ -1136,5 +1247,16 @@ nonisolated struct NoNetwork: TCGCSVFetching, ArchiveFetching, DataFetching {
 
     func data(from url: URL) async throws -> (Data, Int) {
         throw URLError(.notConnectedToInternet)
+    }
+}
+
+/// The set indexes' due marks (phase 4A final fix A3) for the catalog step, which runs off the main actor. `UserDefaults`
+/// is thread-safe (Apple's documentation) but not declared `Sendable`: this wrapper only sets a key.
+nonisolated struct SetIndexDueMarks: @unchecked Sendable {
+    let defaults: UserDefaults
+
+    /// Marks the game's index due with a new token.
+    func mark(_ game: String) {
+        defaults.set(UUID().uuidString, forKey: AppModel.setIndexDueKey(game))
     }
 }

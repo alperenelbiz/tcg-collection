@@ -10,6 +10,13 @@ private final class ProgressLog: @unchecked Sendable {
     var last: SyncProgress? { all.last }
 }
 
+private final class EventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    func append(_ item: String) { lock.lock(); items.append(item); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
+}
+
 private struct Rig {
     let sync: CatalogSync
     let store: CatalogStore
@@ -18,10 +25,11 @@ private struct Rig {
     let now = TCGDate.date("2026-11-11T10:00:00")!
     let progressLog = ProgressLog()
 
-    init(products: Data? = nil, groups: Data? = nil) async throws {
+    init(products: Data? = nil, groups: Data? = nil, category: Int = 89) async throws {
         let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("catalog.store")
         store = try CatalogStore(url: url)
-        fake = FakeCatalog(groups: try groups ?? fixture("groups-89.json"), products: try products ?? fixture("products-89.json"))
+        fake = FakeCatalog(groups: try groups ?? fixture("groups-89.json"), products: try products ?? fixture("products-89.json"),
+                           category: category)
         sync = CatalogSync(store: store, client: fake)
     }
 
@@ -97,6 +105,36 @@ struct CatalogSyncTests {
         let second = await rig.run(rebuild: true, at: rig.now.addingTimeInterval(3600))
         #expect(await rig.fake.productCalls == 0)
         #expect(second == SyncResult(fetched: 0, failed: 0, newSets: [:]))
+    }
+
+    /// Phase 4A final fix A3: `changing` is called once per game, before the step's first set is stored (before its first
+    /// progress event, which follows each store), and not at all by a step that stores, fails and removes nothing.
+    @Test func changingIsCalledOnceBeforeTheFirstSetOfAGame() async throws {
+        let rig = try await Rig()
+        let events = EventLog()
+        _ = await rig.sync.run(games: [rig.riftbound], now: rig.now, rebuild: false,
+                               changing: { events.append("changing \($0)") }) { _ in events.append("progress") }
+        #expect(events.all.first == "changing riftbound")
+        #expect(events.all.filter { $0.hasPrefix("changing") }.count == 1)
+        #expect(events.all.filter { $0 == "progress" }.count == 14)
+        let before = events.all.count
+        _ = await rig.sync.run(games: [rig.riftbound], now: rig.now.addingTimeInterval(3600), rebuild: false,
+                               changing: { events.append("changing \($0)") }) { _ in events.append("progress") }
+        #expect(Array(events.all.dropFirst(before)) == ["progress"])          // nothing due the same day: no call
+    }
+
+    /// A3: a step whose only change is a removal (an Art Series set stored under an older rule) calls `changing` too.
+    @Test func aRemovalAloneCallsChanging() async throws {
+        let magic = Games.game("magic-the-gathering")!
+        let body = Data(#"{"success":true,"errors":[],"results":[{"groupId":24690,"name":"Art Series: The Hobbit","abbreviation":"AH","publishedOn":"2026-10-02T00:00:00","categoryId":1}]}"#.utf8)
+        let rig = try await Rig(products: try fixture("products-1.json"), groups: body, category: 1)
+        try await rig.store.upsertSets([SetRecord(groupID: 24690, gameID: magic.id, name: "Art Series: The Hobbit",
+                                                  abbreviation: "AH", publishedOn: nil)])
+        let events = EventLog()
+        let result = await rig.sync.run(games: [magic], now: rig.now, rebuild: false,
+                                        changing: { events.append("changing \($0)") }) { _ in events.append("progress") }
+        #expect(result.removedSets == 1)
+        #expect(events.all == ["changing magic-the-gathering"])
     }
 
     @Test func firstRunFillsTheStoreAndReportsProgress() async throws {

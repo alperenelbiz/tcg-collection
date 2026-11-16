@@ -10,27 +10,12 @@ import Foundation
 nonisolated struct SetIndex: Codable, Sendable, Equatable {
     static let version = 1
 
-    /// Group id -> the set's product ids in card-number order.
-    var sets: [Int: [Int]] {
-        didSet { groupOf = Self.groups(of: sets) }
-    }
-
-    /// Product id -> its set. Made once from `sets` (at init, at a read, and when `sets` changes), not per access.
-    private(set) var groupOf: [Int: Int]
+    /// Group id -> the set's product ids in card-number order. The only stored value: no other map is made at a decode
+    /// (final fix A1).
+    var sets: [Int: [Int]]
 
     init(sets: [Int: [Int]]) {
         self.sets = sets
-        groupOf = Self.groups(of: sets)
-    }
-
-    static func == (a: SetIndex, b: SetIndex) -> Bool { a.sets == b.sets }
-
-    private static func groups(of sets: [Int: [Int]]) -> [Int: Int] {
-        var map: [Int: Int] = [:]
-        for (group, products) in sets {
-            for product in products { map[product] = group }
-        }
-        return map
     }
 
     /// The set's product ids in card-number order; empty for a set the index does not hold.

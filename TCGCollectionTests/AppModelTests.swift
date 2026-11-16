@@ -724,7 +724,7 @@ struct AppModelTests {
         let madeUp = SetIndex(sets: [77: [5, 6]])
         try madeUp.write(to: paths.sets("riftbound"))
         let second = model(["app", "-store", root.path, "-offline", "YES"])
-        #expect(second.setIndexes["riftbound"] == madeUp)                            // before any store read
+        #expect(!second.setIndexIsDue("riftbound"))                                  // a file and no mark
         var scanned: [String] = []
         second.setIndexScanHook = { scanned.append($0) }
         await second.start()
@@ -732,6 +732,88 @@ struct AppModelTests {
         #expect(second.setIndexes["riftbound"] == madeUp)                            // no scan replaced it
         #expect(SetIndex.read(paths.sets("riftbound")) == madeUp)
         #expect(!scanned.contains("riftbound"))
+    }
+
+    /// Final fix A1: the files are read by the launch, off the main actor, not by `init`: a new model has no index (the
+    /// first window's state does not wait for the read) and every game counts as in work until the launch has read them;
+    /// the launch then sets the file's index, raises its version, and scans nothing.
+    @MainActor @Test func theSetIndexFilesAreReadByTheLaunchNotByInit() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore, products: [product(id: 1, number: "1")])
+        try FileManager.default.createDirectory(at: paths.support, withIntermediateDirectories: true)
+        let madeUp = SetIndex(sets: [77: [5, 6]])
+        try madeUp.write(to: paths.sets("riftbound"))
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.setIndexes.isEmpty)
+        #expect(model.setIndexVersions.isEmpty)
+        #expect(model.setIndexInWork("riftbound"))
+        var scanned: [String] = []
+        model.setIndexScanHook = { scanned.append($0) }
+        await model.start()
+        await model.waitForSetIndexes()
+        #expect(model.setIndexes["riftbound"] == madeUp)
+        #expect(model.setIndexVersions["riftbound"] == 1)
+        #expect(!scanned.contains("riftbound"))
+        #expect(!model.setIndexInWork("riftbound"))
+        #expect(model.setIndexesInWork.isEmpty)
+    }
+
+    /// Final fix A3: a catalog step that changed a game marks its index due at its first set; when the index is not
+    /// stored (here: the scan fails, as a quit before it would leave it), the next launch scans the game although its file
+    /// exists, and clears the mark once the index is stored.
+    @MainActor @Test func aDueSetIndexSurvivesAQuitAndIsScannedAtTheNextLaunch() async throws {
+        struct Failed: Error {}
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try FileManager.default.createDirectory(at: paths.support, withIntermediateDirectories: true)
+        let madeUp = SetIndex(sets: [77: [5, 6]])
+        try madeUp.write(to: paths.sets("riftbound"))
+        let first = model(["app", "-store", root.path])
+        first.setIndexScanHook = { _ in throw Failed() }
+        await first.start()                                                          // the step stores the 14 sets
+        await first.waitForSetIndexes()
+        #expect(first.setIndexIsDue("riftbound"))
+        #expect(!first.setIndexIsDue("yu-gi-oh"))                                    // no set of it in the fake catalog
+        #expect(SetIndex.read(paths.sets("riftbound")) == madeUp)
+        let second = model(["app", "-store", root.path, "-offline", "YES"])
+        var scanned: [String] = []
+        second.setIndexScanHook = { scanned.append($0) }
+        await second.start()
+        await second.waitForSetIndexes()
+        #expect(scanned == ["riftbound"])
+        let index = try #require(second.setIndexes["riftbound"])
+        #expect(index != madeUp)
+        #expect(!index.sets.isEmpty)
+        #expect(SetIndex.read(paths.sets("riftbound")) == index)
+        #expect(!second.setIndexIsDue("riftbound"))                                  // cleared after the scan
+        let third = model(["app", "-store", root.path, "-offline", "YES"])
+        scanned = []
+        third.setIndexScanHook = { scanned.append($0) }
+        await third.start()
+        await third.waitForSetIndexes()
+        #expect(scanned.isEmpty)                                                     // a file and no mark: no scan
+    }
+
+    /// A3: the mark of an index stored while the game's catalog step is still to come stays until that step ends; a step
+    /// that does not change the game then clears it (no scan needed), so an online launch does not scan the game again.
+    @MainActor @Test func aDueMarkStoredDuringItsStepIsClearedWhenTheStepChangesNothing() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let first = model(["app", "-store", root.path])
+        await first.start()
+        await first.waitForSetIndexes()
+        #expect(!first.setIndexIsDue("riftbound"))
+        // A mark left by a step cut short: the next launch (same UTC day: nothing is fetched again) scans the game during
+        // its pending step, then the step ends without a change.
+        AppModel.markSetIndexDue("riftbound", in: UserDefaults(suiteName: paths.support.appending(path: "preferences").path)!)
+        let second = model(["app", "-store", root.path])
+        var scanned: [String] = []
+        second.setIndexScanHook = { scanned.append($0) }
+        await second.start()
+        await second.waitForSetIndexes()
+        #expect(scanned == ["riftbound"])
+        #expect(!second.setIndexIsDue("riftbound"))
     }
 
     /// F3: a catalog step that changed a game writes its set index after its facets file, once the step has told the
@@ -750,6 +832,8 @@ struct AppModelTests {
         let afterFacets = riftbound.allSatisfy { $0.facets }
         #expect(!riftbound.isEmpty); #expect(afterFacets)
         let second = model(["app", "-store", root.path, "-offline", "YES"])
+        await second.start()
+        await second.waitForSetIndexes()
         #expect(second.setIndexes["riftbound"] == index)
     }
 
@@ -785,27 +869,33 @@ struct AppModelTests {
         #expect(SetIndex.read(paths.sets("riftbound")) == made)
     }
 
-    /// A failed scan keeps the old index in memory and the old file.
+    /// A failed scan keeps the old index in memory and the old file: a first good scan, then a failing one (B).
     @MainActor @Test func aFailedSetIndexScanKeepsTheOldIndex() async throws {
         struct Failed: Error {}
         let root = tempRoot()
         let paths = AppPaths(root: root)
         try await writeClosedStore(at: paths.catalogStore, products: [product(id: 1, number: "1")])
-        let old = SetIndex(sets: [77: [5]])
         let model = model(["app", "-store", root.path, "-offline", "YES"])
         model.setIndexScanHook = { _ in throw Failed() }
         await model.start()                                                          // no sets file: a scan is asked for
         await model.waitForSetIndexes()
         #expect(model.setIndexes["riftbound"] == nil)
         #expect(!FileManager.default.fileExists(atPath: paths.sets("riftbound").path))
-        try old.write(to: paths.sets("riftbound"))
-        model.requestSetIndex("riftbound")
-        await model.waitForSetIndexes()
-        #expect(SetIndex.read(paths.sets("riftbound")) == old)
         model.setIndexScanHook = nil
-        model.requestSetIndex("riftbound")
+        model.requestSetIndex("riftbound")                                           // a first good scan
         await model.waitForSetIndexes()
-        #expect(model.setIndexes["riftbound"] == SetIndex(sets: [1: [1]]))
+        let good = SetIndex(sets: [1: [1]])
+        #expect(model.setIndexes["riftbound"] == good)
+        let file = try Data(contentsOf: paths.sets("riftbound"))
+        let version = model.setIndexVersions["riftbound"]
+        try await model.store.replaceProducts(of: 1, with: [product(id: 1, number: "1"), product(id: 2, number: "2")], at: .now)
+        model.setIndexScanHook = { _ in throw Failed() }
+        model.requestSetIndex("riftbound")                                           // then a failing one
+        await model.waitForSetIndexes()
+        #expect(model.setIndexes["riftbound"] == good)
+        #expect(model.setIndexVersions["riftbound"] == version)
+        #expect(try Data(contentsOf: paths.sets("riftbound")) == file)
+        #expect(model.setIndexIsDue("riftbound"))                                    // the mark stays for the next launch
     }
 
     /// A newer request for a game replaces its queued one, the game on screen goes first, and a cancel drops the queue
@@ -814,13 +904,16 @@ struct AppModelTests {
         let root = tempRoot()
         let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "magic-the-gathering"])
         let (release, releaser) = AsyncStream.makeStream(of: Void.self)
+        let (entered, enter) = AsyncStream.makeStream(of: String.self)
         var order: [String] = []
         model.setIndexScanHook = { game in
             order.append(game)
+            enter.yield(game)
             if order.count == 1 { for await _ in release {} }
         }
         model.requestSetIndex("riftbound")                                           // runs, held
-        await Task.yield()
+        var gate = entered.makeAsyncIterator()
+        #expect(await gate.next() == "riftbound")                                    // the first scan is in its hook
         model.requestSetIndex("yu-gi-oh")
         model.requestSetIndex("cyberpunk")
         model.requestSetIndex("magic-the-gathering")                                 // the game on screen
@@ -832,12 +925,15 @@ struct AppModelTests {
         let before = model.setIndexes
         order = []
         let (hold, holder) = AsyncStream.makeStream(of: Void.self)
+        let (held, heldIn) = AsyncStream.makeStream(of: String.self)
         model.setIndexScanHook = { game in
             order.append(game)
+            heldIn.yield(game)
             for await _ in hold {}
         }
         model.requestSetIndex("riftbound")
-        await Task.yield()
+        var heldGate = held.makeAsyncIterator()
+        #expect(await heldGate.next() == "riftbound")
         model.requestSetIndex("yu-gi-oh")
         model.cancelSetIndexes()
         holder.finish()
