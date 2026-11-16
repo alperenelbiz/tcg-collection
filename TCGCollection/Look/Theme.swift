@@ -48,6 +48,9 @@ nonisolated enum Theme {
     static let importSheetMinHeight: CGFloat = 520
     static let importSheetIdealWidth: CGFloat = 720
     static let importSheetIdealHeight: CGFloat = 600
+    /// The sharing sheet's height (its width is the import sheet's): a short table, so it fits the 450 pt test window.
+    static let sharingSheetMinHeight: CGFloat = 300
+    static let sharingSheetIdealHeight: CGFloat = 380
     /// A table in a sheet: the finish column, the number column (right-aligned) and the choice column.
     static let tableFinishWidth: CGFloat = 120
     static let tableNumberWidth: CGFloat = 72

@@ -208,6 +208,8 @@ private struct Sidebar: View {
             // A view of its own: a status change redraws only it, not the list and its decks (final fix B9).
             SidebarStatus()
         }
+        // E8: the count of pending cards of the game on screen, from the sidebar's join; a view of its own, as above.
+        .background { PendingWatcher(activeDecks: activeDecks) }
     }
 
     private var list: some View {
@@ -257,6 +259,32 @@ private struct Sidebar: View {
         return SidebarRow(title: title, icon: icon, selected: selected)
             .tag(screen)
             .listRowBackground(selected ? SelectionFill() : nil)
+    }
+}
+
+/// E8: hands the count of pending cards of the game on screen to the model (`AppModel.pendingCountChanged`), which says
+/// once when it goes up. The count is made in memory from the library's decks and answers and the owned copies of the
+/// sidebar's last join of the active decks (`DeckPage.pendingCount`): no catalog read. Unknown (nil) until the folder is
+/// read and, with an active deck, until a join of the game has read its cards; 0 with no active deck.
+private struct PendingWatcher: View {
+    @Environment(AppModel.self) private var model
+    let activeDecks: DeckJoin
+
+    private struct Count: Equatable {
+        let game: String
+        let pending: Int?
+    }
+
+    var body: some View {
+        let library = model.library, game = model.gameID
+        let decks = library.decks(game: game)
+        let pending: Int? = !library.isLoaded ? nil : !decks.contains(where: \.active) ? 0
+            : DeckPage.pendingCount(decks: decks, sharing: library.sharing(game: game), read: activeDecks.read(game: game))
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: Count(game: game, pending: pending), initial: true) { _, now in
+                model.pendingCountChanged(now.pending, game: now.game)
+            }
     }
 }
 

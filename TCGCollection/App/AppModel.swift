@@ -217,21 +217,23 @@ final class AppModel {
     var renamingDeck = false
     /// The paste the paste sheet shows (`PasteDeckSheet`); nil while no paste sheet is open.
     var pasting: PasteDeckModel?
+    /// Wanted's "Decisions (n)…" asked for the sheet "Sharing decisions" (`SharingSheet`, E7).
+    var showsSharing = false
     /// Each game's names for a paste's unknown names, kept for the run per catalog version (final fix B1).
     @ObservationIgnored private(set) lazy var pasteNames = PasteNames(container: reader.modelContainer)
     /// "Paste a deck…" of the New Deck sheet: the name and format typed there. The paste sheet opens with them once the New
     /// Deck sheet has closed (`openPendingPaste`).
     @ObservationIgnored var pendingPaste: (name: String, format: String)?
     /// True while the window has one of the app's sheets open (the folder sheet, the CSV file panel, the import sheet, the
-    /// New Deck sheet, the Rename sheet, the paste sheet): a dialog asked for meanwhile would not show (For Sale's Sold
-    /// dialog does not open again then).
+    /// New Deck sheet, the Rename sheet, the paste sheet, the sharing sheet): a dialog asked for meanwhile would not show
+    /// (For Sale's Sold dialog does not open again then).
     var showsSheet: Bool {
         choosesCSVFile || importing != nil || showsOtherSheet
     }
     /// A sheet open that is not the import's own (the file panel, the import sheet): an import does not start under it
     /// (final fix B5).
     private var showsOtherSheet: Bool {
-        needsUserFolder || showsFolderSheet || showsNewDeck || renamingDeck || pasting != nil
+        needsUserFolder || showsFolderSheet || showsNewDeck || renamingDeck || pasting != nil || showsSharing
     }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`
@@ -243,6 +245,8 @@ final class AppModel {
     @ObservationIgnored private var appliedImports = 0
     /// The `importApplied` calls still waiting for their writes: the for-sale notice of an import is said with its result.
     @ObservationIgnored private var importsBeingSaid = 0
+    /// E8: the last known count of pending cards and its game (`pendingCountChanged`); nil until the first one.
+    @ObservationIgnored private var pendingBase: (game: String, count: Int)?
     /// The last "The sale was not saved: …" said: the for-sale notice does not hide it.
     @ObservationIgnored private var unsavedSaleSaid: String?
     /// True while a picked file is read (`importCSV(from:)`). A second import is ignored then, and while `importing` is set.
@@ -645,6 +649,28 @@ final class AppModel {
     /// ("The PDF could not be saved: …", `PDFExport.saveNotice`).
     func pdfSaveEnded(_ result: Result<URL, any Error>) {
         if let notice = PDFExport.saveNotice(result) { say(notice) }
+    }
+
+    /// E8: what the status line says when the count of pending cards of the game on screen changes from `was` to `now`:
+    /// "1 card needs a sharing decision." / "<n> cards need a sharing decision." when it went up; nil when it did not, and
+    /// for a first value (`was` nil: the base, cards already pending when the folder was first read).
+    nonisolated static func pendingNotice(was: Int?, now: Int) -> String? {
+        guard let was, now > was else { return nil }
+        return now == 1 ? "1 card needs a sharing decision." : "\(now) cards need a sharing decision."
+    }
+
+    /// E8: the count of pending cards of `game` (the sidebar's, `DeckPage.pendingCount`): nil while it is not known (no read
+    /// of the game's active decks yet: their owned copies are unknown). The first known count of the game on screen is the
+    /// base and says nothing; a count that goes up says `pendingNotice` once, unless the status line shows a problem
+    /// sentence or a sale that was not saved (it never hides one; as the for-sale notice). A count of another game than
+    /// the one on screen (a late value after a switch) is not taken; a switch starts a new base.
+    func pendingCountChanged(_ count: Int?, game: String) {
+        guard game == gameID, let count else { return }
+        let was = pendingBase?.game == game ? pendingBase?.count : nil
+        pendingBase = (game, count)
+        guard let notice = Self.pendingNotice(was: was, now: count) else { return }
+        if let shown = statusNotice, library.problems.contains(shown) || shown == unsavedSaleSaid { return }
+        say(notice)
     }
 
     /// Shows `text` in the status line for `noticeDuration`, unless something else is said or the status changes first.

@@ -184,8 +184,14 @@ nonisolated enum WantedList {
     /// The copies of one card the active decks miss (`CardNeed.fromDecks`), for a card page: `owned` and `isBasic` are the
     /// page's own for that card.
     static func forDecks(_ cardKey: String, decks: [Deck], sharing: [String: Bool], owned: Int, isBasic: Bool) -> Int {
+        need(cardKey, decks: decks, sharing: sharing, owned: owned, isBasic: isBasic)?.fromDecks ?? 0
+    }
+
+    /// One card's need over the active decks (`DeckNeeds.needs`), for a card page: `owned` and `isBasic` are the page's own
+    /// for that card. Nil when no active deck uses it.
+    static func need(_ cardKey: String, decks: [Deck], sharing: [String: Bool], owned: Int, isBasic: Bool) -> CardNeed? {
         DeckNeeds.needs(decks: decks, sharing: sharing, owned: { $0 == cardKey ? owned : 0 },
-                        isBasic: { $0 == cardKey && isBasic })[cardKey]?.fromDecks ?? 0
+                        isBasic: { $0 == cardKey && isBasic })[cardKey]
     }
 
     /// The copies owned of each card of `printings`, over every printing and finish (`CollectionRules.copiesPerCard`). A

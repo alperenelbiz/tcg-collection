@@ -61,6 +61,8 @@ final class WantedScreenState: GameScreenState {
     /// "Make PDF…" (C10, C11): kept with the screen, so a card page opened on its stack does not stop it; the stack going
     /// away cancels it (`pdfSaving`).
     let export = PDFExport()
+    /// The pending cards when "Decisions (n)…" was clicked: the rows of the sheet it opens (`SharingSheet`).
+    var sharingNeeds: [CardNeed] = []
 
     init(gameID: String) {
         self.gameID = gameID
@@ -102,6 +104,7 @@ struct WantedView: View {
         let pdfReady = phase == .list || phase == .empty
         let launchReady = PDFExport.launchReady(listRead: pdfReady, joined: state.join.joined, offline: model.options.offline)
         let join = WantedJoin.key(game: game, model: model)
+        let pending = phase == .list ? all.filter(\.pending).count : 0
         content(phase, shown: shown, listed: listed)
             .listScreen("wanted", note: phase == .list ? listed?.note : nil)
             .navigationDestination(for: UnknownCard.self) { card in
@@ -113,12 +116,32 @@ struct WantedView: View {
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
+                    // E7: only while a card is pending; the sheet's rows are the pending cards of this moment.
+                    if pending > 0 {
+                        Button("Decisions (\(pending))…") { openSharing(Set(all.filter(\.pending).map(\.id))) }
+                            .disabled(!library.canChange(game: game))
+                            .accessibilityIdentifier("wanted-decisions")
+                    }
                     PDFButton(export: state.export, identifier: "wanted-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "wanted-sort")
                 }
             }
             .launchPDF(state.export, screen: .wanted, ready: launchReady, model: model) { pdfJob(all) }
             .task(id: join) { await state.join.run(join, model: model) }
+            .sheet(isPresented: Bindable(model).showsSharing) {
+                SharingSheet(gameID: game, needs: state.sharingNeeds)
+                    .environment(model)
+                    .preferredColorScheme(.dark)
+            }
+    }
+
+    /// "Decisions (n)…": the sheet on the cards the cells show as pending (`pending`, their keys), with their needs made as
+    /// the list makes them (the library's decks and answers, the last join's read).
+    private func openSharing(_ pending: Set<String>) {
+        let library = model.library, game = state.gameID
+        state.sharingNeeds = WantedList.needs(decks: library.decks(game: game), sharing: library.sharing(game: game),
+                                              read: state.join.read).values.filter { pending.contains($0.cardKey) }
+        model.showsSharing = true
     }
 
     /// The PDF of the whole list, whatever the search text and the sort (it orders by price itself, C10).
@@ -144,7 +167,8 @@ struct WantedView: View {
             if let listed, !shown.isEmpty {
                 let canChange = model.library.canChange(game: state.gameID)
                 ScrollView {
-                    GalleryGrid {
+                    // Only a pending cell has the extra row: cells of one grid row align at the top.
+                    GalleryGrid(alignment: .top) {
                         ForEach(shown) { card in cell(card, listed: listed, canChange: canChange) }
                     }
                 }
@@ -158,7 +182,8 @@ struct WantedView: View {
 
     /// C6, A24: the cell (its count line the total, `×3 · 2 for decks`), 8 pt, then one line with the hand-added count
     /// (`−` at 1 takes the hand entry and its pin off the list; a card the decks miss stays with their part; `−` is off at
-    /// 0). The control is off while the game cannot change.
+    /// 0). A pending card (E3, E7) has one more row 8 pt under it: "Decision pending" (12 pt `muted`), "Share" and "Buy
+    /// more" (`PendingRow`). The controls are off while the game cannot change.
     private func cell(_ card: WantedCard, listed: WantedContent, canChange: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             WantedCell(gameID: state.gameID, card: card, left: listed.countText(for: card),
@@ -172,6 +197,10 @@ struct WantedView: View {
                 Spacer(minLength: 0)
             }
             .disabled(!canChange)
+            if card.pending {
+                PendingRow(gameID: state.gameID, cardKey: card.id)
+                    .disabled(!canChange)
+            }
         }
     }
 
@@ -181,6 +210,50 @@ struct WantedView: View {
     static func step(by delta: Int, card: WantedCard, game: String, library: UserLibrary) {
         library.setWanted(library.wantedCount(game: game, cardKey: card.id) + delta, game: game, cardKey: card.id,
                           name: card.entry.name)
+    }
+}
+
+/// A pending Wanted cell's row (E7): "Decision pending" (12 pt `muted`), then "Share" (writes the answer true) and "Buy
+/// more" (false), each `FieldButtonStyle`; one row when the cell is wide enough, else the buttons under the text. A click
+/// writes the answer even when the card stopped being pending since the render: an answer on a card that is not in
+/// conflict changes no number (Review Focus 1).
+private struct PendingRow: View {
+    @Environment(AppModel.self) private var model
+    let gameID: String
+    let cardKey: String
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                label
+                buttons
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                label
+                HStack(spacing: 8) { buttons }
+            }
+        }
+    }
+
+    private var label: some View {
+        Text("Decision pending")
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityIdentifier("wanted-pending-\(cardKey)")
+    }
+
+    @ViewBuilder private var buttons: some View {
+        answer("Share", shared: true, identifier: "wanted-share-\(cardKey)")
+        answer("Buy more", shared: false, identifier: "wanted-buy-\(cardKey)")
+    }
+
+    private func answer(_ title: String, shared: Bool, identifier: String) -> some View {
+        Button(title) { model.library.setShared([cardKey: shared], game: gameID) }
+            .buttonStyle(FieldButtonStyle())
+            .fixedSize()
+            .accessibilityIdentifier(identifier)
     }
 }
 

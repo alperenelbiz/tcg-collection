@@ -194,10 +194,13 @@ struct CatalogNote: View {
 /// that is one of several in a page (a deck's groups) has no margin of its own (`padded` false): the page has it.
 struct GalleryGrid<Cells: View>: View {
     var padded = true
+    /// Where a cell sits in its grid row: `.top` when cells of a row may differ in height (a pending Wanted cell).
+    var alignment: Alignment? = nil
     @ViewBuilder let cells: Cells
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cellMinWidth), spacing: Theme.columnGap)], spacing: Theme.rowGap) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: Theme.cellMinWidth), spacing: Theme.columnGap, alignment: alignment)],
+                  spacing: Theme.rowGap) {
             cells
         }
         .scrollTargetLayout()

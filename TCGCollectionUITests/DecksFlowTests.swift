@@ -1036,4 +1036,240 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(app.menuItems["Move Down"].firstMatch.isEnabled, "Move Down is off on the first deck")
         app.typeKey(.escape, modifierFlags: [])
     }
+
+    // MARK: The sharing decision (phase 3B task 6: A22, E7, E8)
+
+    /// The file's `sharing` answers, by card key; [:] with no file or no list.
+    private func storedSharing(game: String) throws -> [String: Bool] {
+        guard let list = try storedUserFile(game: game)?["sharing"] as? [[String: Any]] else { return [:] }
+        return Dictionary(list.compactMap { entry in
+            (entry["cardKey"] as? String).flatMap { key in (entry["shared"] as? Bool).map { (key, $0) } }
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// `element` is in the window and can be clicked; the window is still 900 pt wide.
+    private func assertInWindow(_ app: XCUIApplication, _ element: XCUIElement, file: StaticString = #filePath,
+                                line: UInt = #line) {
+        let window = app.windows.firstMatch.frame
+        XCTAssertEqual(window.width, 900, accuracy: 1, "the window is not 900 pt", file: file, line: line)
+        XCTAssertTrue(element.exists && element.isHittable, "\(element.identifier) is not hittable", file: file, line: line)
+        XCTAssertTrue(window.contains(element.frame), "\(element.identifier) leaves the window: \(element.frame)",
+                      file: file, line: line)
+    }
+
+    /// The element `identifier` of Wanted, scrolled into the window (XCUITest does not scroll to a click).
+    private func revealOnWanted(_ app: XCUIApplication, _ identifier: String, file: StaticString = #filePath,
+                                line: UInt = #line) -> XCUIElement {
+        // The screen's container: XCUITest does not find the scroll view by its own identifier (`wanted-gallery`).
+        let target = element(app, identifier), gallery = element(app, "wanted-screen")
+        XCTAssertTrue(gallery.waitForExistence(timeout: 10), "no Wanted screen", file: file, line: line)
+        for _ in 0..<15 {
+            if target.exists, target.isHittable { return target }
+            gallery.scroll(byDeltaX: 0, deltaY: -120)
+        }
+        XCTAssertTrue(target.exists && target.isHittable, "\(identifier) is not in the window", file: file, line: line)
+        return target
+    }
+
+    /// Waits until `element` stops moving (a scroll's deceleration), so a click lands on it: once its frame was the same
+    /// on two reads 0.3 s apart. Returns the element.
+    @discardableResult
+    private func settled(_ element: XCUIElement) -> XCUIElement {
+        var last = element.frame
+        _ = waitUntil(timeout: 3) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            defer { last = element.frame }
+            return element.frame == last
+        }
+        return element
+    }
+
+    /// Cyberpunk: two active decks use Kerry, Satori and Jackie once each; none is owned: three pending cards.
+    private static let threePending = """
+        {"version": 1, "collection": [],
+         "decks": [{"id": "cp1", "name": "Wind", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "kerry eurodyne the last rockerboy", "name": "Kerry Eurodyne - The Last Rockerboy", "section": "main", "count": 1},
+                              {"cardKey": "satori sword of saburo", "name": "Satori - Sword of Saburo", "section": "main", "count": 1},
+                              {"cardKey": "jackie welles ride or die choom", "name": "Jackie Welles - Ride or Die Choom", "section": "main", "count": 1}]},
+                   {"id": "cp2", "name": "Cheap", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "kerry eurodyne the last rockerboy", "name": "Kerry Eurodyne - The Last Rockerboy", "section": "main", "count": 1},
+                              {"cardKey": "satori sword of saburo", "name": "Satori - Sword of Saburo", "section": "main", "count": 1},
+                              {"cardKey": "jackie welles ride or die choom", "name": "Jackie Welles - Ride or Die Choom", "section": "main", "count": 1}]}]}
+        """
+
+    /// A22, E7: Wind and Cheap use Kai'Sa ×2 each, 2 owned, no answer: Wanted lists it `×2 · 2 for decks` with "Decision
+    /// pending", "Share" and "Buy more" under its control, and "Decisions (1)…" in the toolbar. The launch says nothing
+    /// in the status line (E8: the cards pending at the first read are the base). "Share": the card leaves Wanted, the
+    /// file's `sharing` has it `true`, the second deck's sidebar count is gone.
+    func testAPendingCardIsDecidedOnItsWantedCell() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "wanted"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.twoDecksOneKaisa)
+        }
+        let key = "kai sa rebel"
+        let cell = app.buttons["wanted-cell-\(key)"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "the pending card is not on Wanted")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { cell.label.hasPrefix("Kai'Sa, Rebel, ×2, 2 for decks, ") }, cell.label)
+        let pending = element(app, "wanted-pending-\(key)")
+        XCTAssertTrue(pending.waitForExistence(timeout: 10), "no pending row")
+        XCTAssertEqual(text(pending), "Decision pending")
+        let decisions = element(app, "wanted-decisions")
+        XCTAssertTrue(decisions.exists, "no Decisions button")
+        XCTAssertEqual(decisions.label, "Decisions (1)…")
+        // The cell is taller than the 450 pt test window: scroll the gallery until the row is in it.
+        let share = settled(revealOnWanted(app, "wanted-share-\(key)")), buy = element(app, "wanted-buy-\(key)")
+        assertInWindow(app, share)
+        assertInWindow(app, buy)
+        XCTAssertEqual(share.label, "Share")
+        XCTAssertEqual(buy.label, "Buy more")
+        XCTAssertGreaterThanOrEqual(buy.frame.width, 50, "Buy more is cut: \(buy.frame)")
+        XCTAssertTrue(element(app, "sidebar-deck-missing-rb2").exists, "the second deck has no count")
+        XCTAssertFalse(text(app.staticTexts["status-line"]).contains("sharing decision"), "the launch said the pending card")
+        shot("decks-50-wanted-pending-cell")
+
+        share.click()
+        XCTAssertTrue(waitUntil { !cell.exists }, "the shared card stayed on Wanted")
+        XCTAssertTrue(waitUntil { (try? self.storedSharing(game: "riftbound")) == [key: true] },
+                      "\(String(describing: try? storedSharing(game: "riftbound")))")
+        XCTAssertTrue(waitUntil { !self.element(app, "sidebar-deck-missing-rb2").exists }, "the second deck still misses copies")
+        XCTAssertFalse(decisions.exists, "Decisions stays with nothing pending")
+        shot("decks-51-wanted-after-share")
+    }
+
+    /// E7: "Buy more" on the pending cell: the card stays on Wanted with the decks' part (`×2 · 2 for decks`), no longer
+    /// pending (no row, no Decisions button); the file has it `false`; the second deck still misses 2.
+    func testBuyMoreKeepsTheCardOnWanted() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "wanted"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.twoDecksOneKaisa)
+        }
+        let key = "kai sa rebel"
+        XCTAssertTrue(element(app, "wanted-buy-\(key)").waitForExistence(timeout: 20), "no Buy more")
+        XCTAssertTrue(waitUntilSynced(app))
+        settled(revealOnWanted(app, "wanted-buy-\(key)")).click()
+        XCTAssertTrue(waitUntil { (try? self.storedSharing(game: "riftbound")) == [key: false] },
+                      "\(String(describing: try? storedSharing(game: "riftbound")))")
+        let cell = app.buttons["wanted-cell-\(key)"]
+        XCTAssertTrue(waitUntil { !self.element(app, "wanted-pending-\(key)").exists }, "the pending row stayed")
+        XCTAssertTrue(cell.label.hasPrefix("Kai'Sa, Rebel, ×2, 2 for decks, "), cell.label)
+        XCTAssertFalse(element(app, "wanted-decisions").exists, "Decisions stays with nothing pending")
+        XCTAssertEqual(text(element(app, "sidebar-deck-missing-rb2")), "2")
+    }
+
+    /// E7: three pending cards: "Decisions (3)…" opens the sheet with three rows by name and Done off; Cancel writes
+    /// nothing. Again: "Share all", Done: one write with the three answers, none pending (no row, no Decisions button).
+    func testTheSharingSheetDecidesAll() throws {
+        let app = try launch(game: "cyberpunk", extra: ["-screen", "wanted"]) { _ in
+            try self.writeUserFile(game: "cyberpunk", json: Self.threePending)
+        }
+        let decisions = element(app, "wanted-decisions")
+        XCTAssertTrue(decisions.waitForExistence(timeout: 20), "no Decisions button")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { decisions.label == "Decisions (3)…" }, decisions.label)
+        assertInWindow(app, decisions)
+        let before = try XCTUnwrap(root).appending(path: "user/cyberpunk.json")
+        let bytes = try Data(contentsOf: before)
+
+        decisions.click()
+        let sheet = element(app, "sharing-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no sharing sheet")
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'sharing-row-'"))
+        XCTAssertEqual(identifiersInOrder(rows), ["sharing-row-jackie welles ride or die choom",
+                                                 "sharing-row-kerry eurodyne the last rockerboy",
+                                                 "sharing-row-satori sword of saburo"])
+        let done = element(app, "sharing-done"), cancel = element(app, "sharing-cancel")
+        XCTAssertFalse(done.isEnabled, "Done is on with no choice")
+        for id in ["sharing-share-all", "sharing-buy-all", "sharing-cancel", "sharing-done",
+                   "sharing-choice-satori sword of saburo"] {
+            XCTAssertTrue(element(app, id).isHittable, "\(id) is not hittable")
+        }
+        shot("decks-52-sharing-sheet", of: sheet)
+        cancel.click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "Cancel did not close the sheet")
+        XCTAssertEqual(try Data(contentsOf: before), bytes, "Cancel wrote the file")
+        XCTAssertEqual(decisions.label, "Decisions (3)…")
+
+        decisions.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no sharing sheet the second time")
+        element(app, "sharing-share-all").click()
+        XCTAssertTrue(waitUntil { done.isEnabled }, "Done stays off after Share all")
+        shot("decks-53-sharing-sheet-share-all", of: sheet)
+        done.click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "Done did not close the sheet")
+        XCTAssertTrue(waitUntil { (try? self.storedSharing(game: "cyberpunk")) == ["jackie welles ride or die choom": true,
+                                                                                  "kerry eurodyne the last rockerboy": true,
+                                                                                  "satori sword of saburo": true] },
+                      "\(String(describing: try? storedSharing(game: "cyberpunk")))")
+        XCTAssertTrue(waitUntil { !decisions.exists }, "Decisions stays with nothing pending")
+        let pendingRows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'wanted-pending-'"))
+        XCTAssertEqual(pendingRows.count, 0, "a pending row stayed")
+        shot("decks-54-wanted-after-share-all")
+    }
+
+    /// E7: Kai'Sa shared between Wind and Cheap (2 owned, each uses 2): not on Wanted. Its card page (from the deck's cell)
+    /// says "Shared between decks" with "Change"; "Change" → "Bought for each deck" and the file has `false`; Wanted lists
+    /// it again (`2 for decks`).
+    func testTheCardPageChangesTheAnswer() throws {
+        let shared = Self.twoDecksOneKaisa.replacingOccurrences(of: "{\"version\": 1,",
+                                                                  with: "{\"version\": 1, \"sharing\": [{\"cardKey\": \"kai sa rebel\", \"shared\": true}],")
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb2"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: shared)
+        }
+        let key = "kai sa rebel"
+        let cell = element(app, "deck-cell-\(key)-main")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "no deck cell")
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertFalse(element(app, "sidebar-deck-missing-rb2").exists, "a shared card leaves the second deck short")
+        cell.click()
+        let line = settled(revealOnCardPage(app, "card-sharing-change"))
+        let sharing = element(app, "card-sharing")
+        XCTAssertEqual(text(sharing), "Shared between decks")
+        XCTAssertEqual(line.label, "Change")
+        assertInWindow(app, line)
+        shot("decks-55-card-page-shared")
+        line.click()
+        XCTAssertTrue(waitUntil { self.text(sharing) == "Bought for each deck" }, text(sharing))
+        XCTAssertTrue(waitUntil { (try? self.storedSharing(game: "riftbound")) == [key: false] },
+                      "\(String(describing: try? storedSharing(game: "riftbound")))")
+        assertInWindow(app, element(app, "card-sharing-change"))
+        shot("decks-56-card-page-each")
+
+        element(app, "sidebar-wanted").click()
+        let wanted = app.buttons["wanted-cell-\(key)"]
+        XCTAssertTrue(wanted.waitForExistence(timeout: 10), "the card is not on Wanted again")
+        XCTAssertTrue(waitUntil { wanted.label.hasPrefix("Kai'Sa, Rebel, ×2, 2 for decks, ") }, wanted.label)
+        XCTAssertFalse(element(app, "wanted-pending-\(key)").exists, "an answered card is pending")
+    }
+
+    /// A22, E8: Wind uses Kai'Sa ×2, 2 owned; Cheap is active and empty. `+` in Cheap's search adds one Kai'Sa: no dialog
+    /// opens, and the status line says "1 card needs a sharing decision."; the card page's line is "Decision pending".
+    func testAddingACardSaysADecisionIsNeeded() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb2"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "collection": [{"productID": 721337, "finish": "Normal", "count": 2, "condition": "", "name": "Kai'Sa, Rebel"}],
+             "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2}]},
+                       {"id": "rb2", "name": "Cheap", "format": "standard", "active": true, "cards": []}]}
+            """)
+        }
+        let key = "kai sa rebel"
+        XCTAssertTrue(element(app, "deck-empty-add-cards").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        let status = app.staticTexts["status-line"]
+        XCTAssertFalse(text(status).contains("sharing decision"), text(status))
+        openSearch(app, button: "deck-empty-add-cards", text: "kai", cardKey: key)
+        element(app, "deck-add-plus-\(key)").click()
+        XCTAssertTrue(waitUntil { self.text(status) == "1 card needs a sharing decision." }, text(status))
+        XCTAssertEqual(app.sheets.count, 0, "a dialog opened")
+        XCTAssertFalse(element(app, "sharing-sheet").exists, "the sharing sheet opened")
+        shot("decks-57-status-decision-needed")
+
+        element(app, "card-cell-\(key)").click()
+        let pending = settled(revealOnCardPage(app, "card-sharing-buy"))
+        XCTAssertEqual(text(element(app, "card-sharing")), "Decision pending")
+        assertInWindow(app, pending)
+        assertInWindow(app, element(app, "card-sharing-share"))
+        shot("decks-58-card-page-pending")
+        XCTAssertEqual(try storedSharing(game: "riftbound"), [:], "the app answered for the user")
+    }
 }

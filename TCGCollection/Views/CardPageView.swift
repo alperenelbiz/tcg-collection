@@ -289,7 +289,7 @@ struct OwnedFinishes: View {
                     .padding(.top, 6)
             }
             if let deckCard {
-                DeckLines(gameID: gameID, card: deckCard)
+                DeckLines(gameID: gameID, card: deckCard, owned: wanted?.owned ?? 0, isBasic: wanted?.isBasic ?? false)
                     .padding(.top, 6)
             }
             if let locked { CountsLockedLine(text: locked) }
@@ -470,10 +470,17 @@ struct WantedLine: View {
 /// right of each line's count control one button (`deck-line-printing-<deckID>-<section>`) says "Use this printing" (stores
 /// the page's printing on the line) or, when the line's stored printing is the page's, "Any printing" (clears it). Each
 /// line is two rows (fix round 1): the deck's name and the section's name, then the count control and the button.
+/// Under the lines, above "Add to deck", the sharing line (E7, `DeckPage.sharingLine`) when 2 or more active decks use the
+/// card: pending, "Decision pending" (`card-sharing`, `muted`) with "Share" (`card-sharing-share`, writes true) and "Buy
+/// more" (`card-sharing-buy`, false); answered, "Shared between decks" / "Bought for each deck" with "Change"
+/// (`card-sharing-change`, the other answer).
 /// While the game cannot change: no numbers (`—`), everything off; the page's locked line says why.
 struct DeckLines: View {
     let gameID: String
     let card: DeckCardToAdd
+    /// The copies owned of the card over all its printings, and whether it is a basic card: for the sharing line.
+    var owned: Int = 0
+    var isBasic: Bool = false
 
     @Environment(AppModel.self) private var model
 
@@ -518,10 +525,55 @@ struct DeckLines: View {
                     }
                 }
             }
+            let need = WantedList.need(card.cardKey, decks: decks, sharing: library.sharing(game: gameID), owned: owned,
+                                       isBasic: isBasic)
+            if let sharing = DeckPage.sharingLine(need) {
+                sharingLine(sharing)
+            }
             addMenu(decks, game: game)
         }
         .font(Theme.bodyFont)
         .disabled(locked)
+    }
+
+    /// One row when it fits the column, else the buttons under the text.
+    private func sharingLine(_ line: SharingLine) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                sharingText(line)
+                sharingButtons(line)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                sharingText(line)
+                HStack(spacing: 8) { sharingButtons(line) }
+            }
+        }
+    }
+
+    private func sharingText(_ line: SharingLine) -> some View {
+        Text(line.text)
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityIdentifier("card-sharing")
+    }
+
+    /// The answer a click writes is the one the button said at render ("Change": the other one of the answer shown).
+    @ViewBuilder private func sharingButtons(_ line: SharingLine) -> some View {
+        switch line {
+        case .pending:
+            sharingButton("Share", shared: true, identifier: "card-sharing-share")
+            sharingButton("Buy more", shared: false, identifier: "card-sharing-buy")
+        case .shared, .each:
+            sharingButton("Change", shared: line == .each, identifier: "card-sharing-change")
+        }
+    }
+
+    private func sharingButton(_ title: String, shared: Bool, identifier: String) -> some View {
+        Button(title) { model.library.setShared([card.cardKey: shared], game: gameID) }
+            .buttonStyle(FieldButtonStyle())
+            .fixedSize()
+            .accessibilityIdentifier(identifier)
     }
 
     private func addMenu(_ decks: [Deck], game: GameDefinition) -> some View {

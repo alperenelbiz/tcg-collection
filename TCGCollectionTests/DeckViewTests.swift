@@ -542,4 +542,38 @@ struct DeckViewTests {
         #expect(DeckPage.movedIndex(of: "gone", in: decks, by: 1) == nil)
         #expect(DeckPage.movedIndex(of: "a", in: [named("a", [])], by: 1) == nil)
     }
+
+    /// E7: the card page's sharing line: pending, the stored answer, or none (fewer than 2 active users, a basic card, no
+    /// need).
+    @Test func theCardPagesSharingLine() throws {
+        func need(_ decks: [Deck], sharing: [String: Bool] = [:], owned: Int = 2, basic: Bool = false) -> CardNeed? {
+            DeckNeeds.needs(decks: decks, sharing: sharing, owned: { _ in owned }, isBasic: { _ in basic })["x"]
+        }
+        let two = [named("a", [card("x", "main", 2)]), named("b", [card("x", "main", 2)])]
+        #expect(DeckPage.sharingLine(need(two)) == .pending)
+        #expect(DeckPage.sharingLine(need(two, sharing: ["x": true])) == .shared)
+        #expect(DeckPage.sharingLine(need(two, sharing: ["x": false])) == .each)
+        // An answer stays visible (and can be changed) when the card is not in conflict any more.
+        #expect(DeckPage.sharingLine(need(two, sharing: ["x": false], owned: 9)) == .each)
+        #expect(DeckPage.sharingLine(need([named("a", [card("x", "main", 2)])])) == nil)
+        #expect(DeckPage.sharingLine(need([named("a", [card("x", "main", 2)]),
+                                           named("b", [card("x", "main", 2)], active: false)])) == nil)
+        #expect(DeckPage.sharingLine(need(two, basic: true)) == nil)
+        #expect(DeckPage.sharingLine(nil) == nil)
+        #expect(SharingLine.pending.text == "Decision pending")
+        #expect(SharingLine.shared.text == "Shared between decks")
+        #expect(SharingLine.each.text == "Bought for each deck")
+    }
+
+    /// E8's count: the pending cards among those the sidebar's read covers; nil without a read (owned copies unknown).
+    @Test func thePendingCountCountsOnlyCardsTheReadCovers() {
+        let decks = [named("a", [card("kai sa rebel", "main", 2), card("dockside lock up", "main", 2)]),
+                     named("b", [card("kai sa rebel", "main", 2), card("dockside lock up", "main", 2)])]
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:], read: nil) == nil)
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:], read: read(["kai sa rebel"], owned: ["kai sa rebel": 1])) == 1)
+        #expect(DeckPage.pendingCount(decks: decks, sharing: [:],
+                                      read: read(["kai sa rebel", "dockside lock up"], owned: ["kai sa rebel": 1])) == 2)
+        #expect(DeckPage.pendingCount(decks: decks, sharing: ["kai sa rebel": true],
+                                      read: read(["kai sa rebel", "dockside lock up"], owned: ["kai sa rebel": 1])) == 1)
+    }
 }

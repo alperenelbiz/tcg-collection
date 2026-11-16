@@ -169,6 +169,39 @@ struct AppModelTests {
         #expect(model.statusNotice == "The PDF could not be saved: \(error.localizedDescription)")
     }
 
+    /// E8: the status line says it once when the count of pending cards goes up; a first value (the base after the
+    /// folder's first read) says nothing.
+    @Test func thePendingNoticeOnlyWhenTheCountGoesUp() {
+        #expect(AppModel.pendingNotice(was: 0, now: 1) == "1 card needs a sharing decision.")
+        #expect(AppModel.pendingNotice(was: 1, now: 3) == "3 cards need a sharing decision.")
+        #expect(AppModel.pendingNotice(was: 3, now: 3) == nil)
+        #expect(AppModel.pendingNotice(was: 3, now: 1) == nil)
+        #expect(AppModel.pendingNotice(was: nil, now: 3) == nil)
+        #expect(AppModel.pendingNotice(was: nil, now: 0) == nil)
+    }
+
+    /// E8 on the model: the first known count of a game is its base (cards already pending at launch say nothing); a
+    /// count that goes up says it; an unknown count (no read yet) changes nothing; another game starts a new base.
+    @MainActor @Test func thePendingCountOfTheGameOnScreenIsSaidWhenItGoesUp() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-game", "riftbound"])
+        model.pendingCountChanged(nil, game: "riftbound")
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == nil)
+        model.pendingCountChanged(nil, game: "riftbound")
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == nil)
+        model.pendingCountChanged(1, game: "riftbound")
+        #expect(model.statusNotice == nil)
+        model.pendingCountChanged(2, game: "riftbound")
+        #expect(model.statusNotice == "2 cards need a sharing decision.")
+        model.gameID = "yu-gi-oh"
+        model.pendingCountChanged(2, game: "riftbound")                 // a late value of the old game: not the base
+        model.pendingCountChanged(4, game: "yu-gi-oh")
+        #expect(model.statusNotice == "2 cards need a sharing decision.")
+        model.pendingCountChanged(5, game: "yu-gi-oh")
+        #expect(model.statusNotice == "5 cards need a sharing decision.")
+    }
+
     @MainActor @Test func offlineStartTouchesNoNetwork() async {
         let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
         await model.start()

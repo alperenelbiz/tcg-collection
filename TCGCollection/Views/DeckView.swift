@@ -73,6 +73,25 @@ nonisolated enum DeckPhase: Equatable, Sendable {
     case gone
 }
 
+/// The card page's sharing line (E7, `DeckPage.sharingLine`): pending ("Share" / "Buy more"), or the stored answer with
+/// "Change".
+nonisolated enum SharingLine: Equatable, Sendable {
+    /// In conflict without an answer.
+    case pending
+    /// The answer "Share" (true).
+    case shared
+    /// The answer "Buy more" (false).
+    case each
+
+    var text: String {
+        switch self {
+        case .pending: "Decision pending"
+        case .shared: "Shared between decks"
+        case .each: "Bought for each deck"
+        }
+    }
+}
+
 /// What the deck page lists, given the state of the catalog (`DeckPage.content`), as `WantedContent` is for Wanted.
 nonisolated struct DeckContent: Equatable {
     /// Every section of the format in its order (then any the format lacks), with its groups and lines.
@@ -270,6 +289,29 @@ nonisolated enum DeckPage {
     static func available(to deck: Deck, needs: [String: CardNeed], read: DeckRead?) -> [String: Int] {
         let owned = read?.ownedByCard ?? [:]
         return DeckNeeds.available(to: deck, needs: needs, owned: { owned[$0] ?? 0 })
+    }
+
+    /// E7: the card page's sharing line for the card's need over the active decks: none for a basic card or fewer than 2
+    /// active users; `.pending` in conflict without an answer; else the stored answer (`.shared`, `.each`), also on a card
+    /// that is not in conflict any more, so it can be changed. With 2 users, no conflict and no answer: none (there is
+    /// nothing to decide).
+    static func sharingLine(_ need: CardNeed?) -> SharingLine? {
+        guard let need, !need.isBasic, need.users.count >= 2 else { return nil }
+        if need.pending { return .pending }
+        switch need.answer {
+        case true?: return .shared
+        case false?: return .each
+        case nil: return nil
+        }
+    }
+
+    /// E8: the pending cards (`CardNeed.pending`) among the cards `read` covers; nil without a read: the owned copies are
+    /// not known, so no card is counted as pending. All in memory: the active decks and answers of the library, the
+    /// owned counts of the sidebar's last join.
+    static func pendingCount(decks: [Deck], sharing: [String: Bool], read: DeckRead?) -> Int? {
+        guard let read else { return nil }
+        return needs(decks: decks, sharing: sharing, read: read).values
+            .filter { $0.pending && read.keys.contains($0.cardKey) }.count
     }
 
     /// E6: `onMove`'s destination (an offset in the list before the move) as the index after the removal
