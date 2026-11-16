@@ -5,7 +5,7 @@ nonisolated enum GameUserFileError: Error, Equatable {
     case notAnObject
     case malformedVersion
     case malformedCollection
-    /// `wanted`, `forSale`, `sold` or `decks` (the name) is neither an array nor null.
+    /// `wanted`, `forSale`, `sold`, `decks` or `sharing` (the name) is neither an array nor null.
     case malformedList(String)
 }
 
@@ -51,11 +51,15 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
     /// Whether a parsed deck card's object has a `productID` this build cannot read (A18): only then are deck changes
     /// watched for printings set or cleared.
     let hasUnreadablePrintings: Bool
+    /// Each parsed sharing answer's object by its card key, and the entries that could not be parsed (a second entry of
+    /// one card key among them, E1).
+    let sharing: RawList<String>
 
     init(_ object: [String: Any], collection: RawList<PrintingKey> = .init(), wanted: RawList<String> = .init(),
          unreadablePins: Set<String> = [], forSale: RawList<PrintingKey> = .init(),
          sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = [],
-         decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:], hasUnreadablePrintings: Bool = false) {
+         decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:], hasUnreadablePrintings: Bool = false,
+         sharing: RawList<String> = .init()) {
         self.object = object
         self.collection = collection
         self.wanted = wanted
@@ -66,12 +70,13 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
         self.decks = decks
         self.deckCards = deckCards
         self.hasUnreadablePrintings = hasUnreadablePrintings
+        self.sharing = sharing
     }
 }
 
-/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, `decks`, and whatever
-/// else a newer app wrote. The version stays 1 (C1, D1): a phase 2B build keeps the three lists, and a phase 2B or 2C build
-/// keeps `decks`, as unknown keys.
+/// One game's user file (`<game id>.json`): `version`, `collection`, `wanted`, `forSale`, `sold`, `decks`, `sharing`, and
+/// whatever else a newer app wrote. The version stays 1 (C1, D1, E1): a phase 2B build keeps the three lists, a phase 2B
+/// or 2C build keeps `decks`, and a phase 2B–3A build keeps `sharing`, as unknown keys.
 /// - A list key the file has (even `[]` or null) is written back; one it does not have is written only once its list
 ///   has an entry, so a phase 2B file keeps its bytes through a read and a rewrite.
 /// - Each entry keeps the keys this app does not know; entries that cannot be parsed are kept, in their order, after
@@ -85,6 +90,9 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
 ///   written, after the parsed decks. A deck card that cannot be parsed is kept inside its deck, after the parsed cards.
 ///   Cards of one (card, section) are merged on read; a card under count 1 is dropped. A card moved to another section
 ///   keeps the unknown keys of the card it was.
+/// - A sharing answer (E1) needs a string `cardKey` and a boolean `shared`. The first entry of a card key wins; a later
+///   one is kept as written, with the entries that cannot be parsed, and goes when the card's parsed answer is removed
+///   (the rule of a second deck of one id), so a removed answer cannot come back at the next read.
 nonisolated struct GameUserFile: Sendable, Equatable {
     static let currentVersion = 1
 
@@ -98,6 +106,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     var decks: [Deck] {
         didSet { notePrintingChanges(from: oldValue) }
     }
+    /// The user's sharing answers (E1), one per card key, in file order.
+    var sharing: [SharingEntry]
     private let raw: JSONObjectBox
     /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
     private var pinsChanged: Set<String> = []
@@ -111,6 +121,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         forSale = []
         sold = []
         decks = []
+        sharing = []
         raw = JSONObjectBox([:])
     }
 
@@ -127,6 +138,7 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         let forSale = Self.split(try Self.array(object, "forSale", else: .malformedList("forSale")), Self.saleEntry)
         let sold = Self.split(try Self.array(object, "sold", else: .malformedList("sold")), Self.soldRecord)
         let deckElements = try Self.array(object, "decks", else: .malformedList("decks"))
+        let sharingElements = try Self.array(object, "sharing", else: .malformedList("sharing"))
 
         let (cleanRows, rowObjects) = Self.merged(rows.parsed, key: \.key, count: \.count) { first, later in
             first.count += later.count
@@ -160,6 +172,18 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             deckCards[parsed.deck.id] = parsed.cards
         }
         self.decks = decks
+        // A second entry of one card key is not parsed, as a second deck of one id is not.
+        var sharing: [SharingEntry] = [], sharingObjects: [String: [String: Any]] = [:], unparseableSharing: [Any] = []
+        for element in sharingElements {
+            guard let entryObject = element as? [String: Any], let entry = Self.sharingEntry(entryObject),
+                  sharingObjects[entry.cardKey] == nil else {
+                unparseableSharing.append(element)
+                continue
+            }
+            sharing.append(entry)
+            sharingObjects[entry.cardKey] = entryObject
+        }
+        self.sharing = sharing
         let unreadablePins = Set(cleanWanted.compactMap { entry -> String? in
             let object = wantedObjects[entry.cardKey] ?? [:]
             // A `null` pin key is no pin key (B3): such an entry has no pin, and its next write leaves no pin key.
@@ -175,7 +199,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
                             soldUnparseable: sold.unparseable,
                             decks: RawList(objects: deckObjects, unparseable: unparseableDecks),
                             deckCards: deckCards,
-                            hasUnreadablePrintings: deckCards.values.contains { $0.objects.contains { Self.hasUnreadablePrinting($0.object) } })
+                            hasUnreadablePrintings: deckCards.values.contains { $0.objects.contains { Self.hasUnreadablePrinting($0.object) } },
+                            sharing: RawList(objects: sharingObjects, unparseable: unparseableSharing))
     }
 
     /// UTF-8, pretty-printed, sorted keys, ending with a newline.
@@ -203,6 +228,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
                                          encoder: encoder) + raw.forSale.unparseable),
             ("sold", try Self.objects(soldPairs, owned: SoldRecord.storedKeys, encoder: encoder) + raw.soldUnparseable),
             ("decks", try decks.map { try deckObject($0, encoder: encoder) } + unparseableDecksKept),
+            ("sharing", try Self.objects(sharing.map { ($0, raw.sharing.objects[$0.cardKey]) }, owned: SharingEntry.storedKeys,
+                                         encoder: encoder) + unparseableSharingKept),
         ]
         // A key the file did not have stays out while its list is empty.
         for (key, elements) in lists where !elements.isEmpty || raw.object[key] != nil {
@@ -221,6 +248,18 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         return raw.decks.unparseable.filter { element in
             guard let id = (element as? [String: Any])?["id"] as? String else { return true }
             return !deleted.contains(id)
+        }
+    }
+
+    /// The sharing entries read that could not be parsed, minus each second entry of a card whose parsed answer was
+    /// removed since the read: it goes with that answer, so the removed answer cannot come back at the next read (the rule
+    /// of `unparseableDecksKept`).
+    private var unparseableSharingKept: [Any] {
+        let removed = Set(raw.sharing.objects.keys).subtracting(sharing.map(\.cardKey))
+        guard !removed.isEmpty else { return raw.sharing.unparseable }
+        return raw.sharing.unparseable.filter { element in
+            guard let key = (element as? [String: Any])?["cardKey"] as? String else { return true }
+            return !removed.contains(key)
         }
     }
 
@@ -252,10 +291,11 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         printingsChanged.insert(DeckCardRef(deckID: id, key: source.key))
     }
 
-    /// The lists and the decks are equal (what the app reads and changes); keys it does not know are not compared.
+    /// The lists, the decks and the sharing answers are equal (what the app reads and changes); keys it does not know are
+    /// not compared.
     func hasSameLists(as other: GameUserFile) -> Bool {
         collection == other.collection && wanted == other.wanted && forSale == other.forSale && sold == other.sold
-            && decks == other.decks
+            && decks == other.decks && sharing == other.sharing
     }
 
     /// Equal lists, and equal keys this app does not know. A copy of one read file differs only by its lists (and by the
@@ -485,6 +525,12 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         // cleared); a `null` is no key.
         return DeckCard(cardKey: cardKey, name: name, section: section, count: count,
                         productID: o["productID"].flatMap(integer))
+    }
+
+    /// E1: needs a string `cardKey` and a JSON boolean `shared` (a number or a string is no answer).
+    private static func sharingEntry(_ o: [String: Any]) -> SharingEntry? {
+        guard let cardKey = o["cardKey"] as? String, let shared = o["shared"].flatMap(boolean) else { return nil }
+        return SharingEntry(cardKey: cardKey, shared: shared)
     }
 
     /// A deck card's `productID` this build cannot read: there, not `null`, not a whole number (A18).

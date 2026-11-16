@@ -52,3 +52,15 @@ nonisolated struct SoldRecord: Codable, Sendable, Equatable {
     /// The JSON keys this type writes; the game file takes them out of the object it read before writing them.
     static let storedKeys = Set(CodingKeys.allCases.map(\.rawValue))
 }
+
+/// The user's answer for one card used by two or more decks (E1, spec 5.4): `shared` means the decks share the owned
+/// copies; `false` means each deck gets its own copies. The app never writes an answer the user did not give. An answer
+/// stays when its card leaves every deck.
+nonisolated struct SharingEntry: Codable, Sendable, Equatable {
+    var cardKey: String
+    var shared: Bool
+
+    enum CodingKeys: String, CodingKey, CaseIterable { case cardKey, shared }
+    /// The JSON keys this type writes; the game file takes them out of the object it read before writing them.
+    static let storedKeys = Set(CodingKeys.allCases.map(\.rawValue))
+}

@@ -1163,6 +1163,110 @@ struct UserLibraryTests {
         #expect(lib.decks(game: "riftbound").isEmpty)
     }
 
+    // MARK: Phase 3B task 2: the sharing answers (E1)
+
+    /// Two answers and one removal are one change: `version` goes up by one (one queued write), memory and the file hold
+    /// the result. An existing answer keeps its place; new answers are added after it, by card key.
+    @MainActor @Test func setSharedIsOneChange() async throws {
+        let dir = tempDir()
+        try Data(#"{"version":1,"sharing":[{"cardKey":"old","shared":true,"note":"x"},{"cardKey":"gone","shared":false}]}"#.utf8)
+            .write(to: dir.appending(path: "riftbound.json"))
+        let lib = await deckLibrary(dir)
+        #expect(lib.sharing(game: "riftbound") == ["old": true, "gone": false])
+        #expect(lib.sharing(game: "yu-gi-oh").isEmpty)
+        let before = lib.version
+        lib.setShared(["z": true, "b": false, "gone": nil, "old": false], game: "riftbound")
+        #expect(lib.version == before + 1)
+        #expect(lib.sharing(game: "riftbound") == ["old": false, "b": false, "z": true])
+        await lib.flush()
+        let stored = try storedFile(dir, "riftbound").sharing
+        #expect(stored == [SharingEntry(cardKey: "old", shared: false), SharingEntry(cardKey: "b", shared: false),
+                           SharingEntry(cardKey: "z", shared: true)])
+        let entries = try jsonObject(dir.appending(path: "riftbound.json"))["sharing"] as! [[String: Any]]
+        #expect(entries[0]["note"] as? String == "x")
+    }
+
+    /// The same answers, a removal of an answer that is not there, and no answers at all change nothing: no version bump,
+    /// no write.
+    @MainActor @Test func setSharedWithTheSameAnswersWritesNothing() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let lib = await deckLibrary(dir)
+        lib.setShared(["a": true, "b": false], game: "riftbound")
+        await lib.flush()
+        let bytes = try Data(contentsOf: file), before = lib.version
+        lib.setShared(["a": true, "b": false], game: "riftbound")
+        lib.setShared(["none": nil], game: "riftbound")
+        lib.setShared([:], game: "riftbound")
+        await lib.flush()
+        #expect(lib.version == before); #expect(try Data(contentsOf: file) == bytes)
+        // No file and nothing to write: no file is made.
+        lib.setShared(["x": nil], game: "cyberpunk")
+        await lib.flush()
+        #expect(try UserFiles.read(dir.appending(path: "cyberpunk.json")) == nil)
+    }
+
+    /// Refused while the game cannot change (a refused file, before the first load, an unknown game): nothing in memory,
+    /// nothing written, no version bump.
+    @MainActor @Test func setSharedIsRefusedWhileTheGameCannotChange() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let onDisk = Data(#"{"version":2,"sharing":[{"cardKey":"a","shared":true}]}"#.utf8)
+        try onDisk.write(to: file)
+        let lib = await deckLibrary(dir)
+        #expect(!lib.canChange(game: "riftbound"))
+        let before = lib.version
+        lib.setShared(["a": false, "b": true], game: "riftbound")
+        await lib.flush()
+        #expect(lib.version == before); #expect(try Data(contentsOf: file) == onDisk)
+        #expect(lib.sharing(game: "riftbound").isEmpty)
+        let unloaded = UserLibrary(folder: tempDir(), watcher: nil, newID: { "x" })
+        unloaded.setShared(["a": true], game: "riftbound")
+        #expect(unloaded.sharing(game: "riftbound").isEmpty); #expect(unloaded.version == 0)
+        lib.setShared(["a": true], game: "no-such-game")
+        #expect(lib.version == before)
+    }
+
+    /// An answer change leaves `collection`, `wanted`, `forSale`, `sold`, `decks` and unknown keys byte-equal in the file;
+    /// the text is the original with the `sharing` key added.
+    @MainActor @Test func aSharingChangeLeavesTheOtherListsByteEqual() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        let json = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A","k":1}],"wanted":[{"cardKey":"a","name":"A","count":1,"pinProductID":3,"note":"x"}],"forSale":[{"productID":1,"finish":"Normal","count":2,"name":"A"}],"sold":[{"productID":1,"finish":"Normal","count":1,"name":"A","day":"2026-11-13","price":0.07,"priceIsLow":false},{"productID":9,"price":"1"}],"decks":[{"id":"d","name":"D","format":"standard","active":true,"cards":[{"cardKey":"a","name":"A","section":"main","count":3,"productID":"x"}]},{"name":"no id"}],"future":{"a":1}}"#
+        try UserFiles.write(try GameUserFile(data: Data(json.utf8)).data(), to: file)
+        let original = try Data(contentsOf: file)
+        let lib = await deckLibrary(dir)
+        lib.setShared(["a": true], game: "riftbound")
+        await lib.flush()
+        let after = try Data(contentsOf: file)
+        #expect(after != original)
+        func part(_ data: Data, _ key: String) throws -> Data {
+            let value = try #require((try JSONSerialization.jsonObject(with: data) as? [String: Any])?[key])
+            return try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        }
+        for key in ["collection", "wanted", "forSale", "sold", "decks", "future"] {
+            #expect(try part(after, key) == part(original, key), "\(key)")
+        }
+        // The `sharing` key sorts between `sold` and `version`.
+        var text = String(decoding: after, as: UTF8.self)
+        let start = try #require(text.range(of: "  \"sharing\" : ["))
+        let end = try #require(text.range(of: "  \"sold\" : ["))
+        text.removeSubrange(start.lowerBound..<end.lowerBound)
+        #expect(text == String(decoding: original, as: UTF8.self))
+        #expect(try storedFile(dir, "riftbound").sharing == [SharingEntry(cardKey: "a", shared: true)])
+    }
+
+    /// A reload that changes only the answers (another device) bumps `version` and shows them.
+    @MainActor @Test func aReloadThatChangesTheAnswersBumpsTheVersion() async throws {
+        let dir = tempDir(), watcher = FakeWatcher(), file = dir.appending(path: "riftbound.json")
+        let lib = await deckLibrary(dir, watcher: watcher)
+        lib.setShared(["a": true], game: "riftbound")
+        await lib.flush()
+        var other = try storedFile(dir, "riftbound")
+        other.sharing = [SharingEntry(cardKey: "a", shared: false)]
+        try UserFiles.write(try other.data(), to: file)
+        let before = lib.version
+        await watcher.fire(file)
+        #expect(lib.version > before); #expect(lib.sharing(game: "riftbound") == ["a": false])
+    }
+
     /// The JSON object stored in `file`.
     private func jsonObject(_ file: URL) throws -> [String: Any] {
         let data = try #require(try UserFiles.read(file))

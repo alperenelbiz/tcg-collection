@@ -135,6 +135,12 @@ final class UserLibrary {
         refused[game] == nil ? files[game]?.unreadableCards(deck: id) ?? 0 : 0
     }
 
+    /// The user's sharing answers of the game (E1) by card key: `true` shared between decks, `false` bought for each deck.
+    /// A card without an answer is not in it. Empty for a game with no file or a refused one.
+    func sharing(game: String) -> [String: Bool] {
+        Dictionary(shown(game).sharing.map { ($0.cardKey, $0.shared) }, uniquingKeysWith: { first, _ in first })
+    }
+
     func wantedCount(game: String, cardKey: String) -> Int {
         wanted(game: game).first { $0.cardKey == cardKey }?.count ?? 0
     }
@@ -278,6 +284,23 @@ final class UserLibrary {
             guard let i = file.decks.firstIndex(where: { $0.id == id }) else { return }
             let deck = file.decks.remove(at: i)
             file.decks.insert(deck, at: min(max(index, 0), file.decks.count))
+        }
+    }
+
+    /// Refused as `setCount` is. Sets several cards' sharing answers in one change (one write): `nil` removes a card's
+    /// answer. An answer already there keeps its place in the file; a new one is added after the others, in card-key
+    /// order. Answers equal to the stored ones write nothing.
+    func setShared(_ answers: [String: Bool?], game: String) {
+        change(game) { file in
+            for (cardKey, answer) in answers.sorted(by: { $0.key < $1.key }) {
+                let i = file.sharing.firstIndex { $0.cardKey == cardKey }
+                switch (i, answer) {
+                case let (i?, shared?): file.sharing[i].shared = shared
+                case let (i?, nil): file.sharing.remove(at: i)
+                case let (nil, shared?): file.sharing.append(SharingEntry(cardKey: cardKey, shared: shared))
+                case (nil, nil): break
+                }
+            }
         }
     }
 

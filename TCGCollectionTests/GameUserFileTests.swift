@@ -786,4 +786,116 @@ struct GameUserFileTests {
         #expect(decksPart(text) == decksPart(oursText))
         #expect(try GameUserFile(data: rewritten2C).decks == GameUserFile(data: ours).decks)
     }
+
+    // MARK: Phase 3B task 2: the sharing answers (E1)
+
+    private let sharingJSON = #"{"version":1,"collection":[{"productID":1,"finish":"Normal","count":2,"condition":"","name":"A"}],"sharing":[{"cardKey":"a","shared":true,"note":"kept"},{"cardKey":"b","shared":false}]}"#
+
+    /// A phase 3A file (decks, no `sharing`) opens with no answers, and a read and `data()` keep its exact bytes.
+    @Test func aPhase3AFileReadsWithNoSharingAndKeepsItsBytes() throws {
+        let file = try GameUserFile(data: Data(printingText.utf8))
+        #expect(file.sharing.isEmpty)
+        #expect(file.decks.count == 1)
+        #expect(try file.data() == Data(printingText.utf8))
+    }
+
+    /// Answers are read, written and read again unchanged; an entry's unknown key survives a change of its answer.
+    @Test func sharingRoundTrips() throws {
+        var file = try GameUserFile(data: Data(sharingJSON.utf8))
+        #expect(file.sharing == [SharingEntry(cardKey: "a", shared: true), SharingEntry(cardKey: "b", shared: false)])
+        let data = try file.data()
+        #expect(try GameUserFile(data: data) == file)
+        #expect(try GameUserFile(data: data).data() == data)
+        func entries() throws -> [[String: Any]] {
+            (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as! [[String: Any]]
+        }
+        var written = try entries()
+        #expect(written[0]["note"] as? String == "kept")
+        #expect(Set(written[1].keys) == ["cardKey", "shared"])
+        #expect(written[1]["shared"] as? Bool == false)
+        #expect((written[1]["shared"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } == true)
+        file.sharing[0].shared = false
+        written = try entries()
+        #expect(written[0]["note"] as? String == "kept"); #expect(written[0]["shared"] as? Bool == false)
+        #expect(try GameUserFile(data: try file.data()).sharing == file.sharing)
+    }
+
+    /// E1: a second entry of a card key, an entry with an unreadable answer and a non-object are kept as written, in their
+    /// order, after the parsed entries; the first entry of a card wins.
+    @Test func aSecondEntryOfACardAndAnUnreadableOneAreKeptRaw() throws {
+        let json = #"{"version":1,"sharing":[{"cardKey":"a","shared":true},{"cardKey":"a","shared":false},{"cardKey":"c","shared":"yes"},7]}"#
+        let file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.sharing == [SharingEntry(cardKey: "a", shared: true)])
+        #expect(Dictionary(uniqueKeysWithValues: file.sharing.map { ($0.cardKey, $0.shared) }) == ["a": true])
+        let written = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as! [Any]
+        #expect(written.count == 4)
+        #expect((written[0] as! [String: Any])["shared"] as? Bool == true)
+        #expect((written[1] as! [String: Any])["cardKey"] as? String == "a")
+        #expect((written[1] as! [String: Any])["shared"] as? Bool == false)
+        #expect((written[2] as! [String: Any])["shared"] as? String == "yes")
+        #expect(written[3] as? Int == 7)
+        #expect(try GameUserFile(data: try file.data()) == file)
+        // A number is no answer: `1` is not `true`.
+        #expect(try GameUserFile(data: Data(#"{"sharing":[{"cardKey":"a","shared":1}]}"#.utf8)).sharing.isEmpty)
+    }
+
+    /// The rule of decks (final fix B9): when the parsed answer of a card is removed, a second entry of that card kept raw
+    /// goes with it, so the removed answer cannot come back (flipped) at the next read. Other raw entries stay.
+    @Test func aRemovedAnswersRawDuplicateGoesWithIt() throws {
+        let json = #"{"version":1,"sharing":[{"cardKey":"a","shared":true},{"cardKey":"b","shared":true},{"cardKey":"a","shared":false},{"cardKey":"b","shared":false},"x"]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        file.sharing.removeAll { $0.cardKey == "a" }
+        let written = (try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as! [Any]
+        #expect(written.count == 3)
+        #expect((written[0] as! [String: Any])["cardKey"] as? String == "b")
+        #expect((written[1] as! [String: Any])["cardKey"] as? String == "b")
+        #expect(written[2] as? String == "x")
+        let again = try GameUserFile(data: try file.data())
+        #expect(again.sharing == [SharingEntry(cardKey: "b", shared: true)])
+    }
+
+    /// `sharing` that is neither an array nor null refuses the file; `null` reads as none, and the key is written back as
+    /// `[]` (the file had it). A file without the key gets it once there is an answer, and loses it again with none.
+    @Test func sharingThatIsNoListRefusesTheFile() throws {
+        #expect(throws: GameUserFileError.malformedList("sharing")) { try GameUserFile(data: Data(#"{"sharing":{}}"#.utf8)) }
+        #expect(throws: GameUserFileError.malformedList("sharing")) { try GameUserFile(data: Data(#"{"sharing":true}"#.utf8)) }
+        let null = try GameUserFile(data: Data(#"{"version":1,"sharing":null}"#.utf8))
+        #expect(null.sharing.isEmpty)
+        #expect((try JSONSerialization.jsonObject(with: try null.data()) as! [String: Any])["sharing"] as? [Any] != nil)
+        #expect(((try JSONSerialization.jsonObject(with: try null.data()) as! [String: Any])["sharing"] as? [Any])?.isEmpty == true)
+        var file = try GameUserFile(data: Data(#"{"version":1,"collection":[]}"#.utf8))
+        file.sharing = [SharingEntry(cardKey: "a", shared: true)]
+        #expect(((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] as? [Any])?.count == 1)
+        file.sharing = []
+        #expect((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["sharing"] == nil)
+    }
+
+    /// Equality and `hasSameLists` see a change of the answers alone, so the library writes it.
+    @Test func aSharingOnlyChangeMakesTheFileDifferent() throws {
+        let file = try GameUserFile(data: Data(sharingJSON.utf8))
+        var changed = file
+        changed.sharing[1].shared = true
+        #expect(changed != file)
+        #expect(!changed.hasSameLists(as: file))
+    }
+
+    /// A phase 3A build on another device rewrites the file to change a collection count: it parses the whole object,
+    /// changes `collection` and writes with its options. `sharing` (an unknown key there) comes back byte-equal and reads
+    /// the same.
+    @Test func aPhase3ARewriteKeepsSharing() throws {
+        let file = try GameUserFile(data: Data(sharingJSON.utf8))
+        let ours = try file.data()
+        var object = try JSONSerialization.jsonObject(with: ours) as! [String: Any]
+        object["version"] = 1
+        object["collection"] = [["productID": 1, "finish": "Normal", "count": 3, "condition": "", "name": "A"]]
+        var rewritten = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        rewritten.append(0x0A)
+        let oursText = String(decoding: ours, as: UTF8.self), rewrittenText = String(decoding: rewritten, as: UTF8.self)
+        let sharingPart: (String) -> Substring = { $0[$0.range(of: "\"sharing\"")!.lowerBound..<$0.range(of: "\"version\"")!.lowerBound] }
+        #expect(sharingPart(rewrittenText) == sharingPart(oursText))
+        let back = try GameUserFile(data: rewritten)
+        #expect(back.collection.map(\.count) == [3]); #expect(back.sharing == file.sharing)
+        let backText = String(decoding: try back.data(), as: UTF8.self)
+        #expect(sharingPart(backText) == sharingPart(oursText))
+    }
 }
