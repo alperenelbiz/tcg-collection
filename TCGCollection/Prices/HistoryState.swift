@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the model can say about one printing's price history (A41, H3), for the card page's block
-/// (`AppModel.historyState(game:productID:)`).
+/// (`AppModel.historyState(game:productID:cardKey:)`).
 nonisolated enum HistoryState: Equatable, Sendable {
     /// Nothing to say yet: before the folder is read, with no or a missing folder, while the first-run question is due,
     /// for a game that is not followed or whose game file is refused.

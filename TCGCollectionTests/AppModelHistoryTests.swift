@@ -25,6 +25,16 @@ struct AppModelHistoryTests {
         }
     }
 
+    /// Counts the history file reads (every read goes through `historyFileReader`), then reads as the app does.
+    final class FileReads: Sendable {
+        private let reads = Mutex(0)
+        var count: Int { reads.withLock { $0 } }
+        func read(_ game: String, _ folder: URL) throws -> HistoryFiles.Read {
+            reads.withLock { $0 += 1 }
+            return try HistoryFiles.read(game: game, in: folder)
+        }
+    }
+
     // MARK: Helpers
 
     private static func row(_ productID: Int, count: Int = 1) -> String {
@@ -521,12 +531,18 @@ struct AppModelHistoryTests {
         try history.data().write(to: historyURL(root))
         let written = try sizeAndDate(historyURL(root))
         let model = try await offlineModel(root, extra: ["-onboarding", "YES"])
+        let reads = FileReads()
+        model.historyFileReader = reads.read
         await model.start()
         #expect(model.onboardingDue)
+        // As if a pass had read the file in this folder before the question became due: only the gates hold the read.
+        model.historyFolder = model.library.folder
+        model.historyOnDisk["riftbound"] = .file
         #expect(model.library.fileChanged(historyURL(root)) == nil)
-        model.historyFileChanged("riftbound")
         await model.waitForHistory()
-        #expect(model.historyFileReads == 0)
+        try await Task.sleep(for: .milliseconds(100))                         // a read outside the queue would be done
+        #expect(reads.count == 0)
+        #expect(model.historyOnDisk["riftbound"] == nil)                      // forgotten: read once the gate opens
         #expect(try Data(contentsOf: historyURL(root)) == history.data())
         #expect(try sizeAndDate(historyURL(root)).date == written.date)
     }
@@ -537,6 +553,8 @@ struct AppModelHistoryTests {
         let root = tempRoot()
         try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "cyberpunk": Self.gameFile()])
         let model = try await offlineModel(root)
+        let fileReads = FileReads()
+        model.historyFileReader = fileReads.read
         await model.start()
         await model.waitForHistory()
         model.library.setProfile(GameProfile(followed: false), game: "riftbound")
@@ -546,15 +564,16 @@ struct AppModelHistoryTests {
         changed.setDay("2025-12-01", rows: [Self.dockside: ["Normal": ShownPrice(amount: 4, isLow: false)]], for: [Self.dockside])
         try changed.data().write(to: historyURL(root))
         let written = try sizeAndDate(historyURL(root))
-        let reads = model.historyFileReads
+        let reads = fileReads.count
         await model.library.fileChanged(historyURL(root))?.value
         await model.waitForHistory()
-        #expect(model.historyFileReads == reads)
+        try await Task.sleep(for: .milliseconds(100))                         // a read outside the queue would be done
+        #expect(fileReads.count == reads)
         #expect(try sizeAndDate(historyURL(root)).date == written.date)
         model.library.setProfile(.all, game: "riftbound")
         model.profilesChanged()
         await model.waitForHistory()
-        #expect(model.historyFileReads > reads)
+        #expect(fileReads.count > reads)
         #expect(model.history(game: "riftbound") == changed)
     }
 
@@ -587,16 +606,18 @@ struct AppModelHistoryTests {
         let root = tempRoot()
         try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "riftbound.prices.json": "not json"])
         let model = try await offlineModel(root)
+        let fileReads = FileReads()
+        model.historyFileReader = fileReads.read
         let other = PriceHistory(days: ["2025-12-01"], products: [Self.dockside: ["Normal": [ShownPrice(amount: 4, isLow: false)]]])
         let file = historyURL(root)
         var readsDuringPass: (before: Int, after: Int)?
         model.historyPassHook = { games in
             guard readsDuringPass == nil, games.contains("riftbound") else { return }
-            let before = model.historyFileReads
+            let before = fileReads.count
             try? UserFiles.write(other.data(), to: file)                       // another device, during the pass
             model.library.fileChanged(file)
             try? await Task.sleep(for: .milliseconds(50))
-            readsDuringPass = (before, model.historyFileReads)
+            readsDuringPass = (before, fileReads.count)
         }
         await model.start()
         await model.waitForHistory()
@@ -622,6 +643,54 @@ struct AppModelHistoryTests {
         #expect(model.historyState(game: "riftbound", productID: Self.rune, cardKey: "calm rune") == .notTracked)
         await model.waitForHistory()
         #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .ready)
+    }
+
+    // MARK: Review round 2
+
+    /// A: a report while the folder is missing (after its load) makes memory forget the read; once the folder is back the
+    /// next pass reads the file another device wrote and adds to it, never writes over it from stale memory.
+    @Test(.timeLimit(.minutes(1))) func aReportWhileTheFolderIsMissingIsReadOnceTheFolderIsBack() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        let away = root.appending(path: "away")
+        try FileManager.default.moveItem(at: user(root), to: away)
+        await model.library.fileChanged(user(root).appending(path: "riftbound.json"))?.value
+        #expect(model.library.folderIsMissing)
+        // Another device writes the history while the folder is away, and it is reported.
+        let otherHistory = PriceHistory(days: ["2025-12-01"], products: [Self.dockside: ["Normal": [ShownPrice(amount: 4, isLow: false)]]])
+        try otherHistory.data().write(to: away.appending(path: "riftbound.prices.json"))
+        #expect(model.library.fileChanged(historyURL(root)) == nil)
+        try placeArchives(model, ["2025-12-29"])                              // a new day, so the next pass writes
+        try FileManager.default.moveItem(at: away, to: user(root))
+        await model.library.fileChanged(user(root).appending(path: "riftbound.json"))?.value
+        #expect(!model.library.folderIsMissing)
+        model.requestHistory()
+        await model.waitForHistory()
+        let history = try stored(root)
+        #expect(history.days == ["2025-12-01", "2025-12-29"] + Self.archiveDays)
+        #expect(history.points(productID: Self.dockside, finish: "Normal").first?.amount == 4)
+        #expect(model.history(game: "riftbound") == history)
+    }
+
+    /// D: with its card key, a printing of a card in a deck in play is `.reading` at once; without the player role (no
+    /// deck in play) it is not.
+    @Test(.timeLimit(.minutes(1))) func aCardInADeckInPlayIsReadingAtOnce() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        model.historyQuietTime = .seconds(1)
+        let card = DeckCard(cardKey: Self.docksideKey, name: "Dockside Lock-Up", section: "main", count: 1)
+        _ = model.library.addDeck(game: "riftbound", name: "Wind", format: "standard", cards: [card])
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .reading)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
+        model.library.setProfile(GameProfile(player: false), game: "riftbound")
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .notTracked)
+        await model.waitForHistory()
     }
 
     // MARK: Days (H10)

@@ -1,5 +1,9 @@
 import Foundation
 
+/// Reads one game's history file in a folder (`HistoryFiles.read`, which settles its conflict versions first). Tests count
+/// the reads.
+typealias HistoryFileReader = @Sendable (String, URL) throws -> HistoryFiles.Read
+
 /// What the last read of a game's history file found (H3): it decides how the next write goes.
 nonisolated enum HistoryOnDisk: Equatable, Sendable {
     /// No file and no placeholder: the next write creates it (and never replaces one that appeared since).
@@ -105,13 +109,14 @@ extension AppModel {
     /// which writes. Behind the pass's gates (the folder read and there, the first-run question not due, the folder the
     /// history in memory belongs to, the game followed with a readable game file) the game is marked stale and the queue
     /// reads it, after any running pass (`checkStaleHistoryFiles`, or the next pass's first step). A report that fails
-    /// the game's gates only makes memory forget its read (no IO), so the next pass that may read it does; one that fails
-    /// the folder's gates does nothing (a folder read again is read again whole).
+    /// any of those gates (the folder missing for now, the question due, the game not followed or refused) only makes
+    /// memory forget its read (no IO), so the first pass that may read it reads it. A report for another folder, or for a
+    /// game whose file memory has not read, does nothing (it is read anyway).
     func historyFileChanged(_ game: String) {
-        guard historyFolderOpen, let folder = library.folder, historyFolder == folder, historyOnDisk[game] != nil else {
-            return
-        }
-        guard isSynced(game), library.canChange(game: game) else {
+        guard let folder = library.folder, historyFolder == folder, historyOnDisk[game] != nil else { return }
+        // A closed gate (the folder missing for now, the first-run question due): no IO, but memory forgets the read, so
+        // the first pass after the gate opens reads the file another device wrote instead of overwriting it.
+        guard historyFolderOpen, isSynced(game), library.canChange(game: game) else {
             historyOnDisk[game] = nil
             return
         }
@@ -139,8 +144,12 @@ extension AppModel {
     }
 
     /// Stops the running pass (it keeps nothing) and drops a queued one.
+    /// A stale mark means another device wrote the file: it is not lost with the cancel. Its game forgets its read instead
+    /// (no IO), so the next pass reads the file first.
     func cancelHistoryPass() {
         historyQueued = false
+        for game in historyStale { historyOnDisk[game] = nil }
+        historyStale = []
         historyTask?.cancel()
     }
 
@@ -210,10 +219,7 @@ extension AppModel {
                 historyOnDisk[game] = nil
                 continue
             }
-            #if DEBUG
-            historyFileReads += 1
-            #endif
-            let read = await Self.readHistoryFile(game: game, folder: folder)
+            let read = await readHistoryFile(game: game, folder: folder)
             guard !Task.isCancelled, historyStillOn(folder) else { return }
             // Reported again during the read: the next check reads it once more.
             guard !historyStale.contains(game) else { continue }
@@ -246,13 +252,12 @@ extension AppModel {
         #endif
 
         // 1. The files not read yet, or changed on disk.
-        for game in syncedGames.map(\.id) where library.canChange(game: game)
-            && (historyOnDisk[game] == nil || historyStale.contains(game)) {
+        for game in syncedGames.map(\.id) where historyOnDisk[game] == nil || historyStale.contains(game) {
+            // Checked again before each read: an earlier read may have let a game go unfollowed, or the folder go.
+            guard historyStillOn(folder) else { return }
+            guard isSynced(game), library.canChange(game: game) else { continue }
             historyStale.remove(game)
-            #if DEBUG
-            historyFileReads += 1
-            #endif
-            let read = await Self.readHistoryFile(game: game, folder: folder)
+            let read = await readHistoryFile(game: game, folder: folder)
             guard !Task.isCancelled, historyStillOn(folder) else { return }
             if let read { takeHistoryRead(read, game: game) }
         }
@@ -396,9 +401,15 @@ extension AppModel {
 
     // MARK: File work, off the main actor
 
-    /// The game's history file; nil for an IO error (the game is then left out of this pass).
-    @concurrent nonisolated static func readHistoryFile(game: String, folder: URL) async -> HistoryFiles.Read? {
-        try? HistoryFiles.read(game: game, in: folder)
+    /// The game's history file, through `historyFileReader` (every read of a history file goes through here); nil for an
+    /// IO error (the game is then left out of this pass).
+    private func readHistoryFile(game: String, folder: URL) async -> HistoryFiles.Read? {
+        await Self.readHistoryFile(game: game, folder: folder, reader: historyFileReader)
+    }
+
+    @concurrent private nonisolated static func readHistoryFile(game: String, folder: URL,
+                                                               reader: HistoryFileReader) async -> HistoryFiles.Read? {
+        try? reader(game, folder)
     }
 
     nonisolated enum HistoryWrite: Sendable {

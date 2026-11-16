@@ -243,13 +243,13 @@ final class AppModel {
     @ObservationIgnored var historyQuietTime: Duration = .seconds(3)
     /// Reads one archive for a pass. Tests count the reads.
     @ObservationIgnored var historyArchiveReader: HistoryPass.Reader = PriceArchive.read
+    /// Reads one history file (every read goes through it: `readHistoryFile`). Tests count the reads.
+    @ObservationIgnored var historyFileReader: HistoryFileReader = { game, folder in try HistoryFiles.read(game: game, in: folder) }
     #if DEBUG
     /// Test only: called with the games of a pass after their tracked printings are known, before the archives are read.
     @ObservationIgnored var historyPassHook: (@MainActor ([String]) async -> Void)?
     /// Test only: the passes that ran past the gates.
     @ObservationIgnored var historyPassCount = 0
-    /// Test only: the reads of history files (a pass's, a check's of a reported file).
-    @ObservationIgnored var historyFileReads = 0
     /// Test only: called on the main actor after each history file write of a pass, with its game.
     @ObservationIgnored var historyWriteHook: (@MainActor (String) async -> Void)?
     #endif
