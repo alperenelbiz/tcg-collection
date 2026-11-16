@@ -440,6 +440,251 @@ final class RealCollectionTests: UITestCase {
         return (try XCTUnwrap(Int(key[..<dash]), key), String(key[key.index(after: dash)...]))
     }
 
+    // MARK: Sets (phase 4A task 5)
+
+    /// The printing the sets test added (`<productID>-<finish>`, the cell's suffix), its product name and its set, until the
+    /// test takes it off again: its teardown block takes it off after a failure too, so a later test of this class on the
+    /// same root finds the collection as it was.
+    private var setsAdded: (suffix: String, name: String, groupID: Int)?
+
+    /// Sets on a real Riftbound collection, offline (A26, A27, F1, F2, F8). Skipped unless `TCG_REAL_STORE` is set and its
+    /// root has `user/riftbound.json`. One launch on `-screen sets` (the copy has no set index file: the app makes it at
+    /// launch, in the background):
+    /// 1. The list opens on "My sets" with at least one row. The first row's `owned / total` equals the count the test makes
+    ///    from the file and from the set index the app wrote (`support/sets-riftbound.json`): an owned target is a row of
+    ///    the set's products with a count of 1 or more (F2; F1 makes every owned row a target). On a root without a price
+    ///    file the total is known too: one Normal target per product plus every owned finish that is not Normal.
+    /// 2. The first row's page with the Owned filter: its cells (scrolled through) are exactly those owned targets, and the
+    ///    window's subtitle is the row's count.
+    /// 3. On the first set that is not complete, the Missing filter's first cell: one `+`. The cell leaves Missing, the
+    ///    subtitle and (after Back) the row's count move by one, and `collection` differs by exactly that row (count 1, the
+    ///    product's name); the other lists are equal.
+    /// 4. Owned, the product's name in the search field, `−` on that cell: `collection` is as before again (a later test of
+    ///    this class reads the Collection's first cells; a teardown block does the same after a failure).
+    /// No number or name of the owner is in the test: everything comes from the screen, the file and the index at run time.
+    /// Attachment `real-sets-timings` (each time measured from outside, an upper bound).
+    func testSetsOnTheRealCollection() throws {
+        let root = try realStoreRoot()
+        let file = root.appending(path: "user").appending(path: "riftbound.json")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            throw XCTSkip("\(file.path) is not there: this test runs on a root whose Riftbound collection is imported")
+        }
+        let initial = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any], file.path)
+        let unpriced = !FileManager.default.fileExists(atPath: root.appending(path: "support/prices-riftbound.json").path)
+        let bytesBefore = try Data(contentsOf: file).count
+        var times: [String] = []
+        let seconds = { (from: Date) in String(format: "%.1f s", Date().timeIntervalSince(from)) }
+        setsAdded = nil
+        addTeardownBlock { @MainActor [unowned self] in
+            self.takeOffSetsAdded(root: root)
+        }
+
+        // 1. My sets, its first row against the file and the index.
+        let launched = Date()
+        let app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "sets"])
+        let before = try storedCollection(game: "riftbound")
+        XCTAssertTrue(waitUntil(timeout: 60) { !self.setRows(app).isEmpty }, "no set row")
+        times.append("launch -> the first Sets row (the index made at launch): \(seconds(launched))")
+        XCTAssertEqual(setsSegment(app, "My sets", in: "sets-scope").value as? Int, 1, "the list does not open on My sets")
+        let rows = setRows(app)
+        let first = try XCTUnwrap(Int(try XCTUnwrap(rows.first).dropFirst("sets-row-".count)))
+        let indexFile = root.appending(path: "support/sets-riftbound.json")
+        XCTAssertTrue(waitUntil { FileManager.default.fileExists(atPath: indexFile.path) }, "no \(indexFile.path)")
+        let index = try setIndex(indexFile)
+        let expected = try XCTUnwrap(setNumbers(groupID: first, index: index, rows: before), "the first row's set is not in the index")
+        let count = element(app, "sets-count-\(first)")
+        XCTAssertTrue(count.waitForExistence(timeout: 30), "no count on the row of \(first): \(app.buttons["sets-row-\(first)"].label)")
+        XCTAssertTrue(waitUntil { self.text(count).hasPrefix("\(expected.owned) / ") }, "\(text(count)), not \(expected.owned) owned")
+        XCTAssertGreaterThan(expected.owned, 0, "My sets lists a set with nothing owned")
+        let shownTotal = try XCTUnwrap(Int(text(count).split(separator: "/").last?.trimmingCharacters(in: .whitespaces) ?? ""), text(count))
+        if unpriced { XCTAssertEqual(shownTotal, expected.total, "the total of \(first) is not one Normal target per product + the other owned finishes") }
+        let subtitle = "\(expected.owned) of \(shownTotal)"
+        shot("real-sets-1-my-sets")
+
+        // 2. The first row's page, Owned: its cells are the owned targets.
+        var clicked = Date()
+        app.buttons["sets-row-\(first)"].click()
+        XCTAssertTrue(element(app, "set-screen").waitForExistence(timeout: 10), "the set's page did not open")
+        XCTAssertTrue(waitUntil(timeout: 30) { app.windows.firstMatch.title.hasSuffix(" – " + subtitle) }, app.windows.firstMatch.title)
+        XCTAssertTrue(waitUntil(timeout: 30) { !self.setCellIDs(app).isEmpty }, "no cell on the set's page")
+        times.append("row click -> the page's cells (\(index[first]?.count ?? 0) products): \(seconds(clicked))")
+        shot("real-sets-2-set-page")
+        setsSegment(app, "Owned", in: "set-filter").click()
+        let owned = collectSetCells(app)
+        XCTAssertEqual(owned, Set(expected.ownedKeys.map { "set-cell-\($0)" }), "the Owned cells are not the owned targets of the file")
+        app.toolbars.buttons["Back"].firstMatch.click()
+
+        // 3. One `+` on a missing target of the first set that is not complete.
+        let shownIDs = setRows(app).compactMap { Int($0.dropFirst("sets-row-".count)) }
+        let open = try XCTUnwrap(shownIDs.first { id in
+            let parts = text(element(app, "sets-count-\(id)")).split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+            return parts.count == 2 && parts[0] != parts[1]
+        }, "every set shown is complete")
+        let openBefore = text(element(app, "sets-count-\(open)"))
+        let parts = openBefore.split(separator: "/").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        app.buttons["sets-row-\(open)"].click()
+        XCTAssertTrue(waitUntil(timeout: 30) { app.windows.firstMatch.title.hasSuffix(" – \(parts[0]) of \(parts[1])") },
+                      app.windows.firstMatch.title)
+        setsSegment(app, "Missing", in: "set-filter").click()
+        XCTAssertTrue(waitUntil(timeout: 30) { !self.setCellIDs(app).isEmpty }, "no missing cell")
+        let missing = try XCTUnwrap(setCellIDs(app).first)
+        let suffix = String(missing.dropFirst("set-cell-".count))
+        let label = app.buttons[missing].label
+        let name = String(label[..<(try XCTUnwrap(label.range(of: ", missing", options: .backwards))).lowerBound])
+        let key = try printing(suffix)
+        let plus = revealSetControl(app, "set-cell-plus-\(suffix)")
+        XCTAssertEqual(text(element(app, "set-cell-value-\(suffix)")), "0")
+        clicked = Date()
+        setsAdded = (suffix, name, open)
+        plus.click()
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix(" – \(parts[0] + 1) of \(parts[1])") },
+                      app.windows.firstMatch.title)
+        times.append("+ click -> the subtitle's new count: \(seconds(clicked))")
+        XCTAssertTrue(waitUntil { !app.buttons[missing].exists }, "the added target stays under Missing")
+        let added = StoredRow(productID: key.productID, finish: key.finish, count: 1, name: name)
+        var after: [StoredRow] = []
+        XCTAssertTrue(waitUntil {
+            after = (try? self.storedCollection(game: "riftbound")) ?? []
+            return after.contains(added)
+        }, "\(added) is not in the file")
+        XCTAssertEqual(after.filter { $0 != added }, before, "collection differs by more than the added row")
+        XCTAssertEqual(after.count, before.count + 1)
+        try assertOtherListsEqual(initial)
+        shot("real-sets-3-after-plus")
+        app.toolbars.buttons["Back"].firstMatch.click()
+        let openCount = element(app, "sets-count-\(open)")
+        XCTAssertTrue(waitUntil { self.text(openCount) == "\(parts[0] + 1) / \(parts[1])" }, text(openCount))
+
+        // 4. `−` on it again: the collection as before.
+        app.buttons["sets-row-\(open)"].click()
+        XCTAssertTrue(element(app, "set-screen").waitForExistence(timeout: 10), "the set's page did not open")
+        try takeOff(app, suffix: suffix, name: name)
+        XCTAssertTrue(waitUntil { app.windows.firstMatch.title.hasSuffix(" – \(parts[0]) of \(parts[1])") },
+                      app.windows.firstMatch.title)
+        app.toolbars.buttons["Back"].firstMatch.click()
+        XCTAssertTrue(waitUntil { self.text(openCount) == openBefore }, text(openCount))
+        quit(app)
+
+        let final = try XCTUnwrap(storedUserFile(game: "riftbound"))
+        XCTAssertEqual(final["collection"] as? NSArray, initial["collection"] as? NSArray, "collection changed")
+        try assertOtherListsEqual(initial)
+        times.append("riftbound.json: \(bytesBefore) bytes before, \(try Data(contentsOf: file).count) bytes after")
+        let report = times.joined(separator: "\n")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "real-sets-timings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print("RealCollectionTests sets\n\(report)")
+    }
+
+    /// The identifiers of the Sets list's rows, top to bottom.
+    private func setRows(_ app: XCUIApplication) -> [String] {
+        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sets-row-'")))
+    }
+
+    /// The identifiers of a set page's cells in reading order (not their count controls).
+    private func setCellIDs(_ app: XCUIApplication) -> [String] {
+        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
+            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'")))
+    }
+
+    /// A segment of a segmented picker (`sets-scope`, `set-filter`).
+    private func setsSegment(_ app: XCUIApplication, _ title: String, in picker: String) -> XCUIElement {
+        let radio = app.radioButtons[title].firstMatch
+        return radio.exists ? radio : element(app, picker).buttons[title].firstMatch
+    }
+
+    /// Every cell of the set page on screen, scrolled through from the top (a lazy grid makes a cell near the window only).
+    private func collectSetCells(_ app: XCUIApplication) -> Set<String> {
+        let page = element(app, "set-screen")
+        var found = Set<String>()
+        var still = 0
+        for _ in 0..<300 where still < 3 {
+            let seen = setCellIDs(app)
+            let before = found.count
+            found.formUnion(seen)
+            still = found.count == before ? still + 1 : 0
+            page.scroll(byDeltaX: 0, deltaY: -250)
+        }
+        return found
+    }
+
+    /// A set cell's control, scrolled whole into the window and at rest.
+    private func revealSetControl(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        let target = element(app, identifier), page = element(app, "set-screen"), window = app.windows.firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10), "no \(identifier)")
+        for _ in 0..<15 where !window.frame.insetBy(dx: 0, dy: 8).contains(target.frame) {
+            page.scroll(byDeltaX: 0, deltaY: -60)
+        }
+        return settled(target)
+    }
+
+    /// On a set's page: Owned, `name` in the search field, `−` on the cell `suffix` until the file has no row of it.
+    private func takeOff(_ app: XCUIApplication, suffix: String, name: String) throws {
+        setsSegment(app, "Owned", in: "set-filter").click()
+        let field = searchField(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "no search field")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(name)
+        let minus = revealSetControl(app, "set-cell-minus-\(suffix)")
+        XCTAssertEqual(text(element(app, "set-cell-value-\(suffix)")), "1")
+        minus.click()
+        let key = try printing(suffix)
+        XCTAssertTrue(waitUntil {
+            !((try? self.storedCollection(game: "riftbound")) ?? []).contains { $0.productID == key.productID && $0.finish == key.finish }
+        }, "the added row is still in the file")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+        setsAdded = nil
+    }
+
+    /// The teardown of the sets test: when the printing it added is still in the file (a failure between `+` and `−`),
+    /// takes it off through the app (the sandboxed runner cannot write into the root), on the set's page.
+    private func takeOffSetsAdded(root: URL) {
+        guard let added = setsAdded, let key = try? printing(added.suffix),
+              ((try? storedCollection(game: "riftbound")) ?? []).contains(where: {
+                  $0.productID == key.productID && $0.finish == key.finish && $0.count == 1 && $0.name == added.name
+              }) else { return }
+        self.app?.terminate()
+        let running = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "sets"])
+        XCTAssertTrue(waitUntil(timeout: 60) { running.buttons["sets-row-\(added.groupID)"].exists }, "no row of \(added.groupID)")
+        running.buttons["sets-row-\(added.groupID)"].click()
+        XCTAssertTrue(element(running, "set-screen").waitForExistence(timeout: 10), "the set's page did not open")
+        try? takeOff(running, suffix: added.suffix, name: added.name)
+        quit(running)
+    }
+
+    /// The other lists of the running root's Riftbound file equal those of `initial`.
+    private func assertOtherListsEqual(_ initial: [String: Any], file: StaticString = #filePath, line: UInt = #line) throws {
+        let now = try XCTUnwrap(storedUserFile(game: "riftbound"))
+        for list in ["wanted", "forSale", "sold", "decks", "sharing"] {
+            XCTAssertEqual(now[list] as? NSArray, initial[list] as? NSArray, "\(list) changed", file: file, line: line)
+        }
+    }
+
+    /// The set index the app wrote (`{"version": 1, "sets": {"<groupID>": [productID, …]}}`).
+    private func setIndex(_ url: URL) throws -> [Int: [Int]] {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any], url.path)
+        XCTAssertEqual(object["version"] as? Int, 1)
+        let sets = try XCTUnwrap(object["sets"] as? [String: [Int]], url.path)
+        return Dictionary(uniqueKeysWithValues: sets.compactMap { key, value in Int(key).map { ($0, value) } })
+    }
+
+    /// The set's owned targets from the file's rows (F2: a printing key with a count of 1 or more, summed over rows of one
+    /// key; F1 makes each a target) and its total on a root without prices (F1: one Normal target per product, then every
+    /// owned finish that is not Normal). Nil for a set not in the index.
+    private func setNumbers(groupID: Int, index: [Int: [Int]], rows: [StoredRow]) -> (owned: Int, total: Int, ownedKeys: [String])? {
+        guard let products = index[groupID] else { return nil }
+        let inSet = Set(products)
+        var counts: [String: Int] = [:]
+        for row in rows where inSet.contains(row.productID) { counts["\(row.productID)-\(row.finish)", default: 0] += row.count }
+        let ownedKeys = counts.filter { $0.value >= 1 }.keys.sorted()
+        let otherFinishes = ownedKeys.count { !$0.hasSuffix("-Normal") }
+        return (ownedKeys.count, products.count + otherFinishes, ownedKeys)
+    }
+
     // MARK: A deck (phase 3A task 8)
 
     /// The section names of Riftbound's one format (`GameDecks.riftbound`), by id: the deck page's section titles.
