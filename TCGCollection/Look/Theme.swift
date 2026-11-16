@@ -59,6 +59,10 @@ nonisolated enum Theme {
     /// (`1000 / 1000` at 13 pt) and the price of the missing targets (`$12,345.67 + 123 without a price` at 12 pt).
     static let setCountWidth: CGFloat = 96
     static let setCostWidth: CGFloat = 220
+    /// The games-and-roles view (phase 4B): the fixed column of "Player" and of "Collector" (a 13 pt checkbox with its
+    /// title), and the Settings window's width.
+    static let profileRoleWidth: CGFloat = 88
+    static let settingsWidth: CGFloat = 460
     /// A set page's missing target (spec 5.7): its cell's picture and texts are drawn at this opacity. Only there.
     static let fadedOpacity: Double = 0.35
     /// Between two rows of a table.

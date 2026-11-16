@@ -8,6 +8,7 @@ import Observation
 /// - A game of the file is imported only when its collection can change and its catalog is settled with products, now and
 ///   when its comparison was made (`block(game:)`). While its catalog step is still to come or running, every line could
 ///   read as "not in the catalog". While a `prepare` runs, Import is off (`isPreparing`).
+/// - G12: a game that is not followed is not imported (`Block.turnedOff`).
 /// - Import is on only when it would write (`writes`): rows that are only kept write nothing.
 /// - `apply` writes only the comparison that is shown: when the collection changed since it was made, it is made again,
 ///   nothing is written, and the sheet shows the new one (`notice`).
@@ -27,16 +28,23 @@ final class ImportModel: Identifiable {
         case collection(String)
         /// The game's catalog is not ready: the comparison would be wrong, so only the reason is shown.
         case catalog(String)
+        /// G12: the game is not followed (turned off in Settings): only the reason is shown; its catalog is not updated.
+        case turnedOff
 
         var text: String {
             switch self {
             case .collection(let text), .catalog(let text): text
+            case .turnedOff: ImportModel.turnedOff
             }
         }
 
-        /// The comparison is not shown: made on a catalog that is not ready, it would be wrong.
+        /// The comparison is not shown: made on a catalog that is not ready, it would be wrong; a game turned off is not
+        /// imported, and its catalog is not kept up to date.
         var hidesComparison: Bool {
-            if case .catalog = self { true } else { false }
+            switch self {
+            case .collection: false
+            case .catalog, .turnedOff: true
+            }
         }
     }
 
@@ -56,6 +64,7 @@ final class ImportModel: Identifiable {
     nonisolated static let catalogUpdating = "The catalog is being updated. This game can be imported when the update is done."
     nonisolated static let catalogEmpty = "The catalog has no cards of this game yet. Import the file again once it has downloaded."
     nonisolated static let noFolder = "No collection folder is chosen."
+    nonisolated static let turnedOff = "This game is turned off in Settings."
     nonisolated static let collectionChanged = "Your collection changed while this sheet was open. Check the comparison again."
 
     nonisolated static func unreadable(_ reason: String) -> String { "This file could not be read (\(reason))." }
@@ -246,6 +255,9 @@ final class ImportModel: Identifiable {
     /// change while the sheet is open); the catalog must also have been settled, with products of the game, when the
     /// game's comparison was made: a comparison made during a download stays blocked until the next `prepare`.
     func block(game: String) -> Block? {
+        // G12, first: a game turned off is not imported, whatever its file or catalog (read live: Settings can change it
+        // while the sheet is open).
+        if !library.followedGames.contains(game) { return .turnedOff }
         if !library.canChange(game: game) {
             return .collection(library.problem(game: game) ?? (library.folder == nil ? Self.noFolder : "Your collection is not read yet."))
         }

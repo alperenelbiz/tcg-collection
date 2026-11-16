@@ -406,6 +406,27 @@ struct ImportModelTests {
         #expect(try Data(contentsOf: folder.appending(path: "yu-gi-oh.json")) == Data("not json".utf8))
     }
 
+    /// G12: a game that is not followed is not imported: its header says it is turned off, its groups and its unknown
+    /// lines are not shown, and its file is not written. The other games of the file are imported.
+    @Test func aGameThatIsNotFollowedIsNotImported() async throws {
+        let off = #"{"version":1,"collection":[],"profile":{"followed":false}}"#
+        let (library, folder) = try await library(extra: ["yu-gi-oh.json": off])
+        let model = importing(try fixture("collection-mixed.csv"), library: library, reader: try await catalog())
+        await model.prepare()
+        #expect(model.comparisons.map(\.gameID) == ["yu-gi-oh", "riftbound"])
+        let block = try #require(model.block(game: "yu-gi-oh"))
+        #expect(block == .turnedOff)
+        #expect(block.text == "This game is turned off in Settings.")
+        #expect(block.hidesComparison)
+        #expect(model.block(game: "riftbound") == nil)
+        #expect(model.notImported.map(\.name) == ["Pikachu"])
+        #expect(model.summary == "1 new, 1 changed, 1 not in the file (kept)")
+        #expect(model.apply() == ImportModel.Applied(gameID: "riftbound", games: ["riftbound"], summary: "1 new, 1 changed, 1 not in the file (kept)"))
+        await library.flush()
+        #expect(try Data(contentsOf: folder.appending(path: "yu-gi-oh.json")) == Data(off.utf8))
+        #expect(library.rows(game: "yu-gi-oh").isEmpty)
+    }
+
     /// A file that could not be read at all: one sentence, nothing else.
     @Test func anUnreadableFileFails() async throws {
         let (library, _) = try await library()

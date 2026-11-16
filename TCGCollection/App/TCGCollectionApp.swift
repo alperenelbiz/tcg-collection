@@ -87,6 +87,24 @@ struct TCGCollectionApp: App {
                     .disabled(model == nil)
             }
         }
+        #if os(macOS)
+        // G10: the Settings window (Cmd+,), one pane "Games" (the window's title stays "Settings"). The system draws the
+        // selected pane's tab in the app's accent (`AccentColor`); a `.tint` here does not reach it. No model yet (the
+        // unit tests' host): nothing. Not resizable: the pane has a fixed width and its own height.
+        Settings {
+            if let model {
+                TabView {
+                    Tab("Games", systemImage: "square.stack") {
+                        GamesSettingsPane()
+                            .navigationTitle("Settings")
+                    }
+                }
+                .environment(model)
+                .preferredColorScheme(.dark)
+            }
+        }
+        .windowResizability(.contentSize)
+        #endif
     }
 
     #if DEBUG
