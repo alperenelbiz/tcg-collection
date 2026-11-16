@@ -192,6 +192,19 @@ struct PriceChartTests {
         #expect(PriceChart(points: [point("2026-11-01", .nan)], window: window).note == "No price in the last 90 days.")
     }
 
+    /// A point above `PriceHistory.maxAmount` is left out: the chart does not trap on it (an `Int` of its cents would).
+    @Test func aPointAboveTheBoundIsLeftOutWithoutATrap() {
+        let huge = chart([point("2026-11-03", 1e17), point("2026-11-04", 2), point("2026-11-05", 3)])
+        #expect(huge.runs == [PriceChart.Run(points: [chartPoint("2026-11-04", 2), chartPoint("2026-11-05", 3)],
+                                             isLow: false)])
+        #expect(huge.dots.isEmpty)
+        #expect(huge.yTicks.count == 3)
+        #expect(huge.summary == ChartSummary(price: "$3.00", change: "+$1.00 in 2 days"))
+        #expect(PriceChart(points: [point("2026-11-01", 1e17)], window: window).note == "No price in the last 90 days.")
+        let atTheBound = chart([point("2026-11-04", PriceHistory.maxAmount)])
+        #expect(atTheBound.dots == [chartPoint("2026-11-04", PriceHistory.maxAmount)])
+    }
+
     @Test func aChangeUnderACentIsNoChange() {
         let chart = chart([point("2026-11-01", 0.1), point("2026-11-02", 0.1 + 0.2 - 0.2)])
         #expect(chart.summary?.change == "no change in 2 days")

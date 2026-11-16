@@ -214,12 +214,13 @@ struct AppModelHistoryTests {
         #expect(try stored(root).has(productID: Self.dockside))
     }
 
-    /// H9, A42: a printing no longer tracked stays in memory and in the file (no write for a removal alone) and leaves at
-    /// the next write.
-    @Test(.timeLimit(.minutes(1))) func aPrintingNoLongerTrackedStaysUntilTheNextWrite() async throws {
+    /// H9, A42: a printing no longer tracked stays in memory and in the file (no write for a removal alone), stays through
+    /// a write that adds only a product (final fix M1), and leaves at the next write that adds a day.
+    @Test(.timeLimit(.minutes(1))) func aPrintingNoLongerTrackedStaysUntilAWriteAddsADay() async throws {
         let root = tempRoot()
         try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside, Self.kaisa])])
-        let model = try await offlineModel(root)
+        var now = Self.day1
+        let model = try await offlineModel(root, now: { now })
         await model.start()
         await model.waitForHistory()
         let bytes = try Data(contentsOf: historyURL(root))
@@ -229,7 +230,15 @@ struct AppModelHistoryTests {
         #expect(model.historyState(game: "riftbound", productID: Self.kaisa) == .ready)
         model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.pack, finish: "Normal"), name: "Pack")
         await model.waitForHistory()
-        let history = try stored(root)
+        var history = try stored(root)
+        #expect(history.products.keys.sorted() == [Self.pack, Self.dockside, Self.kaisa])
+        #expect(model.history(game: "riftbound") == history)
+        now = Self.day2
+        try placeArchives(model, ["2026-01-03"])
+        model.library.setCount(2, game: "riftbound", key: PrintingKey(productID: Self.pack, finish: "Normal"), name: "Pack")
+        await model.waitForHistory()
+        history = try stored(root)
+        #expect(history.days.last == "2026-01-03")
         #expect(history.products.keys.sorted() == [Self.pack, Self.dockside])
         #expect(model.historyState(game: "riftbound", productID: Self.kaisa) == .notTracked)
         #expect(model.history(game: "riftbound") == history)
@@ -405,13 +414,14 @@ struct AppModelHistoryTests {
         #expect(model.history(game: "riftbound") == nil)
     }
 
-    /// G7, H6: without the player role the decks' cards are not tracked: the printing stays until the next write and
-    /// leaves at it.
+    /// G7, H6: without the player role the decks' cards are not tracked: the printing stays until a write that adds a day
+    /// (a write that adds only a product keeps it: final fix M1) and leaves at it.
     @Test(.timeLimit(.minutes(1))) func thePlayerRoleOffStopsTrackingDeckCards() async throws {
         let root = tempRoot()
         let deck = #","decks":[{"id":"rb1","name":"Wind","format":"standard","active":true,"cards":[{"cardKey":"\#(Self.docksideKey)","name":"Dockside Lock-Up","section":"main","count":2}]}]"#
         try write(root, ["riftbound": Self.gameFile(extra: deck)])
-        let model = try await offlineModel(root)
+        var now = Self.day1
+        let model = try await offlineModel(root, now: { now })
         await model.start()
         await model.waitForHistory()
         #expect(try stored(root).has(productID: Self.dockside))
@@ -421,6 +431,12 @@ struct AppModelHistoryTests {
         #expect(try stored(root).has(productID: Self.dockside))               // a removal alone writes nothing
         model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
         await model.waitForHistory()
+        #expect(try stored(root).products.keys.sorted() == [Self.dockside, Self.kaisa])  // a new product alone keeps it
+        now = Self.day2
+        try placeArchives(model, ["2026-01-03"])
+        model.library.setCount(2, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
+        await model.waitForHistory()
+        #expect(try stored(root).days.last == "2026-01-03")
         #expect(try stored(root).products.keys.sorted() == [Self.kaisa])
         #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
     }

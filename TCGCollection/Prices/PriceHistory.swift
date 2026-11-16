@@ -23,6 +23,9 @@ nonisolated enum PriceHistoryError: Error, Equatable {
 /// product read with no price keeps its entry (`{}`), so it counts as read.
 nonisolated struct PriceHistory: Sendable, Equatable {
     static let version = 1
+    /// The largest amount a history holds (final fix M2): a larger one, or one that is not finite or not over 0, is no
+    /// price for that day, so the chart's cents always fit an `Int`.
+    static let maxAmount: Double = 1_000_000_000
 
     var days: [String]
     /// Product id → finish → one shown price per day of `days` (nil: no price that day).
@@ -62,6 +65,9 @@ nonisolated struct PriceHistory: Sendable, Equatable {
         self.products = products
     }
 
+    /// Whether an amount counts as a price: finite, over 0 and at most `maxAmount`.
+    static func isPrice(_ amount: Double) -> Bool { amount.isFinite && amount > 0 && amount <= maxAmount }
+
     /// One finish's prices, or nil when it does not fit: `prices` of another length than `days`, an element that is not a
     /// number or null, a `low` that is not a list of day indexes in range.
     private static func prices(_ value: Any, dayCount: Int) -> [ShownPrice?]? {
@@ -82,7 +88,7 @@ nonisolated struct PriceHistory: Sendable, Equatable {
             if element is NSNull {
                 prices.append(nil)
             } else if let amount = GameUserFile.number(element) {
-                prices.append(ShownPrice(amount: amount, isLow: low.contains(index)))
+                prices.append(isPrice(amount) ? ShownPrice(amount: amount, isLow: low.contains(index)) : nil)
             } else {
                 return nil
             }
@@ -131,7 +137,8 @@ nonisolated struct PriceHistory: Sendable, Equatable {
 
     /// Sets `day` for `products` from that day's rows: the day is added in order when new (every other array gets nil
     /// there); each named product gets its entry, also with no row, so it counts as read; its finishes take the rows'
-    /// prices for that day (nil where a finish has none). Products not named keep what they had.
+    /// prices for that day (nil where a finish has none, or its amount is not a price: `isPrice`). Products not named keep
+    /// what they had.
     mutating func setDay(_ day: String, rows: [Int: [String: ShownPrice]], for named: Set<Int>) {
         let index: Int
         if let known = days.firstIndex(of: day) {
@@ -149,7 +156,7 @@ nonisolated struct PriceHistory: Sendable, Equatable {
         }
         for productID in named {
             var finishes = products[productID] ?? [:]
-            let dayRows = rows[productID] ?? [:]
+            let dayRows = (rows[productID] ?? [:]).filter { Self.isPrice($0.value.amount) }
             for finish in Array(finishes.keys) { finishes[finish]![index] = dayRows[finish] }
             for (finish, price) in dayRows where finishes[finish] == nil {
                 var prices = [ShownPrice?](repeating: nil, count: days.count)

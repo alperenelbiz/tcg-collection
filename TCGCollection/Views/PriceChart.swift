@@ -65,7 +65,8 @@ nonisolated struct PriceChart: Equatable, Sendable {
 
     init(points: [HistoryPoint], window: ClosedRange<String>) {
         var byDay: [String: HistoryPoint] = [:]
-        for point in points where window.contains(point.day) && point.amount.isFinite && point.amount >= 0 { byDay[point.day] = byDay[point.day] ?? point }
+        for point in points where window.contains(point.day) && point.amount.isFinite && point.amount >= 0
+            && point.amount <= PriceHistory.maxAmount { byDay[point.day] = byDay[point.day] ?? point }
         let entries = byDay.values.sorted { $0.day < $1.day }.compactMap { point -> Entry? in
             guard let date = Self.noon(point.day) else { return nil }
             return Entry(day: point.day, date: date, amount: point.amount, isLow: point.isLow)

@@ -78,6 +78,35 @@ struct PriceHistoryTests {
         ])
     }
 
+    /// An amount counts only when it is finite, over 0 and at most `PriceHistory.maxAmount`; any other number is no price
+    /// for that day, and the rest of the entry is kept. A finish left with no price goes; its product keeps its entry.
+    @Test func anAmountOutOfBoundsReadsAsNoPriceAndTheRestIsKept() throws {
+        let json = #"{"days":["2026-11-10","2026-11-11","2026-11-12","2026-11-13","2026-11-14"],"products":{"#
+            + #""7":{"Normal":{"low":[0,3],"prices":[1e17,0,-3,2,1000000000]},"Foil":{"prices":[1e17,0,-3,null,1e300]}},"#
+            + #""8":{"Normal":{"prices":[5,null,null,null,1000000000.01]}}"#
+            + #"},"version":1}"#
+        let history = try read(json)
+        #expect(PriceHistory.maxAmount == 1_000_000_000)
+        #expect(history.days.count == 5)
+        #expect(history.products == [
+            7: ["Normal": [nil, nil, nil, price(2, low: true), price(1_000_000_000)]],
+            8: ["Normal": [price(5), nil, nil, nil, nil]],
+        ])
+        let none = try read(#"{"days":["2026-11-10"],"products":{"9":{"Normal":{"prices":[1e17]}}},"version":1}"#)
+        #expect(none.has(productID: 9))
+        #expect(none.products[9] == [:])
+    }
+
+    /// `setDay` stores only amounts within the bound: any other is no price for that day.
+    @Test func settingADayStoresOnlyAmountsWithinTheBound() {
+        var history = PriceHistory()
+        history.setDay("2026-11-11", rows: [7: ["Normal": price(1e17), "Foil": price(3), "Etched": price(0),
+                                                "Gilded": price(-1), "Galaxy": price(.infinity)]], for: [7, 8])
+        #expect(history.products == [7: ["Foil": [price(3)]], 8: [:]])
+        history.setDay("2026-11-12", rows: [7: ["Foil": price(1e17)]], for: [7])
+        #expect(history.products[7] == ["Foil": [price(3), nil]])
+    }
+
     @Test func settingADayInsertsItInOrderAndPadsTheOthers() {
         var history = PriceHistory(days: ["2026-11-11", "2026-11-12"],
                                    products: [7: ["Normal": [price(1), price(2)]], 8: ["Foil": [nil, price(5)]]])

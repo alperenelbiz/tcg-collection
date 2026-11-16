@@ -13,8 +13,9 @@ nonisolated enum HistoryPass {
     }
 
     struct Result: Sendable {
-        /// Each game's history after the pass: with the new days and products, then trimmed to the window and its tracked
-        /// printings. A game whose plan was empty is as it went in (no entry when it went in with none).
+        /// Each game's history after the pass: with the new days and products, then trimmed to the window, and to its
+        /// tracked printings only when the pass added a day to it. A game whose plan was empty is as it went in (no entry
+        /// when it went in with none).
         var histories: [String: PriceHistory]
         /// The days whose archive could not be read, in this pass or before it in this run (the `failedDays` passed in):
         /// they are not tried again in this run (H8). A day a cancelled pass did not read is not one.
@@ -100,7 +101,13 @@ nonisolated enum HistoryPass {
                 }
             }
             for productID in unfinished { histories[game.id]?.products[productID] = nil }
-            histories[game.id] = histories[game.id]?.trimmed(window: window, keeping: game.tracked)
+            // Products not tracked leave only when the pass added a day to the game (A42): a pass that only added products
+            // keeps every product the history had. Days out of the window always go.
+            guard let history = histories[game.id] else { continue }
+            let oldDays = Set(game.history?.days ?? [])
+            let addedDay = history.days.contains { !oldDays.contains($0) }
+            histories[game.id] = history.trimmed(window: window,
+                                                 keeping: addedDay ? game.tracked : Set(history.products.keys))
         }
         return Result(histories: histories, failedDays: failed)
     }

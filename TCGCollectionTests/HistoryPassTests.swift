@@ -210,6 +210,40 @@ struct HistoryPassTests {
         #expect(history.points(productID: Self.card, finish: "Normal").map(\.amount) == [1, 5.12])
     }
 
+    /// A42, M1: a pass that adds a product and no day keeps every product the history had, tracked or not (two devices
+    /// with other catalogs must not drop each other's printings); days out of the window still go. Its new product makes
+    /// it a write (H9).
+    @Test func aPassThatOnlyAddsAProductKeepsUntrackedProducts() async throws {
+        let dir = try archives(["2026-01-02"])
+        let old = PriceHistory(days: ["2025-11-30", "2026-01-02"],
+                               products: [Self.card: ["Normal": [nil, ShownPrice(amount: 5.12, isLow: false)]],
+                                          99: ["Normal": [ShownPrice(amount: 1, isLow: false), ShownPrice(amount: 2, isLow: false)]]])
+        let reads = Reads()
+        let result = await HistoryPass.run(games: [game(old, tracked: [Self.card, 711362])], archives: dir,
+                                           window: Self.window, failedDays: [], read: reads.read)
+        #expect(reads.names == ["prices-2026-01-02.ppmd.7z"])
+        let history = try #require(result.histories["riftbound"])
+        #expect(history.days == ["2026-01-02"])
+        #expect(history.products.keys.sorted() == [99, 711362, Self.card])
+        #expect(history.points(productID: 99, finish: "Normal") == [HistoryPoint(day: "2026-01-02", amount: 2, isLow: false)])
+        #expect(HistoryPlan.writes(old: old, new: history))
+    }
+
+    /// A42: a pass that adds a day to the game's `days` drops the products that are not tracked (and the days out of the
+    /// window).
+    @Test func aPassThatAddsADayDropsUntrackedProducts() async throws {
+        let dir = try archives(["2026-01-02", "2026-01-03"])
+        let old = PriceHistory(days: ["2025-11-30", "2026-01-02"],
+                               products: [Self.card: ["Normal": [nil, ShownPrice(amount: 5.12, isLow: false)]],
+                                          99: ["Normal": [ShownPrice(amount: 1, isLow: false), ShownPrice(amount: 2, isLow: false)]]])
+        let result = await HistoryPass.run(games: [game(old)], archives: dir, window: Self.window, failedDays: [])
+        let history = try #require(result.histories["riftbound"])
+        #expect(history.days == ["2026-01-02", "2026-01-03"])
+        #expect(history.products.keys.sorted() == [Self.card])
+        #expect(history.points(productID: Self.card, finish: "Normal").map(\.amount) == [5.12, 5.12])
+        #expect(HistoryPlan.writes(old: old, new: history))
+    }
+
     /// A day whose archive failed counts as attempted: a new product is kept with the readable days (else an archive
     /// that is corrupt for good would make every pass read every archive again).
     @Test func aFailedDayDoesNotDropANewProduct() async throws {
