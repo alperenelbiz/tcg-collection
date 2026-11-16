@@ -16,8 +16,9 @@ nonisolated struct DeckUse: Sendable, Equatable {
 /// - `users`: the active decks with a use over 0, in deck order.
 /// - `owned`: copies over all the card's printings.
 /// - `answer`: the stored sharing answer (true: shared), nil when none.
-/// - `sum`: the users' use summed. `need`: the largest use when the card is in conflict and shared, else `sum` (E3: an
-///   answer on a card not in conflict changes no number). `fromDecks`: `max(0, need − owned)`; 0 for a basic card.
+/// - `sum`: the users' use summed. `need` (E2): the largest use whenever the answer is "shared", else `sum`.
+///   `fromDecks`: `max(0, need − owned)`; 0 for a basic card. On a card not in conflict an answer changes `need` only:
+///   `fromDecks` and every deck's `got` are the same for every answer (E3).
 /// - `inConflict`: not basic, 2 or more users, `sum` over `owned`. `pending`: in conflict without an answer.
 nonisolated struct CardNeed: Sendable, Equatable {
     let cardKey: String
@@ -66,7 +67,7 @@ nonisolated enum DeckNeeds {
             let uses = entries.map(\.line.use)
             let sum = uses.reduce(0, +)
             let inConflict = !basic && entries.count >= 2 && sum > have
-            let need = inConflict && answer == true ? (uses.max() ?? 0) : sum
+            let need = answer == true ? (uses.max() ?? 0) : sum
             let gots = got(uses: uses, owned: have, shared: answer == true, isBasic: basic)
             let users = zip(entries, gots).map { entry, got in
                 DeckUse(deckID: entry.deck.id, deckName: entry.deck.name, use: entry.line.use, got: got,
@@ -95,7 +96,8 @@ nonisolated enum DeckNeeds {
     }
 
     /// The copies a deck may count as owned, per card key (E4): for an active deck from `needs`; for a deck that is not
-    /// active, all owned copies. Only the cards the deck uses (a count over 0) are keys.
+    /// active, all owned copies. Only the cards the deck uses (a count over 0) are keys. An active deck that `needs` does
+    /// not list as a user of a card (`needs` made from another deck list) also gets all owned copies of it.
     static func available(to deck: Deck, needs: [String: CardNeed], owned: (String) -> Int) -> [String: Int] {
         let keys = Set(deck.cards.filter { $0.count > 0 }.map(\.cardKey))
         return Dictionary(uniqueKeysWithValues: keys.map { key in

@@ -88,7 +88,11 @@ struct DeckNeedsTests {
             #expect(!n.inConflict)
             #expect(!n.pending)
             #expect(n.fromDecks == 0)
-            #expect(n.need == plain.need)       // E3: an answer on a card not in conflict changes no number
+            #expect(n.need == (answer == true ? 2 : 3))     // E2: the largest use whenever the answer is shared
+            // E3: an answer on a card not in conflict changes no number the user sees
+            #expect(n.fromDecks == plain.fromDecks)
+            #expect(n.users.map(\.got) == plain.users.map(\.got))
+            #expect(n.users.map(\.got) == [2, 1])
             #expect(n.users == plain.users)
             checkSum(n)
         }
