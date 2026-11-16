@@ -20,7 +20,7 @@ struct PriceHistoryView: View {
     @Environment(AppModel.self) private var model
     /// The finish the user picked; nil until a click (then the first choice of A38 applies).
     @State private var picked: String?
-    /// The day under the pointer, while it is over the plot.
+    /// The nearest day with a price to the pointer, while it is over the plot (iOS: the selected day).
     @State private var pointer: Date?
 
     init(gameID: String, productID: Int, finishes: [String], owned: [String: Int], cardKey: String? = nil) {
@@ -44,11 +44,14 @@ struct PriceHistoryView: View {
         let chart = chart(state: state)
         let note = chart == nil ? PriceChart.note(for: state) : chart?.note
         VStack(alignment: .leading, spacing: Theme.lineGap) {
-            heading
+            // The control only while the finish decides what the block shows: a chart or its per-finish sentence.
+            heading(control: chart != nil, spoken: chart?.summary == nil)
             if let chart, let summary = chart.summary {
                 summaryLine(chart: chart, summary: summary)
                     .padding(.bottom, 8)
+                    .accessibilitySortPriority(1)
                 plot(chart)
+                    .accessibilitySortPriority(2)
             } else {
                 frame(note: note)
                     .padding(.top, 4)
@@ -56,33 +59,68 @@ struct PriceHistoryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(spoken(chart: chart, note: note))
         .accessibilityIdentifier("price-history")
+        // A38: the first choice is taken once, when the page's counts are known, and kept for this printing (the page
+        // gives each printing its own block): a `+` on another finish does not switch the chart by itself.
+        .onChange(of: state != .unknown, initial: true) { _, known in
+            if known, picked == nil { picked = PriceChart.firstFinish(offered: finishes, owned: owned) }
+        }
     }
 
     // MARK: Parts
 
-    private var heading: some View {
-        HStack(spacing: 8) {
-            Text("Price history")
-                .font(Theme.labelFont)
-                .foregroundStyle(Theme.muted)
-            Spacer(minLength: 8)
-            if finishes.count > 1, let finish {
-                Picker("Finish", selection: Binding(get: { finish }, set: { picked = $0 })) {
-                    ForEach(finishes, id: \.self) { Text($0).tag($0) }
+    /// "Price history" and, with `control`, the finish control: beside the heading when the row fits the column, else
+    /// under it, else as a menu. A form that does not fit is never drawn, so the column (and the window) keeps its width.
+    /// With a chart the heading is not read by VoiceOver: the plot's label begins with it.
+    @ViewBuilder private func heading(control: Bool, spoken: Bool) -> some View {
+        let title = Text("Price history")
+            .font(Theme.labelFont)
+            .foregroundStyle(Theme.muted)
+            .accessibilityHidden(!spoken)
+        Group {
+            if control, finishes.count > 1, let finish {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        title
+                        Spacer(minLength: 8)
+                        finishPicker(finish, style: .segmented)
+                    }
+                    VStack(alignment: .leading, spacing: Theme.lineGap) {
+                        title
+                        finishPicker(finish, style: .segmented)
+                    }
+                    HStack(spacing: 8) {
+                        title
+                        Spacer(minLength: 8)
+                        finishPicker(finish, style: .menu)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                // Not the accent (the selection mark of the sidebar and a sheet's default button only).
-                .tint(Theme.faint)
-                .fixedSize()
-                .accessibilityIdentifier("price-history-finish")
+            } else {
+                title.frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        // The control keeps its height whether it is there or not, so the block does not move between printings.
+        // The control keeps the row's height whether it is there or not, so the block does not move between printings.
         .frame(minHeight: 22)
+    }
+
+    private enum PickerForm { case segmented, menu }
+
+    @ViewBuilder private func finishPicker(_ finish: String, style: PickerForm) -> some View {
+        let picker = Picker("Finish", selection: Binding(get: { finish }, set: { picked = $0 })) {
+            ForEach(finishes, id: \.self) { Text($0).tag($0) }
+        }
+        Group {
+            switch style {
+            case .segmented: picker.pickerStyle(.segmented)
+            case .menu: picker.pickerStyle(.menu)
+            }
+        }
+        .labelsHidden()
+        .controlSize(.small)
+        // Not the accent (the selection mark of the sidebar and a sheet's default button only).
+        .tint(Theme.faint)
+        .fixedSize()
+        .accessibilityIdentifier("price-history-finish")
     }
 
     /// The last price, then the change in `muted`; while the pointer is over the plot, that day instead.
@@ -121,7 +159,8 @@ struct PriceHistoryView: View {
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(note ?? "Price history")
+            .accessibilityLabel(note ?? "")
+            .accessibilityHidden(note == nil)
             .accessibilityIdentifier(note == nil ? "" : "price-history-note", isEnabled: note != nil)
     }
 
@@ -184,11 +223,15 @@ struct PriceHistoryView: View {
                     .onContinuousHover { phase in
                         switch phase {
                         case .active(let location):
-                            guard let anchor = proxy.plotFrame else { return }
-                            let x = location.x - geometry[anchor].origin.x
-                            pointer = proxy.value(atX: x, as: Date.self)
+                            guard let anchor = proxy.plotFrame,
+                                  let date = proxy.value(atX: location.x - geometry[anchor].origin.x, as: Date.self)
+                            else { return }
+                            // The nearest day with a price: written only when it changes, so the block is not drawn
+                            // again for every point the pointer crosses.
+                            let day = chart.nearest(to: date)?.date
+                            if day != pointer { pointer = day }
                         case .ended:
-                            pointer = nil
+                            if pointer != nil { pointer = nil }
                         }
                     }
             }
@@ -197,8 +240,10 @@ struct PriceHistoryView: View {
         .chartXSelection(value: $pointer)
         #endif
         .frame(height: Theme.chartHeight)
+        // A plot replaced by a state's frame under the pointer gets no `.ended`: its readout must not come back with it.
+        .onDisappear { pointer = nil }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spoken(chart: chart, note: nil))
+        .accessibilityLabel(spoken)
         .accessibilityIdentifier("price-history-chart")
     }
 
@@ -209,12 +254,10 @@ struct PriceHistoryView: View {
             .monospacedDigit()
     }
 
-    /// What VoiceOver reads for the block: "Price history, Normal, $12.40, +$1.20 in 90 days", or the state's sentence.
-    private func spoken(chart: PriceChart?, note: String?) -> String {
-        if let summary = chart?.summary {
-            return ["Price history", finish, summary.price, summary.change].compactMap { $0 }.joined(separator: ", ")
-        }
-        return ["Price history", note].compactMap { $0 }.joined(separator: ", ")
+    /// The plot's label for VoiceOver, read before the summary line (sort priority): "Price history, Normal", then the
+    /// summary reads "$12.40  +$1.20 in 90 days" (or the day under the pointer). The heading is not read beside a chart.
+    private var spoken: String {
+        ["Price history", finish].compactMap { $0 }.joined(separator: ", ")
     }
 
     /// The chart of the shown finish, for a ready history; nil in every other state.

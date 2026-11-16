@@ -259,8 +259,9 @@ class UITestCase: XCTestCase {
 
     // MARK: Price history (phase 5A)
 
-    /// The archive day the app's history window ends on (`PriceDay.wanted(now:)`): yesterday (UTC) until 20:30 UTC, then
-    /// today. The UI test target cannot import the app module, so the rule is written here again.
+    /// The archive day the app's history window ends on: yesterday (UTC) until 20:30 UTC, then today. A copy of
+    /// `PriceDay.wanted(now:)` (`TCGCollection/Prices/PriceSync.swift`): the UI test target cannot import the app module.
+    /// A test takes it once and passes it to the writer and to its assertions (`writeHistory(…endingOn:)`).
     static func wantedDay(now: Date = Date()) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -301,18 +302,18 @@ class UITestCase: XCTestCase {
     }
 
     /// Writes `<root>/user/<game>.prices.json` of the running test's root before the launch, in the app's form
-    /// (`PriceHistory.data()`): one finish of one product, one price per day, the last on `wantedDay()` and the others on
-    /// the days before it.
-    func writeHistory(game: String, productID: Int, finish: String, prices: [Double]) throws {
-        try writeHistory(game: game, productID: productID, finishes: [finish: prices])
+    /// (`PriceHistory.data()`): one finish of one product, one price per day, the last on `day` (the test's
+    /// `wantedDay()`) and the others on the days before it.
+    func writeHistory(game: String, productID: Int, finish: String, prices: [Double], endingOn day: String) throws {
+        try writeHistory(game: game, productID: productID, finishes: [finish: prices], endingOn: day)
     }
 
     /// As `writeHistory(game:productID:finish:prices:)`, with several finishes of one product; every list is as long as
     /// the longest (shorter ones are padded with no price at the start). `low` names, per finish, the indexes (in that
     /// finish's own list) whose price is the low price.
-    func writeHistory(game: String, productID: Int, finishes: [String: [Double]], low: [String: [Int]] = [:]) throws {
+    func writeHistory(game: String, productID: Int, finishes: [String: [Double]], low: [String: [Int]] = [:],
+                      endingOn last: String) throws {
         let count = finishes.values.map(\.count).max() ?? 0
-        let last = Self.wantedDay()
         let days = (0..<count).map { Self.day(last, movedBy: $0 - (count - 1)) }
         var raw: [String: Any] = [:]
         for (finish, prices) in finishes {

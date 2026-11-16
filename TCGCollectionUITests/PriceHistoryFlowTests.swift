@@ -1,7 +1,8 @@
 import XCTest
 
 /// The price chart on the card page (phase 5A task 6: A38–A41, H3, H16). The history file is written into the fresh root
-/// before the launch (`writeHistory`), its days counted back from the day the app's window ends on (`wantedDay()`).
+/// before the launch (`writeHistory`), its days counted back from the day the app's window ends on (`wantedDay()`, taken
+/// once per test and passed to the writer and the assertions).
 /// Tests that must not depend on the fixture archive write their own price files (`writePinPrices`, a price day far ahead:
 /// no archive is downloaded, so a pass adds no day and writes nothing). Yu-Gi-Oh!'s 719834 (Swiftwind Panther Warrior,
 /// Super Rare) has two finish lines there, 1st Edition and Unlimited; 719835 (Starlight Rare) has one.
@@ -11,11 +12,13 @@ final class PriceHistoryFlowTests: UITestCase {
 
     func testTheChartOfAnOwnedPrinting() throws {
         let prices = (0..<30).map { Double(1000 + 10 * $0) / 100 }    // $10.00 … $12.90
+        let day = Self.wantedDay()
         let app = try launch(game: "yu-gi-oh") { root in
             try self.writePinPrices(in: root)
             try self.writeCollection([StoredRow(productID: Self.panther, finish: "1st Edition", count: 1,
                                                 name: "Swiftwind Panther Warrior")], game: "yu-gi-oh", in: root)
-            try self.writeHistory(game: "yu-gi-oh", productID: Self.panther, finish: "1st Edition", prices: prices)
+            try self.writeHistory(game: "yu-gi-oh", productID: Self.panther, finish: "1st Edition", prices: prices,
+                                  endingOn: day)
         }
         openCard(app, "swiftwind panther warrior", product: Self.panther)
         let chart = element(app, "price-history-chart")
@@ -32,7 +35,8 @@ final class PriceHistoryFlowTests: UITestCase {
         XCTAssertGreaterThanOrEqual(block.frame.minY, element(app, "wanted-plus").frame.maxY)
         XCTAssertGreaterThanOrEqual(block.frame.minY, element(app, "card-add-to-deck").frame.maxY)
         let rules = element(app, "card-rules-text")
-        if rules.exists { XCTAssertLessThanOrEqual(block.frame.maxY, rules.frame.minY) }
+        XCTAssertTrue(rules.exists, "the fixture card has no rules text")
+        XCTAssertLessThanOrEqual(block.frame.maxY, rules.frame.minY)
         XCTAssertEqual(app.windows.firstMatch.frame.width, 900, "the window grew")
 
         let page = element(app, "card-page")
@@ -48,13 +52,14 @@ final class PriceHistoryFlowTests: UITestCase {
     }
 
     func testTheFinishControlSwitchesTheSeries() throws {
+        let day = Self.wantedDay()
         let app = try launch(game: "yu-gi-oh") { root in
             try self.writePinPrices(in: root)
             try self.writeCollection([StoredRow(productID: Self.panther, finish: "Unlimited", count: 1,
                                                 name: "Swiftwind Panther Warrior")], game: "yu-gi-oh", in: root)
             try self.writeHistory(game: "yu-gi-oh", productID: Self.panther,
                                   finishes: ["1st Edition": [14, 14.5], "Unlimited": [8, 9, 9.5, 9]],
-                                  low: ["Unlimited": [2]])                // one low day: two dashed segments
+                                  low: ["Unlimited": [2]], endingOn: day) // one low day: two dashed segments
         }
         openCard(app, "swiftwind panther warrior", product: Self.panther)
         let summary = element(app, "price-history-summary")
@@ -67,7 +72,7 @@ final class PriceHistoryFlowTests: UITestCase {
         let first = app.radioButtons["1st Edition"]
         XCTAssertTrue(waitUntil { first.isHittable }, "the control is not on screen")
         shot("history-03-unlimited")
-        first.click()
+        settled(first).click()
         XCTAssertTrue(waitUntil { self.text(summary) == "$14.50  +$0.50 in 2 days" }, shown(summary))
         shot("history-04-first-edition")
 
@@ -75,7 +80,7 @@ final class PriceHistoryFlowTests: UITestCase {
         let row = element(app, "printing-row-\(Self.starlight)")
         page.scroll(byDeltaX: 0, deltaY: -2000)
         XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen")
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        settled(row).coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
         XCTAssertTrue(waitUntil { self.text(self.element(app, "card-facts-line")).contains("Starlight Rare") })
         let note = element(app, "price-history-note")
         XCTAssertTrue(waitUntil { note.exists && self.text(note) == Self.notTracked }, shown(note))
@@ -84,11 +89,14 @@ final class PriceHistoryFlowTests: UITestCase {
     }
 
     func testACardThatIsNotTrackedSaysSo() throws {
+        let day = Self.wantedDay()
         let app = launch(game: "riftbound")
         let note = element(app, "price-history-note")
         openCard(app, "dockside lock up")
         XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == Self.notTracked }, shown(note))
         XCTAssertFalse(element(app, "price-history-chart").exists)
+        // Two finish lines, but no chart depends on the finish yet: no control.
+        XCTAssertFalse(element(app, "price-history-finish").exists, "a control above a state's sentence")
         let page = element(app, "card-page")
         page.scroll(byDeltaX: 0, deltaY: -260)
         XCTAssertTrue(waitUntil { note.isHittable }, "the note is not on screen")
@@ -98,9 +106,11 @@ final class PriceHistoryFlowTests: UITestCase {
         page.scroll(byDeltaX: 0, deltaY: 2000)
         let plus = element(app, "count-plus-Normal")
         XCTAssertTrue(waitUntil { plus.isHittable }, "the owned control is not on screen")
-        plus.click()
-        let starts = "Price history starts on \(Self.dayLabel(Self.wantedDay()))."
+        settled(plus).click()
+        let starts = "Price history starts on \(Self.dayLabel(day))."
         XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == starts }, shown(note))
+        // The sentence is the shown finish's: the control is there now.
+        XCTAssertTrue(element(app, "price-history-finish").exists, "no control above a per-finish sentence")
         page.scroll(byDeltaX: 0, deltaY: -260)
         XCTAssertTrue(waitUntil { note.isHittable })
         shot("history-06-one-day")
@@ -127,6 +137,7 @@ final class PriceHistoryFlowTests: UITestCase {
     }
 
     func testTheFirstLaunchWritesOnlyTheHistoryFile() throws {
+        let day = Self.wantedDay()
         var folder: URL?
         var before: [String: Data] = [:]
         let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
@@ -145,8 +156,60 @@ final class PriceHistoryFlowTests: UITestCase {
         let written = try XCTUnwrap(after.removeValue(forKey: "riftbound.prices.json"))
         XCTAssertEqual(after, before, "a file of the folder changed, or another one appeared")
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
-        XCTAssertEqual(object["days"] as? [String], [Self.wantedDay()])
+        XCTAssertEqual(object["days"] as? [String], [day])
         XCTAssertNotNil((object["products"] as? [String: Any])?[String(Self.dockside)])
+    }
+
+    /// Review 1, finding 1: three finish lines, one of them long ("1st Edition Holofoil", 113 pt): the control takes a form
+    /// that fits the 306 pt column, so the window stays 900 pt; it is on screen and a pick changes the summary.
+    func testThreeFinishesKeepTheWindowWidth() throws {
+        let day = Self.wantedDay()
+        let app = try launch(game: "yu-gi-oh") { root in
+            try self.writePinPrices(in: root, longFinish: true)
+            try self.writeCollection([StoredRow(productID: Self.panther, finish: "Unlimited", count: 1,
+                                                name: "Swiftwind Panther Warrior")], game: "yu-gi-oh", in: root)
+            try self.writeHistory(game: "yu-gi-oh", productID: Self.panther,
+                                  finishes: ["1st Edition": [14, 14.5], "Unlimited": [8, 9]], endingOn: day)
+        }
+        openCard(app, "swiftwind panther warrior", product: Self.panther)
+        let summary = element(app, "price-history-summary")
+        XCTAssertTrue(waitUntil(timeout: 20) { summary.exists && self.text(summary) == "$9.00  +$1.00 in 2 days" },
+                      shown(summary))
+        let control = element(app, "price-history-finish")
+        XCTAssertTrue(control.exists, "no finish control")
+        let page = element(app, "card-page")
+        page.scroll(byDeltaX: 0, deltaY: -260)
+        XCTAssertTrue(waitUntil { control.isHittable }, "the control is not on screen")
+        let window = app.windows.firstMatch.frame
+        XCTAssertEqual(window.width, 900, accuracy: 1, "the control widened the window")
+        XCTAssertLessThanOrEqual(control.frame.maxX, window.maxX, "the control leaves the window: \(control.frame)")
+        shot("history-08-three-finishes")
+        // Whatever form fits: segments are radio buttons; the menu is a pop-up button with menu items.
+        let segment = app.radioButtons["1st Edition"]
+        if segment.exists {
+            settled(segment).click()
+        } else {
+            settled(control).click()
+            let item = app.menuItems["1st Edition"].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "no menu item")
+            shot("history-09-finish-menu")
+            item.click()
+        }
+        XCTAssertTrue(waitUntil { self.text(summary) == "$14.50  +$0.50 in 2 days" }, shown(summary))
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 1, "the window grew")
+    }
+
+    /// Waits until `element` stops moving (a scroll's deceleration), so a click lands on it: once its frame was the same
+    /// on two reads 0.3 s apart (the helper of DecksFlowTests). Returns the element.
+    @discardableResult
+    private func settled(_ element: XCUIElement) -> XCUIElement {
+        var last = element.frame
+        _ = waitUntil(timeout: 3) {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            defer { last = element.frame }
+            return element.frame == last
+        }
+        return element
     }
 
     /// Waits for the fixture sync, opens the card's page from All cards and, with `product`, shows that printing (its row
@@ -164,7 +227,7 @@ final class PriceHistoryFlowTests: UITestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5), file: file, line: line)
         page.scroll(byDeltaX: 0, deltaY: -2000)
         XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen", file: file, line: line)
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        settled(row).coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
         XCTAssertTrue(waitUntil { self.text(self.element(app, "card-facts-line")).contains("Super Rare") }, file: file, line: line)
         page.scroll(byDeltaX: 0, deltaY: 2000)
     }
