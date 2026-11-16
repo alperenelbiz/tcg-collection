@@ -116,6 +116,7 @@ struct TCGCollectionApp: App {
             text = try await CatalogReport.text(store: model.reader, prices: model.prices.allGames, ygo: model.ygoIndex)
                 + "\n" + DeckReport.text(model: model)
                 + "\n" + SetReport.text(model: model)
+                + "\n" + HistoryReport.text(model: model)
         } catch {
             text = "catalog report failed: \(error)\n"
         }
