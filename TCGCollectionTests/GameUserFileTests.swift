@@ -698,6 +698,28 @@ struct GameUserFileTests {
         #expect(try GameUserFile(data: try file.data()).decks == file.decks)
     }
 
+    /// Fix round 1: "Any printing" (`setPrinting(nil)`) on a card whose `productID` this build cannot read clears the raw
+    /// key too, as Wanted's `setPin(nil)` does (final fix B3 of phase 2C). A card that is gone changes nothing.
+    @Test func clearingAnUnreadablePrintingDropsItsKey() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"standard","cards":[{"cardKey":"p","name":"P","section":"main","count":1,"productID":"719834"},{"cardKey":"q","name":"Q","section":"main","count":1,"productID":"x"}]}]}"#
+        let read = try GameUserFile(data: Data(json.utf8))
+        var file = read
+        file.setPrinting(nil, deck: "a", key: DeckCardKey(cardKey: "p", section: "main"))
+        #expect(file != read)
+        let cards = ((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]]
+        #expect(cards[0].keys.contains("productID") == false)
+        #expect(cards[1]["productID"] as? String == "x")
+        var again = file
+        again.setPrinting(nil, deck: "a", key: DeckCardKey(cardKey: "p", section: "main"))
+        #expect(again == file)
+        var gone = read
+        gone.setPrinting(nil, deck: "a", key: DeckCardKey(cardKey: "p", section: "side"))
+        gone.setPrinting(5, deck: "none", key: DeckCardKey(cardKey: "p", section: "main"))
+        #expect(gone == read)
+        file.setPrinting(9, deck: "a", key: DeckCardKey(cardKey: "q", section: "main"))
+        #expect(file.decks[0].cards.map(\.productID) == [nil, 9])
+    }
+
     /// Cards of one (card, section) summed on read: the first one's printing wins; a first without one takes the first
     /// later one that has one.
     @Test func mergedDeckCardsKeepTheFirstPrinting() throws {

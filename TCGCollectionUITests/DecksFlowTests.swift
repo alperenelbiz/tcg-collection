@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 /// The click paths of the Decks sidebar section and the deck page (phase 3A task 5), on the fixture catalog. The fixture
@@ -833,6 +834,8 @@ final class DecksFlowTests: UITestCase {
     // MARK: A deck card's printing (phase 3A feedback 1, A18)
 
     private static let warrior = "swiftwind panther warrior"
+    /// 40 characters: wider than the details column at 900 pt.
+    private static let longDeckName = "Panther Warriors of the Long Night Decks"
 
     /// Each card of the deck `id` as `<cardKey>|<section>|<productID or "-">`; a `productID` key that is there but not a
     /// whole number is `?`.
@@ -872,7 +875,9 @@ final class DecksFlowTests: UITestCase {
             try self.writeUserFile(game: "yu-gi-oh", json: """
             {"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false, "cards": []},
                                      {"id": "yg2", "name": "Cheap", "format": "standard", "active": false,
-                                      "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]}]}
+                                      "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]},
+                                     {"id": "yg3", "name": "\(Self.longDeckName)", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "side", "count": 1}]}]}
             """)
         }
         let cell = element(app, "card-cell-\(Self.warrior)")
@@ -894,10 +899,27 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(cheapButton.label, "Use this printing")
         let window = app.windows.firstMatch.frame
         XCTAssertEqual(window.width, 900, accuracy: 1, "the deck lines widened the window")
-        for button in [windButton, cheapButton] {
+        // Fix round 1: two rows per line, so a short deck name reads whole beside "Use this printing" and "Any printing".
+        for (id, name) in [("yg1-main", "Wind"), ("yg2-main", "Cheap")] {
+            element(app, "card-page").scroll(byDeltaX: 0, deltaY: 2000)      // `revealOnCardPage` scrolls down only
+            let label = revealOnCardPage(app, "deck-line-name-\(id)")
+            XCTAssertEqual(text(label), name)
+            let whole = (name as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13)]).width
+            XCTAssertGreaterThanOrEqual(label.frame.width + 1, whole, "\(name) is cut: \(label.frame)")
+            XCTAssertLessThanOrEqual(label.frame.maxX, window.maxX, "\(name) leaves the window: \(label.frame)")
+            let button = revealOnCardPage(app, "deck-line-printing-\(id)")
             XCTAssertTrue(button.isHittable, "\(button.identifier) is not hittable")
             XCTAssertLessThanOrEqual(button.frame.maxX, window.maxX, "\(button.identifier) leaves the window: \(button.frame)")
+            XCTAssertGreaterThan(button.frame.minY, label.frame.maxY - 1, "the button is not under the name: \(button.frame)")
         }
+        // A long name may truncate; the window stays 900 pt and its line's controls stay in it.
+        element(app, "card-page").scroll(byDeltaX: 0, deltaY: 2000)
+        let long = revealOnCardPage(app, "deck-line-name-yg3-side")
+        XCTAssertLessThanOrEqual(long.frame.maxX, window.maxX, "the long name leaves the window: \(long.frame)")
+        let longButton = revealOnCardPage(app, "deck-line-printing-yg3-side")
+        XCTAssertTrue(longButton.isHittable)
+        XCTAssertLessThanOrEqual(longButton.frame.maxX, window.maxX)
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 1, "the long deck name widened the window")
         shot("decks-40-card-page-printing-buttons")
 
         element(app, "sidebar-deck-yg1").click()

@@ -837,6 +837,26 @@ struct UserLibraryTests {
         #expect(lib.version == after)
     }
 
+    /// Phase 3A feedback 1, fix round 1: "Any printing" on a deck card whose `productID` this build cannot read writes
+    /// the file without the key; a second "Any printing" changes nothing.
+    @MainActor @Test func anyPrintingOnADeckLeavesNoUnreadableKey() async throws {
+        let dir = tempDir(), file = dir.appending(path: "yu-gi-oh.json")
+        try Data(#"{"version":1,"decks":[{"id":"d","name":"D","format":"standard","cards":[{"cardKey":"a","name":"A","section":"main","count":1,"productID":"3"}]}]}"#.utf8)
+            .write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        let key = DeckCardKey(cardKey: "a", section: "main")
+        let before = lib.version
+        lib.setDeckPrinting(nil, game: "yu-gi-oh", deck: "d", key: key)
+        #expect(lib.version > before)
+        await lib.flush()
+        #expect(!String(decoding: try Data(contentsOf: file), as: UTF8.self).contains("productID"))
+        let after = lib.version
+        lib.setDeckPrinting(nil, game: "yu-gi-oh", deck: "d", key: key)
+        #expect(lib.version == after)
+        lib.setDeckPrinting(7, game: "yu-gi-oh", deck: "d", key: key)
+        #expect(lib.deck(game: "yu-gi-oh", id: "d")?.cards.map(\.productID) == [7])
+    }
+
     /// Fix round 1: a reload of a file with more for sale than owned (a phase 2B device lowered the owned count) clamps
     /// for sale in memory, says so and bumps `version`, and writes nothing. The next change of another card writes the
     /// clamped list, with no second notice. A refused file is not clamped (it is not shown).

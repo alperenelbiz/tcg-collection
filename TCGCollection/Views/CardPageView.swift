@@ -426,7 +426,8 @@ struct WantedLine: View {
 /// card is added to the new deck). With no deck in the game, the heading and the menu. Card-level: the same on every printing's page,
 /// except for the printing (A18): "Add to deck" and the new deck save the page's printing on a line new in its section, and
 /// right of each line's count control one button (`deck-line-printing-<deckID>-<section>`) says "Use this printing" (stores
-/// the page's printing on the line) or, when the line's stored printing is the page's, "Any printing" (clears it).
+/// the page's printing on the line) or, when the line's stored printing is the page's, "Any printing" (clears it). Each
+/// line is two rows (fix round 1): the deck's name and the section's name, then the count control and the button.
 /// While the game cannot change: no numbers (`—`), everything off; the page's locked line says why.
 struct DeckLines: View {
     let gameID: String
@@ -444,23 +445,30 @@ struct DeckLines: View {
             Text("Decks")
                 .foregroundStyle(Theme.text)
             if !lines.isEmpty {
-                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                // Fix round 1: two rows per line, so the deck's name has the whole column: the name and the section's
+                // name, then (`Theme.lineGap` under them) the count control and the printing button.
+                VStack(alignment: .leading, spacing: Theme.tableRowSpacing) {
                     ForEach(lines) { line in
-                        GridRow {
-                            Text(line.deckName)
-                                .foregroundStyle(Theme.text)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            Text(line.sectionName)
-                                .foregroundStyle(Theme.muted)
-                                .lineLimit(1)
-                                .fixedSize()
-                            CountControl(count: locked ? nil : line.count, label: "\(line.deckName), \(line.sectionName)",
-                                         maximum: DeckRules.maxCount, prefix: "deck-line", key: line.id) {
-                                step(by: $0 - line.count, line: line)
+                        VStack(alignment: .leading, spacing: Theme.lineGap) {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(line.deckName)
+                                    .foregroundStyle(Theme.text)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .accessibilityIdentifier("deck-line-name-\(line.id)")
+                                Text(line.sectionName)
+                                    .foregroundStyle(Theme.muted)
+                                    .lineLimit(1)
+                                    .fixedSize()
                             }
-                            if let page = card.productID {
-                                printingButton(line, page: page)
+                            HStack(spacing: 10) {
+                                CountControl(count: locked ? nil : line.count, label: "\(line.deckName), \(line.sectionName)",
+                                             maximum: DeckRules.maxCount, prefix: "deck-line", key: line.id) {
+                                    step(by: $0 - line.count, line: line)
+                                }
+                                if let page = card.productID {
+                                    printingButton(line, page: page)
+                                }
                             }
                         }
                         .accessibilityElement(children: .contain)
@@ -493,15 +501,13 @@ struct DeckLines: View {
         .accessibilityIdentifier("card-add-to-deck")
     }
 
-    /// A18: "Any printing" when the line is stored on the page's printing (clears it), else "Use this printing" (stores
-    /// it). It keeps its width; the deck's name truncates first.
+    /// A18: "Any printing" when the line is stored on the page's printing (clears it, also a value this build cannot read),
+    /// else "Use this printing" (stores it). It keeps its width.
     private func printingButton(_ line: DeckCardLine, page: Int) -> some View {
         let isPage = line.productID == page
         return Button(isPage ? "Any printing" : "Use this printing") {
-            model.library.changeDeck(game: gameID, id: line.deckID) {
-                DeckRules.settingPrinting($0, key: DeckCardKey(cardKey: card.cardKey, section: line.section),
-                                          productID: isPage ? nil : page)
-            }
+            model.library.setDeckPrinting(isPage ? nil : page, game: gameID, deck: line.deckID,
+                                          key: DeckCardKey(cardKey: card.cardKey, section: line.section))
         }
         .buttonStyle(FieldButtonStyle())
         .fixedSize()

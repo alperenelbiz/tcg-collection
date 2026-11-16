@@ -260,6 +260,13 @@ final class UserLibrary {
         }
     }
 
+    /// Refused as `setCount` is. A18: sets or clears one deck card's printing ("Use this printing" / "Any printing" on a
+    /// card page); clearing also drops a `productID` this build could not read (`GameUserFile.setPrinting`). A deck or a
+    /// card that is gone changes nothing.
+    func setDeckPrinting(_ productID: Int?, game: String, deck id: String, key: DeckCardKey) {
+        change(game) { $0.setPrinting(productID, deck: id, key: key) }
+    }
+
     /// Refused as `setCount` is. A deck that is gone changes nothing.
     func removeDeck(game: String, id: String) {
         change(game) { file in file.decks.removeAll { $0.id == id } }

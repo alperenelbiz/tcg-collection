@@ -239,6 +239,16 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         }
     }
 
+    /// Sets or clears one deck card's printing (A18, `DeckRules.settingPrinting`). A `productID` this build could not read
+    /// counts as set or cleared too: it is not written any more, so "Any printing" leaves no key (fix round 1, the rule of
+    /// `setPin`). A deck or a card that is gone changes nothing.
+    mutating func setPrinting(_ productID: Int?, deck id: String, key: DeckCardKey) {
+        guard let i = decks.firstIndex(where: { $0.id == id }), decks[i].cards.contains(where: { $0.key == key }) else { return }
+        decks[i] = DeckRules.settingPrinting(decks[i], key: key, productID: productID)
+        let unreadable = raw.deckCards[id]?.objects.contains { $0.key.cardKey == key.cardKey && Self.hasUnreadablePrinting($0.object) }
+        if unreadable == true { printingsChanged.insert(DeckCardRef(deckID: id, cardKey: key.cardKey)) }
+    }
+
     /// The lists and the decks are equal (what the app reads and changes); keys it does not know are not compared.
     func hasSameLists(as other: GameUserFile) -> Bool {
         collection == other.collection && wanted == other.wanted && forSale == other.forSale && sold == other.sold
