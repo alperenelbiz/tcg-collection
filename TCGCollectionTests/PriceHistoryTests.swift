@@ -36,6 +36,27 @@ struct PriceHistoryTests {
         }
     }
 
+    @Test func aHugeVersionIsRefusedWithoutACrash() {
+        #expect(throws: PriceHistoryError.newerVersion) {
+            try read(#"{"days":[],"products":{},"version":1e30}"#)
+        }
+    }
+
+    @Test func daysOutOfOrderOrRepeatedAndAMissingVersionAreMalformed() {
+        #expect(throws: PriceHistoryError.malformed) {
+            try read(#"{"days":["2026-11-12","2026-11-11"],"products":{},"version":1}"#)
+        }
+        #expect(throws: PriceHistoryError.malformed) {
+            try read(#"{"days":["2026-11-11","2026-11-11"],"products":{},"version":1}"#)
+        }
+        #expect(throws: PriceHistoryError.malformed) { try read(#"{"days":[],"products":{}}"#) }
+    }
+
+    @Test func aLowIndexOnANullPriceIsIgnoredAndTheFinishKept() throws {
+        let history = try read(#"{"days":["2026-11-11","2026-11-12"],"products":{"7":{"Normal":{"low":[0,1],"prices":[null,2]}}},"version":1}"#)
+        #expect(history.products == [7: ["Normal": [nil, price(2, low: true)]]])
+    }
+
     @Test func badJSONIsMalformed() {
         #expect(throws: PriceHistoryError.malformed) { try read("{not json") }
         #expect(throws: PriceHistoryError.malformed) { try read("[1, 2]") }
@@ -46,7 +67,7 @@ struct PriceHistoryTests {
     @Test func anEntryThatDoesNotFitIsDropped() throws {
         let json = #"{"days":["2026-11-11","2026-11-12"],"products":{"#
             + #""7":{"Normal":{"prices":[1,2]},"Foil":{"prices":[1]}},"#
-            + #""x":{"Normal":{"prices":[1,2]}},"#
+            + #""x":{"Normal":{"prices":[1,2]}},"-5":{"Normal":{"prices":[1,2]}},"#
             + #""8":{"Normal":{"low":[2],"prices":[1,2]},"Foil":{"low":[0],"prices":[4,null]}}"#
             + #"},"version":1}"#
         let history = try read(json)
@@ -64,6 +85,25 @@ struct PriceHistoryTests {
         #expect(history.days == ["2026-11-10", "2026-11-11", "2026-11-12"])
         #expect(history.products[7] == ["Normal": [price(0.5), price(1), price(2)]])
         #expect(history.products[8] == ["Foil": [nil, nil, price(5)]])
+    }
+
+    @Test func settingADayInTheMiddlePadsAtItsIndex() {
+        var history = PriceHistory(days: ["2026-11-10", "2026-11-12"],
+                                   products: [7: ["Normal": [price(1), price(3)]], 8: ["Foil": [price(4), price(6)]]])
+        history.setDay("2026-11-11", rows: [7: ["Normal": price(2)]], for: [7])
+        #expect(history.days == ["2026-11-10", "2026-11-11", "2026-11-12"])
+        #expect(history.products[7] == ["Normal": [price(1), price(2), price(3)]])
+        #expect(history.products[8] == ["Foil": [price(4), nil, price(6)]])
+    }
+
+    @Test func settingAnExistingDayReplacesTheNamedProductsValues() {
+        var history = PriceHistory(days: ["2026-11-11", "2026-11-12"],
+                                   products: [7: ["Normal": [price(1), price(2)], "Foil": [nil, price(5)]],
+                                              8: ["Normal": [nil, price(9)]]])
+        history.setDay("2026-11-12", rows: [7: ["Normal": price(2.5, low: true)], 8: ["Normal": price(1)]], for: [7])
+        #expect(history.days == ["2026-11-11", "2026-11-12"])
+        #expect(history.products[7] == ["Normal": [price(1), price(2.5, low: true)]])
+        #expect(history.products[8] == ["Normal": [nil, price(9)]])
     }
 
     @Test func settingADayTwiceFillsOnlyTheNamedProducts() {

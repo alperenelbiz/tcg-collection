@@ -46,19 +46,17 @@ nonisolated enum PriceDay {
         return afterPublish ? format(now) : format(now.addingTimeInterval(-86_400))
     }
 
-    static func before(_ day: String) -> String {
-        let parts = day.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3,
-              let date = utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) else { return day }
-        return format(date.addingTimeInterval(-86_400))
-    }
+    static func before(_ day: String) -> String { moved(day, by: -86_400) }
 
     /// The day after `day` (`yyyy-MM-dd`, UTC); `day` itself when it does not read as a day.
-    static func after(_ day: String) -> String {
+    static func after(_ day: String) -> String { moved(day, by: 86_400) }
+
+    /// `day` moved by `seconds` from its noon (UTC); `day` itself when it does not read as a day.
+    private static func moved(_ day: String, by seconds: TimeInterval) -> String {
         let parts = day.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3,
               let date = utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) else { return day }
-        return format(date.addingTimeInterval(86_400))
+        return format(date.addingTimeInterval(seconds))
     }
 
     /// The price history's window (H5): the 90 UTC days that end on `day`, that day included.

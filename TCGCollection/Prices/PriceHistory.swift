@@ -41,14 +41,15 @@ nonisolated struct PriceHistory: Sendable, Equatable {
               CFGetTypeID(versionValue) != CFBooleanGetTypeID(),
               let version = GameUserFile.number(versionValue), version == version.rounded(), version >= 1
         else { throw PriceHistoryError.malformed }
-        guard Int(version) <= Self.version else { throw PriceHistoryError.newerVersion }
+        // Compared as a Double: a huge version (1e30) does not fit an Int.
+        guard version <= Double(Self.version) else { throw PriceHistoryError.newerVersion }
         guard let days = object["days"] as? [String], zip(days, days.dropFirst()).allSatisfy({ $0 < $1 }),
               let rawProducts = object["products"] as? [String: Any]
         else { throw PriceHistoryError.malformed }
 
         var products: [Int: [String: [ShownPrice?]]] = [:]
         for (key, value) in rawProducts {
-            guard let productID = Int(key), String(productID) == key,
+            guard let productID = Int(key), productID >= 0, String(productID) == key,
                   let rawFinishes = value as? [String: Any] else { continue }
             var finishes: [String: [ShownPrice?]] = [:]
             for (finish, rawFinish) in rawFinishes {
