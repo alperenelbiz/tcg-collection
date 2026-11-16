@@ -217,8 +217,14 @@ final class AppModel {
     var historyBlocked: [String: HistoryState] = [:]
     /// Each game's tracked product ids as the last prepared pass computed them (H6). Observed (`historyState`).
     var historyTracked: [String: Set<Int>] = [:]
-    /// What the last read of each game's history file found in `historyFolder`; no entry: not read yet.
+    /// What the last read of each game's history file found in `historyFolder`; no entry: not read yet (or forgotten).
+    /// Invariant: a game is written only from a read that no report has followed. Every report of the game's file
+    /// (`historyReports`) either marks it stale or forgets this entry; a read or a write is recorded here only when no
+    /// report came during it (else the entry is forgotten, and the game marked stale while the gates hold).
     @ObservationIgnored var historyOnDisk: [String: HistoryOnDisk] = [:]
+    /// Per game, the reports of its history file in this folder (H11), whatever the gates said. A read or a write takes
+    /// its count before the await and is recorded only when it is unchanged after it. Reset by `dropHistory`.
+    @ObservationIgnored var historyReports: [String: Int] = [:]
     /// Games whose history in memory differs from their file after a write that failed: the next pass writes them.
     @ObservationIgnored var historyUnwritten: Set<String> = []
     /// Games whose history file changed on disk (another device, H11, or a creating write that met a file): the queue

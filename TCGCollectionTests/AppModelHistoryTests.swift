@@ -26,13 +26,25 @@ struct AppModelHistoryTests {
     }
 
     /// Counts the history file reads (every read goes through `historyFileReader`), then reads as the app does.
+    /// `during` runs inside the read, after the file was read and before the read returns (off the main actor).
     final class FileReads: Sendable {
-        private let reads = Mutex(0)
-        var count: Int { reads.withLock { $0 } }
+        private let reads = Mutex<[String]>([])
+        private let hook = Mutex<(@Sendable (String) -> Void)?>(nil)
+        var count: Int { reads.withLock { $0.count } }
+        var games: [String] { reads.withLock { $0 } }
+        func during(_ action: (@Sendable (String) -> Void)?) { hook.withLock { $0 = action } }
         func read(_ game: String, _ folder: URL) throws -> HistoryFiles.Read {
-            reads.withLock { $0 += 1 }
-            return try HistoryFiles.read(game: game, in: folder)
+            reads.withLock { $0.append(game) }
+            let result = try HistoryFiles.read(game: game, in: folder)
+            if let action = hook.withLock({ $0 }) { action(game) }
+            return result
         }
+    }
+
+    /// Runs `body` on the main actor from a thread off it, and waits for it (the main actor is free while a read is
+    /// awaited).
+    nonisolated static func onMain(_ body: @MainActor () -> Void) {
+        DispatchQueue.main.sync { MainActor.assumeIsolated { body() } }
     }
 
     // MARK: Helpers
@@ -691,6 +703,137 @@ struct AppModelHistoryTests {
         model.library.setProfile(GameProfile(player: false), game: "riftbound")
         #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .notTracked)
         await model.waitForHistory()
+    }
+
+    // MARK: Review round 3: a read or a write counts only when no report followed it
+
+    /// The other device's version of the Riftbound file: the file on disk now plus a day it read (2025-12-01, $4).
+    private func otherDevice(_ root: URL) throws -> PriceHistory {
+        var other = try stored(root)
+        other.setDay("2025-12-01", rows: [Self.dockside: ["Normal": ShownPrice(amount: 4, isLow: false)]], for: [Self.dockside])
+        return other
+    }
+
+    /// F: a reset (a pass cancel) while a reported file is read: the read is forgotten, read again, and the other device's
+    /// day survives the next write.
+    @Test(.timeLimit(.minutes(1))) func aResetDuringAStaleReadForgetsTheRead() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        let model = try await offlineModel(root)
+        let reads = FileReads()
+        model.historyFileReader = reads.read
+        await model.start()
+        await model.waitForHistory()
+        let other = try otherDevice(root)
+        try UserFiles.write(other.data(), to: historyURL(root))
+        reads.during { game in
+            guard game == "riftbound" else { return }
+            reads.during(nil)
+            Self.onMain { model.requestCatalogReset() }
+        }
+        model.library.fileChanged(historyURL(root))
+        await model.waitForHistory()
+        try placeArchives(model, ["2025-12-29"])
+        model.requestHistory()
+        await model.waitForHistory()
+        let history = try stored(root)
+        #expect(history.days == ["2025-12-01", "2025-12-29"] + Self.archiveDays)
+        #expect(model.history(game: "riftbound") == history)
+    }
+
+    /// G: a report while a pass reads the file (the read returns the older content): the result is not taken, the file is
+    /// read again before any write, and the newer content survives.
+    @Test(.timeLimit(.minutes(1))) func aReportDuringAReadIsNotOverwrittenByTheReadsResult() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        let model = try await offlineModel(root)
+        let reads = FileReads()
+        model.historyFileReader = reads.read
+        await model.start()
+        await model.waitForHistory()
+        let other = try otherDevice(root)
+        let file = historyURL(root)
+        model.historyOnDisk["riftbound"] = nil                                // the next pass reads the file first
+        reads.during { game in
+            guard game == "riftbound" else { return }
+            reads.during(nil)
+            try? UserFiles.write(other.data(), to: file)                       // after this read read the file
+            Self.onMain { _ = model.library.fileChanged(file) }
+        }
+        try placeArchives(model, ["2025-12-29"])
+        model.requestHistory()
+        await model.waitForHistory()
+        let history = try stored(root)
+        #expect(history.days == ["2025-12-01", "2025-12-29"] + Self.archiveDays)
+        #expect(model.history(game: "riftbound") == history)
+    }
+
+    /// H: a report during a pass's write (here under a closed game gate, which forgets the read): the write is not
+    /// recorded, the file is read again, and the other device's day survives the next write.
+    @Test(.timeLimit(.minutes(1))) func aReportDuringAWriteIsReadAgain() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        let file = historyURL(root)
+        var fired = false
+        model.historyWriteHook = { game in
+            guard !fired, game == "riftbound" else { return }
+            fired = true
+            if let other = try? self.otherDevice(root) { try? UserFiles.write(other.data(), to: file) }
+            model.library.setProfile(GameProfile(followed: false), game: "riftbound")
+            _ = model.library.fileChanged(file)
+            model.library.setProfile(.all, game: "riftbound")
+        }
+        model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
+        await model.waitForHistory()
+        #expect(fired)
+        try placeArchives(model, ["2025-12-29"])
+        model.requestHistory()
+        await model.waitForHistory()
+        let history = try stored(root)
+        #expect(history.days == ["2025-12-01", "2025-12-29"] + Self.archiveDays)
+        #expect(history.has(productID: Self.kaisa))
+        #expect(model.history(game: "riftbound") == history)
+    }
+
+    /// The echo of the model's own write (a report of the file it just wrote): at most one more read, no write, no pass.
+    @Test(.timeLimit(.minutes(1))) func theEchoOfOurOwnWriteCausesNoSecondWrite() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        let model = try await offlineModel(root)
+        let reads = FileReads()
+        model.historyFileReader = reads.read
+        await model.start()
+        await model.waitForHistory()
+        let written = try sizeAndDate(historyURL(root))
+        let (passes, before) = (model.historyPassCount, reads.count)
+        model.library.fileChanged(historyURL(root))
+        await model.waitForHistory()
+        #expect(reads.count <= before + 1)
+        #expect(model.historyPassCount == passes)
+        #expect(try sizeAndDate(historyURL(root)).date == written.date)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+    }
+
+    /// C: a game unfollowed while another game's file is read is not read by that pass.
+    @Test(.timeLimit(.minutes(1))) func aGameUnfollowedDuringAnotherGamesReadIsNotRead() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "cyberpunk": Self.gameFile(rows: [719684])])
+        let model = try await offlineModel(root)
+        let reads = FileReads()
+        model.historyFileReader = reads.read
+        reads.during { game in
+            guard game == "riftbound" else { return }
+            reads.during(nil)
+            Self.onMain { model.library.setProfile(GameProfile(followed: false), game: "cyberpunk") }
+        }
+        await model.start()
+        await model.waitForHistory()
+        #expect(reads.games.contains("riftbound"))
+        #expect(!reads.games.contains("cyberpunk"))
+        #expect(!exists(historyURL(root, "cyberpunk")))
     }
 
     // MARK: Days (H10)

@@ -113,6 +113,9 @@ extension AppModel {
     /// memory forget its read (no IO), so the first pass that may read it reads it. A report for another folder, or for a
     /// game whose file memory has not read, does nothing (it is read anyway).
     func historyFileChanged(_ game: String) {
+        // Every report counts, whatever the gates say: a read or a write running now is not recorded (the rule at
+        // `historyOnDisk`).
+        historyReports[game, default: 0] += 1
         guard let folder = library.folder, historyFolder == folder, historyOnDisk[game] != nil else { return }
         // A closed gate (the folder missing for now, the first-run question due): no IO, but memory forgets the read, so
         // the first pass after the gate opens reads the file another device wrote instead of overwriting it.
@@ -124,16 +127,6 @@ extension AppModel {
         runHistoryQueue()
     }
 
-    /// Whether a read of the game's file says what memory holds of it.
-    private func historyMatches(_ read: HistoryFiles.Read, game: String) -> Bool {
-        switch read {
-        case .none: historyOnDisk[game] == HistoryOnDisk.none
-        case .history(let history): historyOnDisk[game] == .file && !historyUnwritten.contains(game) && histories[game] == history
-        case .malformed: historyOnDisk[game] == .malformed
-        case .newerVersion: historyBlocked[game] == .newerVersion
-        case .notDownloaded: historyBlocked[game] == .notDownloaded
-        }
-    }
 
     /// H11: before a folder switch. A running pass stops and keeps nothing; memory of the old folder goes.
     func historyFolderWillChange() {
@@ -159,6 +152,7 @@ extension AppModel {
         historyBlocked = [:]
         historyTracked = [:]
         historyOnDisk = [:]
+        historyReports = [:]
         historyUnwritten = []
         historyStale = []
         historyFolder = nil
@@ -219,20 +213,17 @@ extension AppModel {
                 historyOnDisk[game] = nil
                 continue
             }
-            let read = await readHistoryFile(game: game, folder: folder)
-            guard !Task.isCancelled, historyStillOn(folder) else { return }
-            // Reported again during the read: the next check reads it once more.
-            guard !historyStale.contains(game) else { continue }
-            guard let read else {
-                // An IO error: the next pass reads it.
-                historyOnDisk[game] = nil
+            switch await readUnderRule(game: game, folder: folder) {
+            case .taken(let changed):
+                // A read that says what memory holds (our own write's echo) asks for nothing more.
+                if changed { historyQueued = true }
+            case .failed:
+                // An IO error: the next pass reads it (no stale mark, so a lasting error does not loop).
                 historyQueued = true
-                continue
+            case .forgotten:
+                break
             }
-            if !historyMatches(read, game: game) {
-                takeHistoryRead(read, game: game)
-                historyQueued = true
-            }
+            if Task.isCancelled { return }
         }
     }
 
@@ -257,9 +248,8 @@ extension AppModel {
             guard historyStillOn(folder) else { return }
             guard isSynced(game), library.canChange(game: game) else { continue }
             historyStale.remove(game)
-            let read = await readHistoryFile(game: game, folder: folder)
-            guard !Task.isCancelled, historyStillOn(folder) else { return }
-            if let read { takeHistoryRead(read, game: game) }
+            _ = await readUnderRule(game: game, folder: folder)
+            if Task.isCancelled { return }
         }
 
         // 2. The games to pass, each with its tracked printings.
@@ -323,11 +313,18 @@ extension AppModel {
             guard writes else { continue }
             let creating = historyOnDisk[id] == HistoryOnDisk.none
             // On the main actor, with no suspension since the stale check above: the last moment before the write.
+            let reports = historyReports[id, default: 0]
             let outcome = await Self.writeHistoryFile(new, game: id, folder: folder, creating: creating)
             #if DEBUG
             await historyWriteHook?(id)
             #endif
-            guard historyStillOn(folder) else { return }
+            // The rule: a write is recorded only when no report came during it (another device may have written after
+            // it, or its own echo: one more read, which finds the file equal to memory).
+            guard historyStillOn(folder), historyReports[id, default: 0] == reports else {
+                forgetHistoryRead(id, folder: folder)
+                if Task.isCancelled || !historyStillOn(folder) { return }
+                continue
+            }
             switch outcome {
             case .written:
                 historyOnDisk[id] = .file
@@ -364,7 +361,8 @@ extension AppModel {
 
     /// A read of the game's history file becomes memory (H3): a history replaces it; no file, a malformed one, a newer
     /// one or a placeholder leaves none; the last two block the game's writes for the run (until a read finds otherwise).
-    private func takeHistoryRead(_ read: HistoryFiles.Read, game: String) {
+    @discardableResult
+    private func takeHistoryRead(_ read: HistoryFiles.Read, game: String) -> Bool {
         let history: PriceHistory?
         var blocked: HistoryState?
         switch read {
@@ -397,6 +395,43 @@ extension AppModel {
             changed = true
         }
         if changed { historyChanged(game) }
+        return changed
+    }
+
+    private enum RuledRead {
+        /// The read became memory; `changed`: memory or the blocked state changed with it.
+        case taken(changed: Bool)
+        /// An IO error: nothing recorded, the read forgotten.
+        case failed
+        /// A report came during the read, or it was cancelled, or a gate closed: the read forgotten (and the game
+        /// marked stale while the gates hold).
+        case forgotten
+    }
+
+    /// The rule at `historyOnDisk`, for every read of a history file: the report count is taken before the read; after
+    /// it the result is taken only when the task is not cancelled, the folder is the same and open, the game is followed
+    /// with a readable game file, and no report came during the read. Else the read is forgotten.
+    private func readUnderRule(game: String, folder: URL) async -> RuledRead {
+        let reports = historyReports[game, default: 0]
+        let read = await readHistoryFile(game: game, folder: folder)
+        guard !Task.isCancelled, historyStillOn(folder), isSynced(game), library.canChange(game: game),
+              historyReports[game, default: 0] == reports else {
+            forgetHistoryRead(game, folder: folder)
+            return .forgotten
+        }
+        guard let read else {
+            historyOnDisk[game] = nil
+            return .failed
+        }
+        return .taken(changed: takeHistoryRead(read, game: game))
+    }
+
+    /// A read or a write that a report (or a cancel, or a closed gate) followed: memory forgets what it believed is on
+    /// disk, so the game is not written before it is read again; while the gates hold it is marked stale, so the queue
+    /// reads it again (also after a cancel: the queue's next task does).
+    private func forgetHistoryRead(_ game: String, folder: URL) {
+        historyOnDisk[game] = nil
+        if historyStillOn(folder), isSynced(game), library.canChange(game: game) { historyStale.insert(game) }
     }
 
     // MARK: File work, off the main actor
