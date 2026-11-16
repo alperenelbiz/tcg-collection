@@ -201,6 +201,9 @@ final class ProfilesFlowTests: UITestCase {
             seen.append(item)
         }
         app.typeKey(.escape, modifierFlags: [])
+        // The menu must be gone before the next click on the picker: a click while it still closes opens no menu
+        // (the full run of 2026-11-17 failed that way: the item of the next step was not found).
+        _ = waitUntil { !app.menuItems["Riftbound"].firstMatch.exists }
         return seen
     }
 
@@ -243,7 +246,10 @@ final class ProfilesFlowTests: UITestCase {
         XCTAssertEqual(pickerItems(app), ["Magic: The Gathering", "Yu-Gi-Oh!", "Riftbound", "Cyberpunk TCG"])
         let picker = element(app, "game-picker")
         picker.click()
-        app.menuItems["Yu-Gi-Oh!"].firstMatch.click()
+        let yugiohItem = app.menuItems["Yu-Gi-Oh!"].firstMatch
+        if !yugiohItem.waitForExistence(timeout: 3) { picker.click() }
+        XCTAssertTrue(yugiohItem.waitForExistence(timeout: 5), "the picker's menu did not open")
+        yugiohItem.click()
         XCTAssertTrue(waitUntil { picker.value as? String == "Yu-Gi-Oh!" }, String(describing: picker.value))
         // The catalog step of a game turned on: its cards come from the fixture network.
         XCTAssertTrue(element(app, "card-cell-swiftwind panther warrior").waitForExistence(timeout: 20), "Yu-Gi-Oh!'s catalog")
