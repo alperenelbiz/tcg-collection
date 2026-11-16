@@ -318,7 +318,7 @@ struct UnknownCardPage: View {
                     .padding(.top, 4)
                 RuleLine()
                 VStack(alignment: .leading, spacing: 8) {
-                    WantedLine(gameID: card.gameID, cardKey: card.cardKey, name: card.name, pin: nil)
+                    WantedLine(gameID: card.gameID, cardKey: card.cardKey, name: card.name, pin: nil, hasPrinting: false)
                     if let locked { CountsLockedLine(text: locked) }
                 }
             }

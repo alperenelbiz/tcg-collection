@@ -353,7 +353,7 @@ struct CountsLockedLine: View {
 /// entry saves `name`. While the game cannot change: no number (`—`), no pin, the control off; the page's locked line
 /// says why. The control is the hand-added count only (A24); right of it, when the active decks miss the card, "+ <n> for
 /// decks" (`wanted-for-decks`, 12 pt `muted`; `WantedList.forDecks` from the library's decks and sharing answers and the
-/// page's `owned` and `isBasic`).
+/// page's `owned` and `isBasic`), never on the page of a card without a printing (`hasPrinting` false, final fix A3).
 struct WantedLine: View {
     let gameID: String
     let cardKey: String
@@ -364,6 +364,8 @@ struct WantedLine: View {
     /// The copies owned of the card over all its printings, and whether it is a basic card: for the decks' part.
     var owned: Int = 0
     var isBasic: Bool = false
+    /// False on the page of a card without a printing (`UnknownCardPage`): no decks' part there (final fix A3).
+    var hasPrinting: Bool = true
 
     @Environment(AppModel.self) private var model
 
@@ -375,8 +377,9 @@ struct WantedLine: View {
         // The pin choices need a count (an entry) and a game that can change.
         let pinned = locked || count == 0 ? nil : entry?.pin
         let offersPin = !locked && count > 0
-        let forDecks = locked ? 0 : WantedList.forDecks(cardKey, decks: library.decks(game: gameID),
-                                                        sharing: library.sharing(game: gameID), owned: owned, isBasic: isBasic)
+        let forDecks = locked ? nil : Self.decksText(cardKey, decks: library.decks(game: gameID),
+                                                     sharing: library.sharing(game: gameID), owned: owned, isBasic: isBasic,
+                                                     hasPrinting: hasPrinting)
         let pinChoice: (title: String, key: PrintingKey?)? = if offersPin, let pin, pinned == nil || pinned == pin {
             (pinned == pin ? "Any printing" : "Want this printing", pinned == pin ? nil : pin)
         } else { nil }
@@ -410,12 +413,12 @@ struct WantedLine: View {
     }
 
     /// "Wanted", the hand-added count's control and, when the decks miss the card, "+ <n> for decks".
-    @ViewBuilder private func countRow(count: Int, locked: Bool, forDecks: Int) -> some View {
+    @ViewBuilder private func countRow(count: Int, locked: Bool, forDecks: String?) -> some View {
         Text("Wanted")
             .foregroundStyle(Theme.text)
         CountControl(count: locked ? nil : count, label: "wanted", prefix: "wanted", key: "",
                      spoken: (remove: "Want one fewer", add: "Want one more")) { step(by: $0 - count) }
-        if let decks = Self.forDecksText(forDecks) {
+        if let decks = forDecks {
             Text(decks)
                 .font(Theme.lineFont)
                 .foregroundStyle(Theme.muted)
@@ -428,6 +431,14 @@ struct WantedLine: View {
     /// "+ 2 for decks" beside the control; nil when the decks miss none.
     static func forDecksText(_ forDecks: Int) -> String? {
         forDecks > 0 ? "+ \(forDecks) for decks" : nil
+    }
+
+    /// The decks' part beside the control (`forDecksText` of `WantedList.forDecks`). Final fix A3: a card without a printing
+    /// (`UnknownCardPage`) has none, whatever the decks use: its owned copies cannot be known.
+    static func decksText(_ cardKey: String, decks: [Deck], sharing: [String: Bool], owned: Int, isBasic: Bool,
+                          hasPrinting: Bool) -> String? {
+        guard hasPrinting else { return nil }
+        return forDecksText(WantedList.forDecks(cardKey, decks: decks, sharing: sharing, owned: owned, isBasic: isBasic))
     }
 
     /// What the pin line says of `pinned`, seen from the printing `shown` (nil: the page of a card that left the catalog):

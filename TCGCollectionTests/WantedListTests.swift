@@ -515,4 +515,15 @@ struct WantedListTests {
         #expect(WantedList.forDecks("twin", decks: decks, sharing: [:], owned: 0, isBasic: true) == 0)
         #expect(WantedList.forDecks("other", decks: decks, sharing: [:], owned: 0, isBasic: false) == 0)
     }
+
+    /// Final fix A3 on the card page: a card without a printing (`UnknownCardPage`) has no decks' part, whatever the active
+    /// decks use: no "+ n for decks". A card with a printing keeps it.
+    @Test func aCardWithoutAPrintingHasNoDecksPartOnItsPage() {
+        let decks = [deck("Wind", [deckCard("bee", "Bee", count: 3)]), deck("Cheap", [deckCard("bee", "Bee", count: 2)])]
+        #expect(WantedLine.decksText("bee", decks: decks, sharing: [:], owned: 0, isBasic: false, hasPrinting: false) == nil)
+        #expect(WantedLine.decksText("bee", decks: decks, sharing: ["bee": true], owned: 0, isBasic: false,
+                                     hasPrinting: false) == nil)
+        #expect(WantedLine.decksText("bee", decks: decks, sharing: [:], owned: 1, isBasic: false, hasPrinting: true)
+                == "+ 4 for decks")
+    }
 }
