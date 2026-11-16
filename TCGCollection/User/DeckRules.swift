@@ -32,10 +32,16 @@ nonisolated enum DeckRules {
         deck.cards.filter { $0.cardKey == cardKey }.reduce(0) { $0 + $1.count }
     }
 
-    /// One copy more of a card in `section` (`setting`: a new card is appended with `name`; the 999 clamp holds).
-    static func addingOne(_ deck: Deck, cardKey: String, name: String, section: String) -> Deck {
+    /// One copy more of a card in `section` (`setting`: a new card is appended with `name`; the 999 clamp holds). A card
+    /// page's "Add to deck" gives its printing (A18): it is saved only on a card that is new in that section; a card the
+    /// section holds already keeps its printing (or none). A deck's search gives none.
+    static func addingOne(_ deck: Deck, cardKey: String, name: String, section: String, productID: Int? = nil) -> Deck {
         let now = deck.cards.first { $0.cardKey == cardKey && $0.section == section }?.count ?? 0
-        return setting(deck, count: now + 1, cardKey: cardKey, name: name, section: section)
+        var deck = setting(deck, count: now + 1, cardKey: cardKey, name: name, section: section)
+        if now == 0, let productID, let i = deck.cards.firstIndex(where: { $0.cardKey == cardKey && $0.section == section }) {
+            deck.cards[i].productID = productID
+        }
+        return deck
     }
 
     /// One copy less of a card over the deck (the `−` of a search cell): off `defaultSection` when it holds the card, else
@@ -50,8 +56,9 @@ nonisolated enum DeckRules {
         return setting(deck, count: card.count - 1, cardKey: cardKey, name: card.name, section: card.section)
     }
 
-    /// Moves a card from one section to another. When the card is in the other section already, the copies are summed
-    /// into that card (its place and name); otherwise the card keeps its place. Nothing changes for a card not in `from`.
+    /// Moves a card from one section to another, with its printing (A18). When the card is in the other section already,
+    /// the copies are summed into that card (its place, name and printing; a card there without a printing takes the moved
+    /// card's); otherwise the card keeps its place. Nothing changes for a card not in `from`.
     static func moving(_ deck: Deck, cardKey: String, from: String, to: String) -> Deck {
         guard from != to, let i = deck.cards.firstIndex(where: { $0.cardKey == cardKey && $0.section == from }) else {
             return deck
@@ -61,6 +68,7 @@ nonisolated enum DeckRules {
             // The target card keeps its own object in the file, so its own unknown keys; the moved card's unknown keys
             // are not written any more (`GameUserFile.deckObject`: a card of an existing key keeps its own object).
             deck.cards[j].count += deck.cards[i].count
+            if deck.cards[j].productID == nil { deck.cards[j].productID = deck.cards[i].productID }
             deck.cards.remove(at: i)
         } else {
             deck.cards[i].section = to
@@ -69,8 +77,8 @@ nonisolated enum DeckRules {
     }
 
     /// D12: the deck takes `format`; a card whose section the new format has stays there, every other card goes to
-    /// `defaultSection(card)`. Cards that land on one (card, section) are summed into the first. No card and no copy is
-    /// lost.
+    /// `defaultSection(card)` with its printing. Cards that land on one (card, section) are summed into the first (its
+    /// printing; when it has none, the first later one's). No card and no copy is lost.
     static func changingFormat(_ deck: Deck, to format: DeckFormat, defaultSection: (DeckCard) -> String) -> Deck {
         var deck = deck
         deck.format = format.id
@@ -106,6 +114,15 @@ nonisolated enum DeckRules {
         return deck
     }
 
+    /// A18: the printing of one card of the deck ("Use this printing" on a card page's deck line), or none (`nil`, "Any
+    /// printing"). Nothing changes for a card that is gone.
+    static func settingPrinting(_ deck: Deck, key: DeckCardKey, productID: Int?) -> Deck {
+        guard let i = deck.cards.firstIndex(where: { $0.key == key }) else { return deck }
+        var deck = deck
+        deck.cards[i].productID = productID
+        return deck
+    }
+
     /// `name` when no other deck has it, else `name 2`, `name 3`, … ("Deck", "Deck 2").
     static func uniqueName(_ name: String, among names: [String]) -> String {
         let taken = Set(names)
@@ -115,7 +132,8 @@ nonisolated enum DeckRules {
         return "\(name) \(n)"
     }
 
-    /// Cards of one (card, section) summed into the first (its place and name; an empty name is filled).
+    /// Cards of one (card, section) summed into the first (its place, name and printing; an empty name is filled, and a
+    /// missing printing is taken from the first later card that has one).
     private static func summed(_ cards: [DeckCard]) -> [DeckCard] {
         var result: [DeckCard] = []
         var index: [DeckCardKey: Int] = [:]
@@ -123,6 +141,7 @@ nonisolated enum DeckRules {
             if let i = index[card.key] {
                 result[i].count += card.count
                 if result[i].name.isEmpty { result[i].name = card.name }
+                if result[i].productID == nil { result[i].productID = card.productID }
             } else {
                 index[card.key] = result.count
                 result.append(card)

@@ -16,6 +16,13 @@ nonisolated private struct RawList<Key: Hashable> {
     var unparseable: [Any] = []
 }
 
+/// A deck card by its deck and card key: where a printing set or cleared is noted (A18). Not by section: a card moved to
+/// another section keeps the object, so the note, of the card it was.
+nonisolated private struct DeckCardRef: Hashable {
+    let deckID: String
+    let cardKey: String
+}
+
 /// The raw JSON of one deck's cards: each parsed card's own object, in the order of the deck's cards as read, and the
 /// elements that could not be parsed, in their order.
 nonisolated private struct RawCards {
@@ -40,11 +47,14 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
     /// Each parsed deck's object by its id (its `cards` are in `deckCards`), and the decks that could not be parsed.
     let decks: RawList<String>
     let deckCards: [String: RawCards]
+    /// Whether a parsed deck card's object has a `productID` this build cannot read (A18): only then are deck changes
+    /// watched for printings set or cleared.
+    let hasUnreadablePrintings: Bool
 
     init(_ object: [String: Any], collection: RawList<PrintingKey> = .init(), wanted: RawList<String> = .init(),
          unreadablePins: Set<String> = [], forSale: RawList<PrintingKey> = .init(),
          sold: [(record: SoldRecord, object: [String: Any])] = [], soldUnparseable: [Any] = [],
-         decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:]) {
+         decks: RawList<String> = .init(), deckCards: [String: RawCards] = [:], hasUnreadablePrintings: Bool = false) {
         self.object = object
         self.collection = collection
         self.wanted = wanted
@@ -54,6 +64,7 @@ nonisolated private final class JSONObjectBox: @unchecked Sendable {
         self.soldUnparseable = soldUnparseable
         self.decks = decks
         self.deckCards = deckCards
+        self.hasUnreadablePrintings = hasUnreadablePrintings
     }
 }
 
@@ -83,10 +94,15 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     var forSale: [SaleEntry]
     var sold: [SoldRecord]
     /// In the user's deck order.
-    var decks: [Deck]
+    var decks: [Deck] {
+        didSet { notePrintingChanges(from: oldValue) }
+    }
     private let raw: JSONObjectBox
     /// The cards of `raw.unreadablePins` whose pin was set or cleared since the read: their old pin keys are not written.
     private var pinsChanged: Set<String> = []
+    /// The deck cards (deck id, card key) whose printing was set or cleared since the read: a `productID` this build
+    /// could not read is not written back for them (A18).
+    private var printingsChanged: Set<DeckCardRef> = []
 
     init() {
         collection = []
@@ -157,7 +173,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
                             sold: sold.parsed.map { (record: $0.0, object: $0.1) },
                             soldUnparseable: sold.unparseable,
                             decks: RawList(objects: deckObjects, unparseable: unparseableDecks),
-                            deckCards: deckCards)
+                            deckCards: deckCards,
+                            hasUnreadablePrintings: deckCards.values.contains { $0.objects.contains { Self.hasUnreadablePrinting($0.object) } })
     }
 
     /// UTF-8, pretty-printed, sorted keys, ending with a newline.
@@ -232,7 +249,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     /// unreadable pins set or cleared since).
     static func == (lhs: GameUserFile, rhs: GameUserFile) -> Bool {
         lhs.hasSameLists(as: rhs)
-            && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged) || (try? lhs.data()) == (try? rhs.data()))
+            && ((lhs.raw === rhs.raw && lhs.pinsChanged == rhs.pinsChanged && lhs.printingsChanged == rhs.printingsChanged)
+                || (try? lhs.data()) == (try? rhs.data()))
     }
 
     /// Notes the cards with an unreadable pin whose pin fields changed (set or cleared) in this change of `wanted`.
@@ -242,6 +260,22 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             guard let before = old.first(where: { $0.cardKey == entry.cardKey }) else { continue }
             if before.pinProductID != entry.pinProductID || before.pinFinish != entry.pinFinish {
                 pinsChanged.insert(entry.cardKey)
+            }
+        }
+    }
+
+    /// Notes the deck cards whose printing changed (set or cleared) in this change of `decks`, when the file read had a
+    /// printing this build cannot read (A18). A card is matched by its deck and key (card, section).
+    private mutating func notePrintingChanges(from old: [Deck]) {
+        guard raw.hasUnreadablePrintings else { return }
+        let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for deck in decks {
+            guard let was = before[deck.id] else { continue }
+            for card in deck.cards {
+                let ref = DeckCardRef(deckID: deck.id, cardKey: card.cardKey)
+                guard !printingsChanged.contains(ref),
+                      let previous = was.cards.first(where: { $0.key == card.key }) else { continue }
+                if previous.productID != card.productID { printingsChanged.insert(ref) }
             }
         }
     }
@@ -265,7 +299,13 @@ nonisolated struct GameUserFile: Sendable, Equatable {
             guard let i = spare.firstIndex(where: { $0.key.cardKey == card.cardKey }) else { return (card, nil) }
             return (card, spare.remove(at: i).object)
         }
-        object["cards"] = try Self.objects(pairs, owned: DeckCard.storedKeys, encoder: encoder) + rawCards.unparseable
+        // A18: a `productID` this build could not read stays while the card has no printing and nobody set or cleared it.
+        object["cards"] = try pairs.map { card, raw in
+            let keeps = card.productID == nil && Self.hasUnreadablePrinting(raw)
+                && !printingsChanged.contains(DeckCardRef(deckID: deck.id, cardKey: card.cardKey))
+            let owned = keeps ? DeckCard.storedKeys.subtracting(["productID"]) : DeckCard.storedKeys
+            return try Self.objects([(card, raw)], owned: owned, encoder: encoder)[0]
+        } + rawCards.unparseable
         return object
     }
 
@@ -389,7 +429,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     /// A deck needs a string `id`. A missing, null or blank `name` reads as "Deck", a missing `format` as "" (the views
     /// take the game's first format), a missing `active` as false, missing `cards` as none; any of them of another type
     /// makes the deck unparseable. Its cards that cannot be parsed are kept apart; cards of one (card, section) are summed
-    /// into the first (an empty name is filled), cards under count 1 are dropped.
+    /// into the first (an empty name is filled; a missing printing is taken from the first later card that has one), cards
+    /// under count 1 are dropped.
     private static func deck(_ o: [String: Any]) -> (deck: Deck, cards: RawCards)? {
         guard let id = o["id"] as? String,
               let name = optional(o["name"], else: "", as: String.self),
@@ -397,9 +438,11 @@ nonisolated struct GameUserFile: Sendable, Equatable {
               let active = optional(o["active"], else: false, as: Bool.self, read: boolean),
               let elements = optional(o["cards"], else: [], as: [Any].self) else { return nil }
         let cards = split(elements, deckCard)
+        // A18: the first card's printing; when it has none, the first later one's.
         let (clean, objects) = merged(cards.parsed, key: \.key, count: \.count) { first, later in
             first.count += later.count
             if first.name.isEmpty { first.name = later.name }
+            if first.productID == nil { first.productID = later.productID }
         }
         let blank = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let deck = Deck(id: id, name: blank ? "Deck" : name, format: format, active: active, cards: clean)
@@ -408,13 +451,23 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         return (deck, raw)
     }
 
-    /// Needs a string `cardKey` and `section` and a whole `count`; a `name` that is there must be a string.
+    /// Needs a string `cardKey` and `section` and a whole `count`; a `name` that is there must be a string; a `productID`
+    /// (A18, the chosen printing) is read when it is a whole number.
     private static func deckCard(_ o: [String: Any]) -> DeckCard? {
         guard let cardKey = o["cardKey"] as? String,
               let section = o["section"] as? String,
               let count = o["count"].flatMap(integer),
               let name = optional(o["name"], else: "", as: String.self) else { return nil }
-        return DeckCard(cardKey: cardKey, name: name, section: section, count: count)
+        // A18: a `productID` that is not a whole number reads as none (`deckObject` writes it back until it is set or
+        // cleared); a `null` is no key.
+        return DeckCard(cardKey: cardKey, name: name, section: section, count: count,
+                        productID: o["productID"].flatMap(integer))
+    }
+
+    /// A deck card's `productID` this build cannot read: there, not `null`, not a whole number (A18).
+    private static func hasUnreadablePrinting(_ object: [String: Any]?) -> Bool {
+        guard let value = object?["productID"], !(value is NSNull) else { return false }
+        return integer(value) == nil
     }
 
     /// `fallback` for a missing or null value, the value read as `T`, or nil (unreadable).

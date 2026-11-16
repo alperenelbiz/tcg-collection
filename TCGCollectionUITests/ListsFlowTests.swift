@@ -907,26 +907,6 @@ final class ListsFlowTests: UITestCase {
         }
     }
 
-    /// Writes this test's own price files into `<root>/support` before the launch, for every game, with a day far ahead:
-    /// the price step then has that day and downloads nothing, so the fixture archive (which has no Yu-Gi-Oh! price) does
-    /// not replace them. Yu-Gi-Oh!: Swiftwind Panther Warrior 719834 (Super Rare) 1st Edition $14.50, Unlimited $9.00;
-    /// 719835 (Starlight Rare) 1st Edition $3.10. The other games have none. The form is the app's `GamePrices`.
-    /// With `longFinish`, 719834 also has a made-up "1st Edition Holofoil" line (113 pt at 13 pt) without a shown price
-    /// ("No price"), for the narrow finish column (fix round 2); the card's prices stay the same.
-    private func writePinPrices(in root: URL, longFinish: Bool = false) throws {
-        let support = root.appending(path: "support", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let none = #"{"day": "2099-12-31", "finishes": [], "rows": {}}"#
-        let long = longFinish ? #", "2": {"mid": 50}"# : ""
-        let yugioh = """
-        {"day": "2099-12-31", "finishes": ["1st Edition", "Unlimited"\(longFinish ? #", "1st Edition Holofoil""# : "")],
-         "rows": {"719834": {"0": {"market": 14.5}, "1": {"market": 9}\(long)}, "719835": {"0": {"market": 3.1}}}}
-        """
-        for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
-            try Data((game == "yu-gi-oh" ? yugioh : none).utf8).write(to: support.appending(path: "prices-\(game).json"))
-        }
-    }
-
     /// One entry of a stored `forSale` list.
     struct StoredSale: Equatable {
         var productID: Int

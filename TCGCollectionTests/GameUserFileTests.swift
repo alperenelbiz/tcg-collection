@@ -602,4 +602,138 @@ struct GameUserFileTests {
         #expect(back.collection.map(\.count) == [3]); #expect(back.decks == file.decks)
         #expect(try decksText(back.data()) == decksText(ours))
     }
+
+    // MARK: Phase 3A feedback 1: a deck card's printing (A18)
+
+    /// The exact text this build writes for a deck with one card on a chosen printing and one without.
+    private let printingText = """
+        {
+          "collection" : [
+            {
+              "condition" : "",
+              "count" : 1,
+              "finish" : "1st Edition",
+              "name" : "Swiftwind Panther Warrior",
+              "productID" : 719834
+            }
+          ],
+          "decks" : [
+            {
+              "active" : false,
+              "cards" : [
+                {
+                  "cardKey" : "swiftwind panther warrior",
+                  "count" : 2,
+                  "name" : "Swiftwind Panther Warrior",
+                  "productID" : 719834,
+                  "section" : "main"
+                },
+                {
+                  "cardKey" : "stardust dragon",
+                  "count" : 1,
+                  "name" : "Stardust Dragon",
+                  "section" : "extra"
+                }
+              ],
+              "format" : "standard",
+              "id" : "yg1",
+              "name" : "Wind"
+            }
+          ],
+          "version" : 1
+        }
+
+        """
+
+    /// A card's `productID` is read and written; a card without one is written without the key, so a file with decks
+    /// and no chosen printing keeps its exact bytes through a read and a rewrite.
+    @Test func aDeckCardsPrintingRoundTrips() throws {
+        let file = try GameUserFile(data: Data(printingText.utf8))
+        #expect(file.decks[0].cards.map(\.productID) == [719834, nil])
+        #expect(try file.data() == Data(printingText.utf8))
+        let without = try GameUserFile(data: Data(decksJSON.utf8))
+        #expect(without.decks.flatMap(\.cards).allSatisfy { $0.productID == nil })
+        let written = try without.data()
+        #expect(try GameUserFile(data: written).data() == written)
+        let cards = ((try JSONSerialization.jsonObject(with: written) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]]
+        #expect(cards.allSatisfy { $0["productID"] == nil })
+    }
+
+    /// Equality and `hasSameLists` see a printing change alone, so the library writes it.
+    @Test func aPrintingOnlyChangeMakesTheFileDifferent() throws {
+        let file = try GameUserFile(data: Data(printingText.utf8))
+        var changed = file
+        changed.decks[0].cards[1].productID = 5
+        #expect(changed != file)
+        #expect(!changed.hasSameLists(as: file))
+    }
+
+    /// A `productID` this build cannot read (not a whole number) reads as no printing and is written back as it was through
+    /// other changes, until the printing is set (or set and cleared). A `null` is no key: the next write leaves none.
+    @Test func anUnreadablePrintingIsKeptUntilItIsSetOrCleared() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"standard","cards":[{"cardKey":"p","name":"P","section":"main","count":1,"productID":"719834"},{"cardKey":"q","name":"Q","section":"main","count":1,"productID":1.5},{"cardKey":"r","name":"R","section":"main","count":1,"productID":null},{"cardKey":"s","name":"S","section":"main","count":1,"productID":true}]}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks[0].cards.map(\.productID) == [nil, nil, nil, nil])
+        func cards() throws -> [[String: Any]] {
+            ((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]]
+        }
+        for i in file.decks[0].cards.indices { file.decks[0].cards[i].count = 2 }        // a change elsewhere on each card
+        var written = try cards()
+        #expect(written[0]["productID"] as? String == "719834")
+        #expect((written[1]["productID"] as? NSNumber)?.doubleValue == 1.5)
+        #expect(written[2]["productID"] == nil && written[2].keys.contains("productID") == false)
+        #expect((written[3]["productID"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() } == true)
+        #expect(written.map { $0["count"] as? Int } == [2, 2, 2, 2])
+        #expect(try GameUserFile(data: try file.data()).decks == file.decks)
+        // A move keeps the unreadable value with the card (its object goes with it).
+        file.decks[0] = DeckRules.moving(file.decks[0], cardKey: "s", from: "main", to: "side")
+        #expect((try cards().first { $0["cardKey"] as? String == "s" })?["productID"] != nil)
+        // Set on p; set then cleared on q: the unreadable values are gone.
+        file.decks[0] = DeckRules.settingPrinting(file.decks[0], key: DeckCardKey(cardKey: "p", section: "main"), productID: 7)
+        file.decks[0] = DeckRules.settingPrinting(file.decks[0], key: DeckCardKey(cardKey: "q", section: "main"), productID: 8)
+        file.decks[0] = DeckRules.settingPrinting(file.decks[0], key: DeckCardKey(cardKey: "q", section: "main"), productID: nil)
+        written = try cards()
+        #expect(written[0]["productID"] as? Int == 7)
+        #expect(written[1].keys.contains("productID") == false)
+        #expect(try GameUserFile(data: try file.data()).decks == file.decks)
+    }
+
+    /// Cards of one (card, section) summed on read: the first one's printing wins; a first without one takes the first
+    /// later one that has one.
+    @Test func mergedDeckCardsKeepTheFirstPrinting() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"standard","cards":[{"cardKey":"p","name":"P","section":"main","count":1,"productID":3},{"cardKey":"p","name":"P","section":"main","count":1,"productID":4},{"cardKey":"q","name":"Q","section":"main","count":1},{"cardKey":"q","name":"Q","section":"main","count":1,"productID":"x"},{"cardKey":"q","name":"Q","section":"main","count":1,"productID":6},{"cardKey":"q","name":"Q","section":"main","count":1,"productID":7}]}]}"#
+        let file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.decks[0].cards == [DeckCard(cardKey: "p", name: "P", section: "main", count: 2, productID: 3),
+                                        DeckCard(cardKey: "q", name: "Q", section: "main", count: 4, productID: 6)])
+        #expect(try GameUserFile(data: try file.data()).decks == file.decks)
+    }
+
+    /// A phase 2C build (decks unknown) and a phase 3A build (`productID` an unknown key of a card) keep the key: the 2C
+    /// rewrite gives `decks` back byte-equal; the 3A rewrite of a count change writes its four keys over the card's object.
+    @Test func aPhase2CAnd3ARewriteKeepThePrinting() throws {
+        let ours = Data(printingText.utf8)
+        // Phase 3A: parse, change a card's count, write its own keys over the object it read, write with its options.
+        var object = try JSONSerialization.jsonObject(with: ours) as! [String: Any]
+        var decks = object["decks"] as! [[String: Any]]
+        var cards = decks[0]["cards"] as! [[String: Any]]
+        let known: [String: Any] = ["cardKey": "swiftwind panther warrior", "name": "Swiftwind Panther Warrior",
+                                    "section": "main", "count": 3]
+        cards[0] = cards[0].filter { !["cardKey", "name", "section", "count"].contains($0.key) }.merging(known) { _, new in new }
+        decks[0]["cards"] = cards
+        object["decks"] = decks
+        var rewritten = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        rewritten.append(0x0A)
+        let back = try GameUserFile(data: rewritten)
+        #expect(back.decks[0].cards.map(\.productID) == [719834, nil])
+        #expect(back.decks[0].cards.map(\.count) == [3, 1])
+        // Phase 2C: `decks` is an unknown key, written back as read.
+        var phase2C = try JSONSerialization.jsonObject(with: ours) as! [String: Any]
+        phase2C["collection"] = [["productID": 1, "finish": "Normal", "count": 3, "condition": "", "name": "A"]]
+        var rewritten2C = try JSONSerialization.data(withJSONObject: phase2C, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        rewritten2C.append(0x0A)
+        let text = String(decoding: rewritten2C, as: UTF8.self), oursText = String(decoding: ours, as: UTF8.self)
+        let decksPart: (String) -> Substring = { $0[$0.range(of: "\"decks\"")!.lowerBound..<$0.range(of: "\"version\"")!.lowerBound] }
+        #expect(decksPart(text) == decksPart(oursText))
+        #expect(try GameUserFile(data: rewritten2C).decks == GameUserFile(data: ours).decks)
+    }
 }

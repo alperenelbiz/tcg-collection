@@ -110,11 +110,13 @@ struct CardPageView: View {
             RuleLine()
             // A new wanted entry saves the card's name (the title), not the printing's bracketed product name. What each
             // printing is names a pin on another printing.
-            // The "Decks" block is card-level: the same on every printing's page (the kind from all the printings).
+            // The "Decks" block is card-level: the same on every printing's page (the kind from all the printings); only its
+            // printing buttons and "Add to deck" use the printing on screen (A18).
             OwnedFinishes(gameID: game.id, productID: shown.productID, name: shown.name, offered: finishes.map(\.finish),
                           prices: finishes, wanted: (cardKey: cardKey, name: shown.cardName, printings: pinPrintings(printings, game: game)),
                           deckCard: DeckCardToAdd(cardKey: cardKey, name: shown.cardName,
-                                                  kind: model.deckKind(game: game, printings: printings)))
+                                                  kind: model.deckKind(game: game, printings: printings),
+                                                  productID: shown.productID))
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -421,7 +423,10 @@ struct WantedLine: View {
 /// `CountControl` (`deck-line-…-<deckID>-<section>`; `−` at 1 takes the card out of that section, `+` is off at 999 or
 /// more); then the menu "Add to deck" (`card-add-to-deck`): every deck of the game (one copy to the card's default
 /// section, also for a deck that holds it already) and, after a divider, "New Deck…" (the New Deck sheet; after Create the
-/// card is added to the new deck). With no deck in the game, the heading and the menu. Card-level: the same on every printing's page.
+/// card is added to the new deck). With no deck in the game, the heading and the menu. Card-level: the same on every printing's page,
+/// except for the printing (A18): "Add to deck" and the new deck save the page's printing on a line new in its section, and
+/// right of each line's count control one button (`deck-line-printing-<deckID>-<section>`) says "Use this printing" (stores
+/// the page's printing on the line) or, when the line's stored printing is the page's, "Any printing" (clears it).
 /// While the game cannot change: no numbers (`—`), everything off; the page's locked line says why.
 struct DeckLines: View {
     let gameID: String
@@ -454,6 +459,9 @@ struct DeckLines: View {
                                          maximum: DeckRules.maxCount, prefix: "deck-line", key: line.id) {
                                 step(by: $0 - line.count, line: line)
                             }
+                            if let page = card.productID {
+                                printingButton(line, page: page)
+                            }
                         }
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("deck-line-\(line.id)")
@@ -483,6 +491,21 @@ struct DeckLines: View {
         }
         .fixedSize()
         .accessibilityIdentifier("card-add-to-deck")
+    }
+
+    /// A18: "Any printing" when the line is stored on the page's printing (clears it), else "Use this printing" (stores
+    /// it). It keeps its width; the deck's name truncates first.
+    private func printingButton(_ line: DeckCardLine, page: Int) -> some View {
+        let isPage = line.productID == page
+        return Button(isPage ? "Any printing" : "Use this printing") {
+            model.library.changeDeck(game: gameID, id: line.deckID) {
+                DeckRules.settingPrinting($0, key: DeckCardKey(cardKey: card.cardKey, section: line.section),
+                                          productID: isPage ? nil : page)
+            }
+        }
+        .buttonStyle(FieldButtonStyle())
+        .fixedSize()
+        .accessibilityIdentifier("deck-line-printing-\(line.id)")
     }
 
     /// As on the deck page: the step goes onto the deck's current count of the card in that section, so two clicks before

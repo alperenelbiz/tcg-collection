@@ -151,4 +151,82 @@ struct DeckRulesTests {
         #expect(DeckRules.takingOne(deck([card("x", "maybe", 2)]), cardKey: "x", defaultSection: "main", order: order).cards
                 == [card("x", "maybe", 1)])
     }
+
+    // MARK: A deck card's printing (phase 3A feedback 1, A18)
+
+    private func card(_ key: String, _ section: String, _ count: Int, printing: Int?) -> DeckCard {
+        DeckCard(cardKey: key, name: key.capitalized, section: section, count: count, productID: printing)
+    }
+
+    /// A card page's "Add to deck" saves the page's printing only on a line that is new in that section; a line that
+    /// holds the card already keeps its printing (or none) and gains a copy. Without a printing (a search's `+`), none.
+    @Test func addingOneSavesAPrintingOnlyOnANewLine() {
+        let start = deck([card("bolt", "deck", 2, printing: 3), card("ring", "deck", 1, printing: nil)])
+        #expect(DeckRules.addingOne(start, cardKey: "bolt", name: "Bolt", section: "deck", productID: 7).cards
+                == [card("bolt", "deck", 3, printing: 3), card("ring", "deck", 1, printing: nil)])
+        #expect(DeckRules.addingOne(start, cardKey: "ring", name: "Ring", section: "deck", productID: 7).cards
+                == [card("bolt", "deck", 2, printing: 3), card("ring", "deck", 2, printing: nil)])
+        #expect(DeckRules.addingOne(start, cardKey: "bolt", name: "Bolt", section: "sideboard", productID: 7).cards.last
+                == card("bolt", "sideboard", 1, printing: 7))
+        #expect(DeckRules.addingOne(start, cardKey: "sol", name: "Sol", section: "deck").cards.last
+                == card("sol", "deck", 1, printing: nil))
+    }
+
+    /// A count step keeps the line's printing; 0 removes the line with its printing, so a card added again has none.
+    @Test func aCountStepKeepsThePrintingAndZeroRemovesIt() {
+        let start = deck([card("bolt", "deck", 2, printing: 3)])
+        let more = DeckRules.setting(start, count: 5, cardKey: "bolt", name: "", section: "deck")
+        #expect(more.cards == [card("bolt", "deck", 5, printing: 3)])
+        let gone = DeckRules.setting(more, count: 0, cardKey: "bolt", name: "", section: "deck")
+        #expect(gone.cards.isEmpty)
+        #expect(DeckRules.setting(gone, count: 1, cardKey: "bolt", name: "Bolt", section: "deck").cards
+                == [card("bolt", "deck", 1, printing: nil)])
+        #expect(DeckRules.takingOne(more, cardKey: "bolt", defaultSection: "deck", order: ["deck"]).cards
+                == [card("bolt", "deck", 4, printing: 3)])
+    }
+
+    /// A move takes the printing with the card. Into a line of the target section: the target's printing stays; a target
+    /// without one takes the moved card's.
+    @Test func aMoveTakesThePrintingAlong() {
+        let start = deck([card("bolt", "deck", 3, printing: 5), card("ring", "deck", 1, printing: 8),
+                          card("ring", "sideboard", 1, printing: nil), card("sol", "deck", 1, printing: 4),
+                          card("sol", "sideboard", 2, printing: 9)])
+        let alone = DeckRules.moving(start, cardKey: "bolt", from: "deck", to: "sideboard")
+        #expect(alone.cards.first == card("bolt", "sideboard", 3, printing: 5))
+        let intoNone = DeckRules.moving(start, cardKey: "ring", from: "deck", to: "sideboard")
+        #expect(intoNone.cards.first { $0.id == "ring|sideboard" } == card("ring", "sideboard", 2, printing: 8))
+        let intoOwn = DeckRules.moving(start, cardKey: "sol", from: "deck", to: "sideboard")
+        #expect(intoOwn.cards.first { $0.id == "sol|sideboard" } == card("sol", "sideboard", 3, printing: 9))
+    }
+
+    /// A format change moves the printing with its card; cards that land on one line keep the first one's printing, or
+    /// the first later one's when the first has none.
+    @Test func aFormatChangeKeepsThePrinting() throws {
+        let commander = try #require(Games.game("magic-the-gathering")?.format("commander"))
+        let start = deck([card("bolt", "sideboard", 1, printing: 6), card("ring", "deck", 1, printing: nil),
+                          card("ring", "sideboard", 1, printing: 7), card("sol", "deck", 1, printing: 2),
+                          card("sol", "sideboard", 1, printing: 3)])
+        let changed = DeckRules.changingFormat(start, to: commander) { _ in "deck" }
+        #expect(changed.cards == [card("bolt", "deck", 1, printing: 6), card("ring", "deck", 2, printing: 7),
+                                  card("sol", "deck", 2, printing: 2)])
+    }
+
+    /// A paste neither saves nor changes a printing: its cards are summed into a line, whose printing stays.
+    @Test func aPasteKeepsTheLinesPrinting() {
+        let start = deck([card("bolt", "deck", 2, printing: 3), card("ring", "deck", 1, printing: nil)])
+        let pasted = DeckRules.adding(start, [card("bolt", "deck", 1), card("ring", "deck", 1), card("sol", "deck", 1)])
+        #expect(pasted.cards == [card("bolt", "deck", 3, printing: 3), card("ring", "deck", 2, printing: nil),
+                                 card("sol", "deck", 1, printing: nil)])
+    }
+
+    /// "Use this printing" / "Any printing" on a card page's deck line: sets or clears one line's printing; nothing for a
+    /// line that is gone.
+    @Test func settingPrintingSetsAndClearsOneLine() {
+        let start = deck([card("bolt", "deck", 2, printing: nil), card("bolt", "sideboard", 1, printing: 4)])
+        let set = DeckRules.settingPrinting(start, key: DeckCardKey(cardKey: "bolt", section: "deck"), productID: 9)
+        #expect(set.cards == [card("bolt", "deck", 2, printing: 9), card("bolt", "sideboard", 1, printing: 4)])
+        let cleared = DeckRules.settingPrinting(set, key: DeckCardKey(cardKey: "bolt", section: "sideboard"), productID: nil)
+        #expect(cleared.cards == [card("bolt", "deck", 2, printing: 9), card("bolt", "sideboard", 1, printing: nil)])
+        #expect(DeckRules.settingPrinting(start, key: DeckCardKey(cardKey: "bolt", section: "maybe"), productID: 9) == start)
+    }
 }

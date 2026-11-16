@@ -1,13 +1,16 @@
 import Foundation
 
 /// One card of one section of a deck as the deck page shows it.
-/// - `shown`: the card's cheapest printing (market prices first; the first printing when none has a price); nil when the
-///   catalog has no printing of the card (D13: whether it is pending or gone is the view's decision).
+/// - `shown`: the printing the cell shows (A18, `DeckMaths.shownPrinting`: the stored one, else the one owned most, else the
+///   cheapest); nil when the catalog has no printing of the card (D13: whether it is pending or gone is the view's
+///   decision).
 /// - `kind`: the card's kind; nil for a card without a printing.
 /// - `owned`: the copies owned over all the card's printings; 0 for a card without a printing.
 /// - `missing`: the card's missing copies in this deck that fall on this line: owned copies serve the format's earlier
 ///   sections first (D6). Never for a basic card or a card without a printing.
-/// - `price`: the card's cheapest price; nil without a printing or a price.
+/// - `price`: the card's cheapest price over all its printings, for the totals (card-level); nil without a printing or a
+///   price.
+/// - `shownPrice`: the cell's price, the shown printing's own cheapest finish price (A18); nil without one.
 nonisolated struct DeckLine: Sendable, Identifiable, Equatable {
     let card: DeckCard
     let shown: ProductRecord?
@@ -16,6 +19,7 @@ nonisolated struct DeckLine: Sendable, Identifiable, Equatable {
     let owned: Int
     let missing: Int
     let price: ShownPrice?
+    var shownPrice: ShownPrice? = nil
 
     var id: String { card.id }
 
@@ -119,8 +123,8 @@ nonisolated enum DeckMaths {
     /// in groups of `game.deckGroups` order (only the non-empty ones; a group the game does not name comes before Other),
     /// by name inside a group, and its warning.
     static func sections(_ deck: Deck, format: DeckFormat, game: GameDefinition, printings: [String: [ProductRecord]],
-                         ownedByCard: [String: Int], isBasic: (String) -> Bool, kindOf: (String) -> CardKind?,
-                         price: ([ProductRecord]) -> ShownPrice?) -> [DeckSectionView] {
+                         ownedByCard: [String: Int], ownedByPrinting: [Int: Int], isBasic: (String) -> Bool,
+                         kindOf: (String) -> CardKind?, price: ([ProductRecord]) -> ShownPrice?) -> [DeckSectionView] {
         let deck = merged(deck)
         let sections = shownSections(deck, format: format)
         let missing = missingByLine(deck, sections: sections, printings: printings, ownedByCard: ownedByCard,
@@ -132,8 +136,8 @@ nonisolated enum DeckMaths {
         return sections.map { section in
             let lines = deck.cards.enumerated().filter { $0.element.section == section.id }.map { index, card in
                 (index, line(card, printings: printings[card.cardKey] ?? [], owned: ownedByCard[card.cardKey] ?? 0,
-                             missing: missing[card.key] ?? 0, isBasic: isBasic(card.cardKey), kindOf: kindOf,
-                             price: price))
+                             ownedByPrinting: ownedByPrinting, missing: missing[card.key] ?? 0,
+                             isBasic: isBasic(card.cardKey), kindOf: kindOf, price: price))
             }
             let byGroup = Dictionary(grouping: lines) { $0.1.kind?.group ?? CardKind.other }
             let names = order.filter { byGroup[$0] != nil }
@@ -148,13 +152,34 @@ nonisolated enum DeckMaths {
         }
     }
 
-    private static func line(_ card: DeckCard, printings: [ProductRecord], owned: Int, missing: Int, isBasic: Bool,
-                             kindOf: (String) -> CardKind?, price: ([ProductRecord]) -> ShownPrice?) -> DeckLine {
+    private static func line(_ card: DeckCard, printings: [ProductRecord], owned: Int, ownedByPrinting: [Int: Int],
+                             missing: Int, isBasic: Bool, kindOf: (String) -> CardKind?,
+                             price: ([ProductRecord]) -> ShownPrice?) -> DeckLine {
         guard !printings.isEmpty else {
             return DeckLine(card: card, shown: nil, kind: nil, isBasic: isBasic, owned: 0, missing: 0, price: nil)
         }
-        return DeckLine(card: card, shown: CollectionRules.cheapestPrinting(printings) { price([$0]) },
-                        kind: kindOf(card.cardKey), isBasic: isBasic, owned: owned, missing: missing, price: price(printings))
+        let shown = shownPrinting(card, printings: printings, ownedByPrinting: ownedByPrinting) { price([$0]) }
+        return DeckLine(card: card, shown: shown, kind: kindOf(card.cardKey), isBasic: isBasic, owned: owned,
+                        missing: missing, price: price(printings), shownPrice: shown.flatMap { price([$0]) })
+    }
+
+    /// A18: the printing a deck cell shows, of the card's `printings` (the catalog's order, newest set first):
+    /// 1. the card's stored printing (`DeckCard.productID`), when it is one of them (one that left the catalog falls
+    ///    through, and stays in the file);
+    /// 2. else the printing owned most (`ownedByPrinting`: copies over its finishes); on a tie the cheaper
+    ///    (`CollectionRules.cheapestPrinting`: market prices first), then the catalog's order;
+    /// 3. else the cheapest printing (the first when none has a price). Nil without printings.
+    static func shownPrinting(_ card: DeckCard, printings: [ProductRecord], ownedByPrinting: [Int: Int],
+                              price: (ProductRecord) -> ShownPrice?) -> ProductRecord? {
+        if let stored = card.productID, let printing = printings.first(where: { $0.productID == stored }) {
+            return printing
+        }
+        let most = printings.map { ownedByPrinting[$0.productID] ?? 0 }.max() ?? 0
+        if most > 0 {
+            return CollectionRules.cheapestPrinting(printings.filter { (ownedByPrinting[$0.productID] ?? 0) == most },
+                                                    price: price)
+        }
+        return CollectionRules.cheapestPrinting(printings, price: price)
     }
 
     /// Name, then card key, both ignoring case, then the deck's order.

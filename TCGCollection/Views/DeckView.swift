@@ -16,6 +16,9 @@ nonisolated struct DeckRead: Sendable, Equatable {
     var kinds: [String: CardKind]
     /// The keys of the basic cards (`DeckMaths.isBasic`): never missing, no copy limit.
     var basics: Set<String>
+    /// The copies owned of each printing of `printings` (product id → copies over its finishes), for the shown printing
+    /// (A18, `DeckMaths.shownPrinting`).
+    var ownedByPrinting: [Int: Int] = [:]
 }
 
 /// One line of a card page's "Decks" (`DeckPage.cardLines`): a deck that holds the card, one of its sections, the copies
@@ -27,17 +30,21 @@ nonisolated struct DeckCardLine: Equatable, Sendable, Identifiable {
     /// The format's name of the section; its id for a section the format lacks.
     let sectionName: String
     let count: Int
+    /// The line's chosen printing (A18), nil when none is stored.
+    var productID: Int? = nil
 
     /// `<deckID>-<section>`, the suffix of the line's identifiers.
     var id: String { "\(deckID)-\(section)" }
 }
 
 /// A card that a deck's search or a card page adds to a deck: its key, the name a new deck card saves (the card's name, the
-/// page title form, as Wanted saves it) and its kind (`CardKinds.deckKind`; nil without a printing).
+/// page title form, as Wanted saves it), its kind (`CardKinds.deckKind`; nil without a printing) and, from a card page only,
+/// the printing on screen (A18: saved on a line that is new in its section; nil from a deck's search).
 nonisolated struct DeckCardToAdd: Equatable, Sendable {
     let cardKey: String
     let name: String
     let kind: CardKind?
+    var productID: Int? = nil
 }
 
 /// What a deck's navigation stack pushes for "Add cards": the catalog search with that deck as its target.
@@ -74,8 +81,11 @@ nonisolated enum DeckPage {
                      ygoType: (String) -> String?) -> DeckRead {
         let kinds = printings.compactMapValues { CardKinds.deckKind(game: game, printings: $0, ygoType: ygoType) }
         let isBasic = DeckMaths.isBasic(game: game, printings: printings)
+        let products = Set(printings.values.flatMap { $0.map(\.productID) })
+        let ownedByPrinting = rows.filter { products.contains($0.productID) }
+            .reduce(into: [Int: Int]()) { $0[$1.productID, default: 0] += $1.count }
         return DeckRead(printings: printings, keys: keys, ownedByCard: WantedList.ownedByCard(rows: rows, printings: printings),
-                        kinds: kinds, basics: Set(printings.keys.filter(isBasic)))
+                        kinds: kinds, basics: Set(printings.keys.filter(isBasic)), ownedByPrinting: ownedByPrinting)
     }
 
     /// The section a card is added to (D9, D10: `+` of a deck's search, "Add to deck" on a card page): its kind's default
@@ -84,17 +94,20 @@ nonisolated enum DeckPage {
         game.defaultSection(format: format, kind: kind ?? CardKind(group: CardKind.other, flags: []))
     }
 
-    /// One copy more of `card` in its default section of the deck's format (`addSection`).
+    /// One copy more of `card` in its default section of the deck's format (`addSection`); a card page's printing is saved
+    /// on a line new in that section (A18, `DeckRules.addingOne`).
     static func addingOne(_ deck: Deck, _ card: DeckCardToAdd, game: GameDefinition) -> Deck {
         DeckRules.addingOne(deck, cardKey: card.cardKey, name: card.name,
-                            section: addSection(game: game, format: game.format(deck.format), kind: card.kind))
+                            section: addSection(game: game, format: game.format(deck.format), kind: card.kind),
+                            productID: card.productID)
     }
 
-    /// The cards of a deck made by a card page's "New Deck…": the card's one copy in its default section of `format`, so
-    /// the deck and the card are one library change (`UserLibrary.addDeck(…cards:)`).
+    /// The cards of a deck made by a card page's "New Deck…": the card's one copy in its default section of `format`, on
+    /// the page's printing (A18), so the deck and the card are one library change (`UserLibrary.addDeck(…cards:)`).
     static func newDeckCards(_ card: DeckCardToAdd, format: String, game: GameDefinition) -> [DeckCard] {
         [DeckCard(cardKey: card.cardKey, name: card.name,
-                  section: addSection(game: game, format: game.format(format), kind: card.kind), count: 1)]
+                  section: addSection(game: game, format: game.format(format), kind: card.kind), count: 1,
+                  productID: card.productID)]
     }
 
     /// One copy less of `card` over the deck: its default section first, then the format's order (`DeckRules.takingOne`).
@@ -123,7 +136,8 @@ nonisolated enum DeckPage {
             let sorted = held.sorted { (order[$0.element.section] ?? Int.max, $0.offset) < (order[$1.element.section] ?? Int.max, $1.offset) }
             return sorted.map { _, card in
                 DeckCardLine(deckID: deck.id, deckName: deck.name, section: card.section,
-                             sectionName: format.section(card.section)?.name ?? card.section, count: card.count)
+                             sectionName: format.section(card.section)?.name ?? card.section, count: card.count,
+                             productID: card.productID)
             }
         }
     }
@@ -143,7 +157,7 @@ nonisolated enum DeckPage {
             let basics = read?.basics ?? [], kinds = read?.kinds ?? [:]
             let sections = DeckMaths.sections(deck, format: game.format(deck.format), game: game,
                                               printings: read?.printings ?? [:], ownedByCard: read?.ownedByCard ?? [:],
-                                              isBasic: { basics.contains($0) }, kindOf: { kinds[$0] }, price: price)
+                                              ownedByPrinting: read?.ownedByPrinting ?? [:], isBasic: { basics.contains($0) }, kindOf: { kinds[$0] }, price: price)
             return DeckContent(sections: sections, note: note)
         }
         if joinFailed {
@@ -171,9 +185,9 @@ nonisolated enum DeckPage {
         line.missing > 0 && !line.isBasic ? "×\(line.card.count) · \(line.missing) missing" : "×\(line.card.count)"
     }
 
-    /// What VoiceOver and the UI tests read for a cell: name, the count text and the price.
+    /// What VoiceOver and the UI tests read for a cell: name, the count text and the price of the shown printing.
     static func accessibilityText(_ line: DeckLine) -> String {
-        [line.name, countText(line), line.price.map { CardFacts.priceText($0) } ?? "no price"].joined(separator: ", ")
+        [line.name, countText(line), line.shownPrice.map { CardFacts.priceText($0) } ?? "no price"].joined(separator: ", ")
     }
 
     /// A section's warning, only on a deck with at least one card: an empty deck shows its empty message, not every bound
@@ -334,7 +348,7 @@ final class DeckMemory {
 
 /// One deck of the selected game (D8): the totals as the window's subtitle, the "Deck" menu and one search field; then per
 /// section its title, count and warning, and per group a small heading and `CardCell`s, each with a `CountControl` under
-/// it. A click on a cell's picture or name opens the card page on the card's cheapest printing, in this deck's own
+/// it. A click on a cell's picture or name opens the card page on the cell's shown printing (A18), in this deck's own
 /// navigation stack. A cell's context menu moves the card to another section of the format (D9). Warnings never block a
 /// change (spec 5.3).
 struct DeckView: View {
@@ -582,8 +596,9 @@ private struct DeckSectionBlock<Cell: View>: View {
     }
 }
 
-/// A deck cell (`CardCell`): the card's name, `×n` or `×n · 2 missing` and the card's cheapest price, on its cheapest
-/// printing's picture. A card with a printing opens its card page on that printing; a card without one (pending, or not in
+/// A deck cell (`CardCell`): the card's name, `×n` or `×n · 2 missing` and the shown printing's own price, on the shown
+/// printing's picture (A18: the chosen printing, else the one owned, else the cheapest). A card with a printing opens its
+/// card page on that printing; a card without one (pending, or not in
 /// the catalog, D13) opens nothing and takes no hover. The caller gives it its identifier.
 private struct DeckCell: View {
     let gameID: String
@@ -591,7 +606,7 @@ private struct DeckCell: View {
 
     var body: some View {
         let cell = CardCell(content: CellContent(product: line.shown, name: line.name, left: DeckPage.countText(line),
-                                                 price: line.price))
+                                                 price: line.shownPrice))
         if let shown = line.shown {
             NavigationLink(value: CardTarget(gameID: gameID, cardKey: line.card.cardKey, startProductID: shown.productID)) { cell }
                 .buttonStyle(.plain)

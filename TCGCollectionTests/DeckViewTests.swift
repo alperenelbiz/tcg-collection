@@ -375,4 +375,60 @@ struct DeckViewTests {
         #expect(DeckPage.addingOne(deck([], format: "standard"), searchCard, game: yugioh)
                 == DeckPage.addingOne(deck([], format: "standard"), pageCard, game: yugioh))
     }
+
+    // MARK: A deck card's printing (phase 3A feedback 1, A18)
+
+    /// A card page's "Add to deck" saves the page's printing on a new line only; a search cell's card has none to save.
+    /// A card page's "New Deck…" saves it on the new deck's one card.
+    @Test func aCardPageSavesItsPrintingOnANewLine() {
+        let kind = CardKind(group: "Monsters", flags: [])
+        let page = DeckCardToAdd(cardKey: "twin", name: "Twin", kind: kind, productID: 719834)
+        let search = DeckCardToAdd(cardKey: "twin", name: "Twin", kind: kind)
+        #expect(search.productID == nil)
+        let added = DeckPage.addingOne(deck([]), page, game: yugioh)
+        #expect(added.cards == [DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 1, productID: 719834)])
+        let again = DeckPage.addingOne(added, DeckCardToAdd(cardKey: "twin", name: "Twin", kind: kind, productID: 5), game: yugioh)
+        #expect(again.cards == [DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 2, productID: 719834)])
+        #expect(DeckPage.addingOne(deck([]), search, game: yugioh).cards.map(\.productID) == [nil])
+        #expect(DeckPage.newDeckCards(page, format: "standard", game: yugioh).map(\.productID) == [719834])
+        #expect(DeckPage.newDeckCards(search, format: "standard", game: yugioh).map(\.productID) == [nil])
+    }
+
+    /// The card page's deck lines carry each line's stored printing, for "Use this printing" / "Any printing".
+    @Test func theCardPagesDeckLinesCarryTheirPrinting() {
+        let held = Deck(id: "a", name: "Wind", format: "standard", active: false,
+                        cards: [DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 2, productID: 7),
+                                DeckCard(cardKey: "twin", name: "Twin", section: "side", count: 1)])
+        #expect(DeckPage.cardLines(decks: [held], cardKey: "twin", game: yugioh).map(\.productID) == [7, nil])
+    }
+
+    /// The read counts the copies owned per printing (over its finishes) of the deck's cards, for the shown printing.
+    @Test func theReadCountsTheCopiesOwnedPerPrinting() {
+        let rows = [CollectionRow(productID: 721337, finish: "Normal", count: 2, condition: "", name: "Kai'Sa, Rebel"),
+                    CollectionRow(productID: 721337, finish: "Foil", count: 1, condition: "", name: "Kai'Sa, Rebel"),
+                    CollectionRow(productID: 999, finish: "Normal", count: 5, condition: "", name: "Other")]
+        let made = DeckPage.read(game: riftbound, printings: ["kai sa rebel": [kaisa], "calm rune": [rune]],
+                                 keys: ["kai sa rebel", "calm rune"], rows: rows, ygoType: { _ in nil })
+        #expect(made.ownedByPrinting == [721337: 3])
+    }
+
+    /// The page shows the stored printing, else the one owned, and its own price; the cell's text says that price.
+    @Test func thePageShowsTheChosenOrOwnedPrinting() {
+        let first = product(id: 1, game: "yu-gi-oh", name: "Twin"), second = product(id: 2, game: "yu-gi-oh", name: "Twin")
+        let rows = [CollectionRow(productID: 2, finish: "Normal", count: 1, condition: "", name: "Twin")]
+        let read = DeckPage.read(game: yugioh, printings: ["twin": [first, second]], keys: ["twin"], rows: rows,
+                                 ygoType: { _ in nil })
+        let prices: [Int: ShownPrice] = [1: ShownPrice(amount: 1, isLow: false), 2: ShownPrice(amount: 3, isLow: false)]
+        let price: ([ProductRecord]) -> ShownPrice? = { list in list.compactMap { prices[$0.productID] }.min { $0.amount < $1.amount } }
+        func shownLine(_ card: DeckCard) -> DeckLine? {
+            DeckPage.content(deck([card]), game: yugioh, read: read, joinFailed: false, catalogHasProducts: true,
+                             catalogSettled: true, price: price).sections.flatMap { $0.groups.flatMap(\.lines) }.first
+        }
+        let owned = shownLine(DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 1))
+        #expect(owned?.shown?.productID == 2)
+        #expect(owned.map(DeckPage.accessibilityText) == "Twin, ×1, $3.00")
+        let chosen = shownLine(DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 1, productID: 1))
+        #expect(chosen?.shown?.productID == 1)
+        #expect(chosen.map(DeckPage.accessibilityText) == "Twin, ×1, $1.00")
+    }
 }

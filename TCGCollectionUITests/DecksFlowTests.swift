@@ -829,4 +829,132 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(sheet.waitForExistence(timeout: 10), "the toolbar's Paste… opens no sheet")
         XCTAssertEqual(text(element(app, "paste-title")), "Paste into Wind")
     }
+
+    // MARK: A deck card's printing (phase 3A feedback 1, A18)
+
+    private static let warrior = "swiftwind panther warrior"
+
+    /// Each card of the deck `id` as `<cardKey>|<section>|<productID or "-">`; a `productID` key that is there but not a
+    /// whole number is `?`.
+    private func storedPrintings(game: String, deck id: String) throws -> [String] {
+        let decks = try XCTUnwrap(try storedUserFile(game: game)?["decks"] as? [[String: Any]], "no decks")
+        let deck = try XCTUnwrap(decks.first { $0["id"] as? String == id }, "no deck \(id)")
+        return (deck["cards"] as? [[String: Any]] ?? []).map { card in
+            let printing = card["productID"].map { ($0 as? Int).map(String.init) ?? "?" } ?? "-"
+            return "\(card["cardKey"] as? String ?? "")|\(card["section"] as? String ?? "")|\(printing)"
+        }
+    }
+
+    /// Switches the open card page to the printing `productID` (a row of "Other printings", below the window's edge)
+    /// and waits until its facts line names `rarity`.
+    private func showPrinting(_ app: XCUIApplication, _ productID: Int, rarity: String, file: StaticString = #filePath,
+                              line: UInt = #line) {
+        let row = revealOnCardPage(app, "printing-row-\(productID)", file: file, line: line)
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        let facts = app.staticTexts["card-facts-line"]
+        XCTAssertTrue(waitUntil { self.text(facts).contains(rarity) }, text(facts), file: file, line: line)
+    }
+
+    /// The card page's facts line names `rarity` (the page opened on that printing).
+    private func assertPageRarity(_ app: XCUIApplication, _ rarity: String, file: StaticString = #filePath, line: UInt = #line) {
+        let facts = app.staticTexts["card-facts-line"]
+        XCTAssertTrue(facts.waitForExistence(timeout: 10), "no card page", file: file, line: line)
+        XCTAssertTrue(waitUntil { self.text(facts).contains(rarity) }, text(facts), file: file, line: line)
+    }
+
+    /// A18: "Add to deck" on the second printing's page (719834, Super Rare) saves that printing on the new line; the deck
+    /// cell shows it (its own price, $9.00, its cheapest finish) and opens its page. A deck that holds the card without a
+    /// printing, with nothing owned, shows the cheapest printing (719835, $3.10). The deck lines' printing buttons stay in
+    /// the 900 pt window.
+    func testAddToDeckSavesThePagesPrinting() throws {
+        let app = try launch(game: "yu-gi-oh") { root in
+            try self.writePinPrices(in: root)
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false, "cards": []},
+                                     {"id": "yg2", "name": "Cheap", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let cell = element(app, "card-cell-\(Self.warrior)")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        cell.click()
+        assertPageRarity(app, "Starlight Rare")                   // the catalog's first printing
+        showPrinting(app, 719834, rarity: "Super Rare")
+        revealOnCardPage(app, "card-add-to-deck").click()
+        let wind = app.menuItems["Wind"].firstMatch
+        XCTAssertTrue(wind.waitForExistence(timeout: 5))
+        wind.click()
+        XCTAssertTrue(waitUntil { (try? self.storedPrintings(game: "yu-gi-oh", deck: "yg1")) == ["\(Self.warrior)|main|719834"] },
+                      "\(String(describing: try? storedPrintings(game: "yu-gi-oh", deck: "yg1")))")
+        // The line stored on this page's printing offers "Any printing"; the other deck's line "Use this printing".
+        let windButton = revealOnCardPage(app, "deck-line-printing-yg1-main")
+        XCTAssertTrue(waitUntil { windButton.label == "Any printing" }, windButton.label)
+        let cheapButton = revealOnCardPage(app, "deck-line-printing-yg2-main")
+        XCTAssertEqual(cheapButton.label, "Use this printing")
+        let window = app.windows.firstMatch.frame
+        XCTAssertEqual(window.width, 900, accuracy: 1, "the deck lines widened the window")
+        for button in [windButton, cheapButton] {
+            XCTAssertTrue(button.isHittable, "\(button.identifier) is not hittable")
+            XCTAssertLessThanOrEqual(button.frame.maxX, window.maxX, "\(button.identifier) leaves the window: \(button.frame)")
+        }
+        shot("decks-40-card-page-printing-buttons")
+
+        element(app, "sidebar-deck-yg1").click()
+        let windCell = reveal(app, "deck-cell-\(Self.warrior)-main")
+        XCTAssertTrue(waitUntil { windCell.label == "Swiftwind Panther Warrior, ×1 · 1 missing, $9.00" }, windCell.label)
+        shot("decks-41-deck-cell-chosen-printing")
+        windCell.click()
+        assertPageRarity(app, "Super Rare")
+
+        element(app, "sidebar-deck-yg2").click()
+        let cheapCell = reveal(app, "deck-cell-\(Self.warrior)-main")
+        XCTAssertTrue(waitUntil { cheapCell.label == "Swiftwind Panther Warrior, ×1 · 1 missing, $3.10" }, cheapCell.label)
+        cheapCell.click()
+        assertPageRarity(app, "Starlight Rare")
+    }
+
+    /// A18: with no stored printing the cell shows the printing owned (719834, though 719835 is cheaper). "Use this
+    /// printing" on the other printing's page stores it (the cell follows); "Any printing" clears the key from the file,
+    /// and the cell shows the owned printing again.
+    func testUseThisPrintingAndAnyPrinting() throws {
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"]) { root in
+            try self.writePinPrices(in: root)
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1,
+             "collection": [{"productID": 719834, "finish": "Unlimited", "count": 1, "condition": "", "name": "Swiftwind Panther Warrior"}],
+             "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false,
+                        "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let deckCell = reveal(app, "deck-cell-\(Self.warrior)-main")
+        XCTAssertTrue(waitUntil { deckCell.label == "Swiftwind Panther Warrior, ×1, $9.00" }, deckCell.label)
+        shot("decks-42-deck-cell-owned-printing")
+        deckCell.click()
+        assertPageRarity(app, "Super Rare")
+        let button = revealOnCardPage(app, "deck-line-printing-yg1-main")
+        XCTAssertEqual(button.label, "Use this printing")
+        showPrinting(app, 719835, rarity: "Starlight Rare")
+        let use = revealOnCardPage(app, "deck-line-printing-yg1-main")
+        XCTAssertEqual(use.label, "Use this printing")
+        use.click()
+        XCTAssertTrue(waitUntil { use.label == "Any printing" }, use.label)
+        XCTAssertTrue(waitUntil { (try? self.storedPrintings(game: "yu-gi-oh", deck: "yg1")) == ["\(Self.warrior)|main|719835"] },
+                      "\(String(describing: try? storedPrintings(game: "yu-gi-oh", deck: "yg1")))")
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 1, "the deck line widened the window")
+        shot("decks-43-card-page-any-printing")
+        app.toolbars.buttons["Back"].click()
+        XCTAssertTrue(waitUntil { deckCell.label == "Swiftwind Panther Warrior, ×1, $3.10" }, deckCell.label)
+
+        deckCell.click()
+        assertPageRarity(app, "Starlight Rare")
+        let any = revealOnCardPage(app, "deck-line-printing-yg1-main")
+        XCTAssertEqual(any.label, "Any printing")
+        any.click()
+        XCTAssertTrue(waitUntil { any.label == "Use this printing" }, any.label)
+        XCTAssertTrue(waitUntil { (try? self.storedPrintings(game: "yu-gi-oh", deck: "yg1")) == ["\(Self.warrior)|main|-"] },
+                      "\(String(describing: try? storedPrintings(game: "yu-gi-oh", deck: "yg1")))")
+        app.toolbars.buttons["Back"].click()
+        XCTAssertTrue(waitUntil { deckCell.label == "Swiftwind Panther Warrior, ×1, $9.00" }, deckCell.label)
+    }
 }

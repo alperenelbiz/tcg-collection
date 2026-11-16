@@ -23,7 +23,7 @@ struct DeckMathsTests {
                           kinds: [String: CardKind] = [:],
                           prices: [Int: ShownPrice] = [:]) -> [DeckSectionView] {
         DeckMaths.sections(deck, format: game.format(deck.format), game: game, printings: printings,
-                           ownedByCard: owned, isBasic: isBasic, kindOf: { kinds[$0] },
+                           ownedByCard: owned, ownedByPrinting: [:], isBasic: isBasic, kindOf: { kinds[$0] },
                            price: { list in
                                let shown = list.compactMap { prices[$0.productID] }
                                return shown.filter { !$0.isLow }.min { $0.amount < $1.amount }
@@ -152,6 +152,75 @@ struct DeckMathsTests {
         let line = lines(view[0]).first
         #expect(line?.shown?.productID == 2)
         #expect(line?.price == ShownPrice(amount: 1.5, isLow: false))
+    }
+
+    // MARK: The shown printing (phase 3A feedback 1, A18)
+
+    private let older = product(id: 1, game: "yu-gi-oh", name: "Twin")
+    private let middle = product(id: 2, game: "yu-gi-oh", name: "Twin")
+    private let newer = product(id: 3, game: "yu-gi-oh", name: "Twin")
+
+    private func shown(_ card: DeckCard, _ printings: [ProductRecord], owned: [Int: Int] = [:],
+                       prices: [Int: ShownPrice] = [:]) -> Int? {
+        DeckMaths.shownPrinting(card, printings: printings, ownedByPrinting: owned, price: { prices[$0.productID] })?.productID
+    }
+
+    /// 1: the stored printing when it is among the card's printings in the catalog, whatever is owned or cheaper.
+    @Test func theStoredPrintingIsShownFirst() {
+        var twin = card("twin", "main", 1)
+        twin.productID = 3
+        #expect(shown(twin, [older, middle, newer], owned: [1: 4], prices: [1: ShownPrice(amount: 0.1, isLow: false)]) == 3)
+        // A stored printing that left the catalog falls through to what is owned, then to the cheapest.
+        twin.productID = 99
+        #expect(shown(twin, [older, middle, newer], owned: [2: 1]) == 2)
+        #expect(shown(twin, [older, middle, newer], prices: [1: ShownPrice(amount: 0.5, isLow: false)]) == 1)
+        #expect(twin.productID == 99)
+    }
+
+    /// 2: else the printing owned most (over its finishes); a tie: the cheaper (market prices first), then the catalog's
+    /// order.
+    @Test func elseThePrintingOwnedMost() {
+        let twin = card("twin", "main", 1)
+        let all = [older, middle, newer]
+        #expect(shown(twin, all, owned: [1: 1, 3: 2]) == 3)
+        let prices = [1: ShownPrice(amount: 5, isLow: false), 2: ShownPrice(amount: 2, isLow: false),
+                      3: ShownPrice(amount: 1, isLow: true)]
+        #expect(shown(twin, all, owned: [1: 2, 2: 2], prices: prices) == 2)                 // the cheaper of the two
+        #expect(shown(twin, all, owned: [2: 1, 3: 1], prices: prices) == 2)                 // market before low
+        #expect(shown(twin, all, owned: [3: 1, 2: 1]) == 2)                                 // no price: catalog order
+        #expect(shown(twin, all, owned: [3: 0], prices: [2: ShownPrice(amount: 1, isLow: false)]) == 2)   // 0 is not owned
+    }
+
+    /// 3: else the cheapest printing (market first), the newest (the first) when none has a price; nil without printings.
+    @Test func elseTheCheapestPrinting() {
+        let twin = card("twin", "main", 1)
+        #expect(shown(twin, [older, middle, newer], prices: [2: ShownPrice(amount: 3, isLow: false),
+                                                            3: ShownPrice(amount: 1, isLow: false)]) == 3)
+        #expect(shown(twin, [older, middle, newer]) == 1)
+        #expect(shown(twin, []) == nil)
+    }
+
+    /// The line shows that printing, and the cell's price is that printing's own cheapest finish price; the totals keep
+    /// the card's cheapest price (card-level).
+    @Test func aLineShowsItsPrintingsOwnPrice() {
+        var twin = card("twin", "main", 2)
+        twin.productID = 1
+        let printings = ["twin": [older, middle, newer]]
+        let prices = [1: ShownPrice(amount: 4, isLow: false), 2: ShownPrice(amount: 1.5, isLow: false)]
+        let view = DeckMaths.sections(deck([twin]), format: yugioh.format("standard"), game: yugioh, printings: printings,
+                                      ownedByCard: [:], ownedByPrinting: [:], isBasic: notBasic, kindOf: { _ in nil },
+                                      price: { list in list.compactMap { prices[$0.productID] }.min { $0.amount < $1.amount } })
+        let line = lines(view[0]).first
+        #expect(line?.shown?.productID == 1)
+        #expect(line?.shownPrice == ShownPrice(amount: 4, isLow: false))
+        #expect(line?.price == ShownPrice(amount: 1.5, isLow: false))
+        #expect(DeckMaths.totals(view) == "2 cards · 2 missing · $3.00 to complete")
+        // A printing owned: shown when none is stored.
+        let owned = DeckMaths.sections(deck([card("twin", "main", 1)]), format: yugioh.format("standard"), game: yugioh,
+                                       printings: printings, ownedByCard: ["twin": 1], ownedByPrinting: [3: 1],
+                                       isBasic: notBasic, kindOf: { _ in nil }, price: { _ in nil })
+        #expect(lines(owned[0]).first?.shown?.productID == 3)
+        #expect(lines(owned[0]).first?.shownPrice == nil)
     }
 
     /// A section the format lacks (a file from elsewhere) is listed after the format's, under its id, so no card hides.
