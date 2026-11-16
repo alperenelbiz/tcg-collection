@@ -438,7 +438,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
 
     /// A fraction as Swift prints it (`0.07`). JSONSerialization would write 17 digits (`0.070000000000000007`), which
     /// does not read back as the same Double.
-    private static func shortest(_ value: Any) -> Any {
+    /// Also the price history's number writer (`PriceHistory.data()`).
+    static func shortest(_ value: Any) -> Any {
         guard let number = value as? NSNumber, CFNumberIsFloatType(number) else { return value }
         let decimal = NSDecimalNumber(string: "\(number.doubleValue)", locale: Locale(identifier: "en_US_POSIX"))
         return decimal == .notANumber ? value : decimal
@@ -505,7 +506,8 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     /// A JSON number; not a boolean. JSONSerialization reads a number of many digits (`0.070000000000000007`, as a phase 2B
     /// build rewrites `0.07`) as an NSDecimalNumber, whose `doubleValue` is off (`0.07000000000000003`): its text is read
     /// as a Double instead, which gives the number that was written.
-    private static func number(_ value: Any) -> Double? {
+    /// Also the price history's number reader (`PriceHistory(data:)`).
+    static func number(_ value: Any) -> Double? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         if let decimal = number as? NSDecimalNumber, let exact = Double(decimal.stringValue) { return exact }
         return number.doubleValue

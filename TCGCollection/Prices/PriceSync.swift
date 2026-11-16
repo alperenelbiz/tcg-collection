@@ -52,6 +52,34 @@ nonisolated enum PriceDay {
               let date = utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) else { return day }
         return format(date.addingTimeInterval(-86_400))
     }
+
+    /// The day after `day` (`yyyy-MM-dd`, UTC); `day` itself when it does not read as a day.
+    static func after(_ day: String) -> String {
+        let parts = day.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let date = utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) else { return day }
+        return format(date.addingTimeInterval(86_400))
+    }
+
+    /// The price history's window (H5): the 90 UTC days that end on `day`, that day included.
+    static func window(endingOn day: String) -> ClosedRange<String> {
+        var first = day
+        for _ in 1..<90 { first = before(first) }
+        return first...day
+    }
+
+    /// Every day of `window`, ascending.
+    static func days(in window: ClosedRange<String>) -> [String] {
+        var result: [String] = []
+        var day = window.lowerBound
+        while day <= window.upperBound {
+            result.append(day)
+            let next = after(day)
+            if next <= day { break }
+            day = next
+        }
+        return result
+    }
 }
 
 actor PriceSync {
