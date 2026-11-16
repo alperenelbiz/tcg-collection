@@ -64,6 +64,14 @@ nonisolated enum UserFiles {
     /// disk at that moment throws `appeared` and nothing is written. The check and the write are one coordinated write, so
     /// a file that arrives late is never replaced by a new one (task 5 fix round 1 (c)).
     static func writeGameFile(_ data: Data, to url: URL, creating: Bool = false) throws {
+        try writeChecked(data, to: url, creating: creating, refusal: refusal)
+    }
+
+    /// `writeGameFile`'s rules for any file of the folder (phase 5A: the history file), with the file's own `refusal`:
+    /// why the bytes on disk at that moment must not be replaced (nil: they may). `creating` throws `appeared` for any
+    /// file or placeholder of that name; else a placeholder throws `notDownloaded`. The check and the write are one
+    /// coordinated write. It never makes a folder.
+    static func writeChecked(_ data: Data, to url: URL, creating: Bool, refusal: (Data) -> UserFilesError?) throws {
         try coordinate(writing: url, options: .forReplacing) { url in
             let onDisk: Data?
             do {
@@ -114,6 +122,13 @@ nonisolated enum UserFiles {
     /// when a backup fails, this throws and every version stays as it was. When the current file is one this app must not
     /// rewrite (`conflictPlan` → `.leave`), nothing is touched; the read that follows refuses the file.
     static func resolveConflicts(of url: URL, now: Date) throws -> URL? {
+        try settleConflicts(of: url, plan: conflictPlan, backupsAt: now)
+    }
+
+    /// `resolveConflicts`' mechanism for any file of the folder, with the file's own `plan`. With `backupsAt` nil no
+    /// backup is written (phase 5A, H4: the history file is derived data): the versions that lose are only removed.
+    static func settleConflicts(of url: URL, plan: ([(date: Date, data: Data)]) -> ConflictPlan,
+                                backupsAt now: Date?) throws -> URL? {
         guard let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url), !conflicts.isEmpty else { return nil }
         let coordinator = NSFileCoordinator()
         return try coordinate(writing: url, options: .forMerging, coordinator: coordinator) { url in
@@ -123,9 +138,10 @@ nonisolated enum UserFiles {
             for version in conflicts {
                 versions.append((version.modificationDate ?? .distantPast, try Data(contentsOf: version.url)))
             }
-            guard case .settle(let winner) = conflictPlan(versions) else { return nil }
+            guard case .settle(let winner) = plan(versions) else { return nil }
             var backups: [URL] = []
             for (index, version) in versions.enumerated() where index != winner {
+                guard let now else { break }
                 // Inside an accessor, a second file is coordinated with the same coordinator.
                 let backup = freeConflictURL(for: url, at: now)
                 try coordinate(writing: backup, options: .forReplacing, coordinator: coordinator) { backup in

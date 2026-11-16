@@ -207,4 +207,35 @@ struct UserFilesTests {
         #expect(throws: (any Error).self) { try UserFiles.writeSettingsIfMissing(in: gone) }
         #expect(!FileManager.default.fileExists(atPath: gone.path))
     }
+
+    // MARK: The history file beside the game files (phase 5A, H1; Review Focus 1)
+
+    /// A build before phase 5 knows a game file only by `<game id>.json`: the history file is no game file to it.
+    @Test func aHistoryFileIsNoGameFile() {
+        for name in ["riftbound.prices.json", "magic-the-gathering.prices.json", ".riftbound.prices.json.icloud"] {
+            #expect(UserFiles.gameID(ofFileNamed: name) == nil, "\(name)")
+        }
+    }
+
+    /// A folder with only `settings.json` and a history file has no game file (onboarding's rule is unchanged), and a
+    /// reported change of the history file reads no game file again and bumps nothing. These pin H1 for older builds:
+    /// they passed against the phase 4B code before phase 5A changed anything.
+    @MainActor @Test func aHistoryFileIsNotSeenByTheLibrary() async throws {
+        let dir = tempDir(), watcher = FakeWatcher()
+        try Data(#"{"version":1}"#.utf8).write(to: dir.appending(path: "settings.json"))
+        let history = dir.appending(path: "riftbound.prices.json")
+        try Data(#"{"days":[],"products":{},"version":1}"#.utf8).write(to: history)
+        let library = UserLibrary(folder: dir, watcher: watcher)
+        await library.load()
+        #expect(!library.hasGameFile)
+        #expect(!library.hasFile(game: "riftbound"))
+        let before = library.version
+        #expect(library.fileChanged(history) == nil)
+        try Data(#"{"days":["2026-01-02"],"products":{},"version":1}"#.utf8).write(to: history)
+        await watcher.fire(history)
+        await library.flush()
+        #expect(library.version == before)
+        #expect(!library.hasGameFile)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["riftbound.prices.json", "settings.json"])
+    }
 }
