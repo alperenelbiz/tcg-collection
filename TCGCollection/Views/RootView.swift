@@ -273,9 +273,10 @@ private struct SidebarStatus: View {
     }
 }
 
-/// D7: one row per deck of the game, in deck order, with its missing count (an active deck that misses copies), the
-/// line for decks this build cannot read, then "New Deck…", a button, not a selectable row. A view of its own, so a
-/// change of the status line does not compute it again (final fix B9).
+/// D7: one row per deck of the game, in deck order (a drag changes it, E6), with its missing count (an active deck that
+/// misses copies; the active decks are served in deck order, E4), the line for decks this build cannot read, then
+/// "New Deck…", a button, not a selectable row. A view of its own, so a change of the status line does not compute it
+/// again (final fix B9).
 private struct SidebarDecks: View {
     @Environment(AppModel.self) private var model
     let selection: Screen?
@@ -284,11 +285,20 @@ private struct SidebarDecks: View {
 
     var body: some View {
         let library = model.library, game = model.gameID
-        let read = activeDecks.read(game: game)
+        let read = activeDecks.read(game: game), decks = library.decks(game: game)
+        // E4: the active decks are served in deck order (a shared card: each sees every owned copy).
+        let needs = DeckPage.needs(decks: decks, sharing: library.sharing(game: game), read: read)
         Section("Decks") {
-            ForEach(library.decks(game: game)) { deck in
-                deckRow(deck, missing: DeckPage.sidebarCount(deck, read: read))
+            ForEach(decks) { deck in
+                deckRow(deck, missing: DeckPage.sidebarCount(deck, read: read,
+                                                             available: DeckPage.available(to: deck, needs: needs, read: read)))
             }
+            // E6: a drag changes the deck order (the order the active decks are served in). Off while the game cannot change.
+            .onMove(perform: library.canChange(game: game) ? { sources, destination in
+                guard let source = sources.first, decks.indices.contains(source) else { return }
+                library.moveDeck(game: game, id: decks[source].id,
+                                 to: DeckPage.moveIndex(from: source, to: destination))
+            } : nil)
             if let text = DeckPage.unreadableText(library.unreadableDecks(game: game)) {
                 Text(text)
                     .font(Theme.labelFont)

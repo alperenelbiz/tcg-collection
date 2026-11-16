@@ -281,8 +281,10 @@ enum DeckReport {
             }
             var sections = 0
             let render = await durations(3) {
-                let content = DeckPage.content(placed, game: game, read: read, joinFailed: false, catalogHasProducts: true,
-                                               catalogSettled: true, price: { _ in nil })
+                // One deck alone: every owned copy is available to it.
+                let content = DeckPage.content(placed, game: game, read: read, available: read?.ownedByCard ?? [:],
+                                               joinFailed: false, catalogHasProducts: true, catalogSettled: true,
+                                               price: { _ in nil })
                 sections = content.sections.count
             }
             let printings = read?.printings.values.reduce(0) { $0 + $1.count } ?? 0

@@ -31,6 +31,9 @@ struct DeckViewTests {
 
     private let none: ([ProductRecord]) -> ShownPrice? = { _ in nil }
 
+    /// A deck alone: every owned copy is available to it.
+    private func owned(_ read: DeckRead?) -> [String: Int] { read?.ownedByCard ?? [:] }
+
     private func line(count: Int, missing: Int, isBasic: Bool = false) -> DeckLine {
         DeckLine(card: card("kai sa rebel", "main", count), shown: kaisa, kind: nil, isBasic: isBasic, owned: count - missing,
                  missing: missing, price: nil)
@@ -42,15 +45,16 @@ struct DeckViewTests {
     /// one whose catalog read is not there yet show none.
     @Test func theSidebarCountIsForActiveDecksWithMissingCopies() {
         let three = read(["kai sa rebel", "dockside lock up"], owned: ["kai sa rebel": 2])
-        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 2)]), read: three) == nil)        // 0 missing
-        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)]), read: three) == "1")
+        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 2)]), read: three, available: owned(three)) == nil)        // 0 missing
+        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)]), read: three, available: owned(three)) == "1")
         #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3), card("dockside lock up", "main", 3),
-                                            card("dockside lock up", "sideboard", 3)]), read: three) == "7")
-        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)], active: false), read: three) == nil)
-        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)]), read: nil) == nil)
+                                            card("dockside lock up", "sideboard", 3)]), read: three,
+                                      available: owned(three)) == "7")
+        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)], active: false), read: three, available: owned(three)) == nil)
+        #expect(DeckPage.sidebarCount(deck([card("kai sa rebel", "main", 3)]), read: nil, available: owned(nil)) == nil)
         // A basic rune is never missing, a card the catalog lacks is not counted.
         #expect(DeckPage.sidebarCount(deck([card("calm rune", "runes", 12), card("gone", "main", 3)]),
-                                      read: read(["calm rune", "gone"])) == nil)
+                                      read: read(["calm rune", "gone"]), available: [:]) == nil)
     }
 
     /// The count of the sidebar row comes only from a read of the game on screen.
@@ -93,7 +97,7 @@ struct DeckViewTests {
     /// without cards (no join needed); else listed.
     @Test func thePhaseOfTheDeckPage() {
         let empty = deck([]), full = deck([card("kai sa rebel", "main", 1)])
-        let listed = DeckPage.content(full, game: riftbound, read: read(["kai sa rebel"]), joinFailed: false,
+        let listed = DeckPage.content(full, game: riftbound, read: read(["kai sa rebel"]), available: [:], joinFailed: false,
                                       catalogHasProducts: true, catalogSettled: true, price: none)
         func phase(_ deck: Deck?, listed: DeckContent? = nil, canChange: Bool = true, problem: String? = nil) -> DeckPhase {
             DeckPage.phase(deck: deck, listed: listed, canChange: canChange, problem: problem)
@@ -135,7 +139,7 @@ struct DeckViewTests {
                          card("gone card", "main", 3, name: "Gone Card"), card("new card", "main", 1, name: "New Card")])
         let joined = read(["kai sa rebel", "dockside lock up", "calm rune", "gone card"],
                           owned: ["kai sa rebel": 1, "dockside lock up": 3])
-        let during = DeckPage.content(live, game: riftbound, read: joined, joinFailed: false, catalogHasProducts: true,
+        let during = DeckPage.content(live, game: riftbound, read: joined, available: owned(joined), joinFailed: false, catalogHasProducts: true,
                                       catalogSettled: false, price: none)
         #expect(during.sections.map(\.section.id) == ["legend", "champion", "main", "runes", "battlefields", "sideboard"])
         let main = try #require(during.sections.first { $0.id == "main" })
@@ -150,7 +154,7 @@ struct DeckViewTests {
         #expect(DeckPage.countText(runes.groups[0].lines[0]) == "×12")         // basic: never missing
         #expect(during.note == CollectionList.catalogDownloading)
 
-        let settled = DeckPage.content(live, game: riftbound, read: joined, joinFailed: false, catalogHasProducts: true,
+        let settled = DeckPage.content(live, game: riftbound, read: joined, available: owned(joined), joinFailed: false, catalogHasProducts: true,
                                        catalogSettled: true, price: none)
         #expect(settled.note == nil)
         // A card the join did not read (added since) is pending: no picture, no "missing", until the next join.
@@ -159,12 +163,12 @@ struct DeckViewTests {
         #expect(DeckMaths.totals(settled.sections) == "20 cards · 1 missing · 1 without a price")
 
         // No product of the game: the cards alone, under their saved names.
-        let alone = DeckPage.content(live, game: riftbound, read: nil, joinFailed: false, catalogHasProducts: false,
+        let alone = DeckPage.content(live, game: riftbound, read: nil, available: owned(nil), joinFailed: false, catalogHasProducts: false,
                                      catalogSettled: true, price: none)
         #expect(alone.note == CollectionList.catalogEmpty)
         #expect(alone.sections.flatMap { $0.groups.flatMap(\.lines) }.allSatisfy { $0.shown == nil && $0.missing == 0 })
         // A failed join keeps what it read before.
-        let failed = DeckPage.content(live, game: riftbound, read: joined, joinFailed: true, catalogHasProducts: true,
+        let failed = DeckPage.content(live, game: riftbound, read: joined, available: owned(joined), joinFailed: true, catalogHasProducts: true,
                                       catalogSettled: true, price: none)
         #expect(failed.note == CollectionList.catalogUnreadableKept)
     }
@@ -198,7 +202,7 @@ struct DeckViewTests {
     @Test func theSearchFiltersTheCells() {
         let live = deck([card("kai sa rebel", "main", 2), card("dockside lock up", "main", 2), card("calm rune", "runes", 12)])
         let content = DeckPage.content(live, game: riftbound, read: read(["kai sa rebel", "dockside lock up", "calm rune"]),
-                                       joinFailed: false, catalogHasProducts: true, catalogSettled: true, price: none)
+                                       available: [:], joinFailed: false, catalogHasProducts: true, catalogSettled: true, price: none)
         #expect(DeckPage.filtered(content.sections, text: "") == content.sections)
         let rune = DeckPage.filtered(content.sections, text: "Rune")
         #expect(rune.map(\.id) == ["runes"] && rune[0].groups.flatMap(\.lines).map(\.card.cardKey) == ["calm rune"])
@@ -438,7 +442,7 @@ struct DeckViewTests {
         let prices: [Int: ShownPrice] = [1: ShownPrice(amount: 1, isLow: false), 2: ShownPrice(amount: 3, isLow: false)]
         let price: ([ProductRecord]) -> ShownPrice? = { list in list.compactMap { prices[$0.productID] }.min { $0.amount < $1.amount } }
         func shownLine(_ card: DeckCard) -> DeckLine? {
-            DeckPage.content(deck([card]), game: yugioh, read: read, joinFailed: false, catalogHasProducts: true,
+            DeckPage.content(deck([card]), game: yugioh, read: read, available: read.ownedByCard, joinFailed: false, catalogHasProducts: true,
                              catalogSettled: true, price: price).sections.flatMap { $0.groups.flatMap(\.lines) }.first
         }
         let owned = shownLine(DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 1))
@@ -447,5 +451,95 @@ struct DeckViewTests {
         let chosen = shownLine(DeckCard(cardKey: "twin", name: "Twin", section: "main", count: 1, productID: 1))
         #expect(chosen?.shown?.productID == 1)
         #expect(chosen.map(DeckPage.accessibilityText) == "Twin, ×1, $1.00")
+    }
+
+    // MARK: Sharing between decks (E4, E6)
+
+    private func named(_ id: String, _ cards: [DeckCard], active: Bool = true) -> Deck {
+        Deck(id: id, name: id, format: "standard", active: active, cards: cards)
+    }
+
+    /// The deck page's text of the deck's one Kai'Sa line, with the copies available to it among `decks`.
+    private func kaisaText(_ deck: Deck, decks: [Deck], sharing: [String: Bool], read: DeckRead) throws -> String {
+        let needs = DeckPage.needs(decks: decks, sharing: sharing, read: read)
+        let content = DeckPage.content(deck, game: riftbound, read: read,
+                                       available: DeckPage.available(to: deck, needs: needs, read: read), joinFailed: false,
+                                       catalogHasProducts: true, catalogSettled: true, price: none)
+        return DeckPage.countText(try #require(content.sections.flatMap { $0.groups.flatMap(\.lines) }.first))
+    }
+
+    private func sidebar(_ deck: Deck, decks: [Deck], sharing: [String: Bool], read: DeckRead) -> String? {
+        let needs = DeckPage.needs(decks: decks, sharing: sharing, read: read)
+        return DeckPage.sidebarCount(deck, read: read, available: DeckPage.available(to: deck, needs: needs, read: read))
+    }
+
+    /// E4: two active decks use a card ×2 and 2 are owned. Without an answer the decks are served in deck order: the first
+    /// gets both copies, the second misses 2 (its page and its sidebar row say so). Shared: neither misses any. A deck that
+    /// is not active counts all owned copies and has no sidebar count. Another deck order swaps the numbers.
+    @Test func decksAreServedInDeckOrder() throws {
+        let read = read(["kai sa rebel"], owned: ["kai sa rebel": 2])
+        let first = named("Wind", [card("kai sa rebel", "main", 2)]), second = named("Cheap", [card("kai sa rebel", "main", 2)])
+        let both = [first, second]
+        #expect(try kaisaText(first, decks: both, sharing: [:], read: read) == "×2")
+        #expect(try kaisaText(second, decks: both, sharing: [:], read: read) == "×2 · 2 missing")
+        #expect(sidebar(first, decks: both, sharing: [:], read: read) == nil)
+        #expect(sidebar(second, decks: both, sharing: [:], read: read) == "2")
+
+        let shared = ["kai sa rebel": true]
+        #expect(try kaisaText(first, decks: both, sharing: shared, read: read) == "×2")
+        #expect(try kaisaText(second, decks: both, sharing: shared, read: read) == "×2")
+        #expect(sidebar(second, decks: both, sharing: shared, read: read) == nil)
+
+        // "Buy more" is served in deck order too.
+        #expect(try kaisaText(second, decks: both, sharing: ["kai sa rebel": false], read: read) == "×2 · 2 missing")
+
+        var idle = second
+        idle.active = false
+        #expect(try kaisaText(idle, decks: [first, idle], sharing: [:], read: read) == "×2")
+        #expect(sidebar(idle, decks: [first, idle], sharing: [:], read: read) == nil)
+        #expect(sidebar(first, decks: [first, idle], sharing: [:], read: read) == nil)
+
+        let swapped = [second, first]
+        #expect(try kaisaText(second, decks: swapped, sharing: [:], read: read) == "×2")
+        #expect(try kaisaText(first, decks: swapped, sharing: [:], read: read) == "×2 · 2 missing")
+        #expect(sidebar(second, decks: swapped, sharing: [:], read: read) == nil)
+        #expect(sidebar(first, decks: swapped, sharing: [:], read: read) == "2")
+    }
+
+    /// A deck page's read covers only its own cards: a card it did not read counts 0 owned and is not basic (the page
+    /// shows it pending, never missing); a basic card is never missing, whatever the other decks use.
+    @Test func aCardTheReadDoesNotCoverCountsNoOwnedCopies() throws {
+        let read = read(["calm rune"])
+        let first = named("Wind", [card("calm rune", "runes", 12), card("new card", "main", 2)])
+        let second = named("Cheap", [card("calm rune", "runes", 12), card("new card", "main", 2)])
+        let needs = DeckPage.needs(decks: [first, second], sharing: [:], read: read)
+        #expect(needs["new card"]?.owned == 0 && needs["new card"]?.isBasic == false)
+        #expect(needs["calm rune"]?.isBasic == true && needs["calm rune"]?.pending == false)
+        let available = DeckPage.available(to: second, needs: needs, read: read)
+        #expect(available == ["calm rune": 12, "new card": 0])
+        #expect(DeckPage.sidebarCount(second, read: read, available: available) == nil)
+    }
+
+    /// E6: a drag's destination (an offset in the list before the move, `onMove`) as the index after the removal
+    /// (`UserLibrary.moveDeck(to:)`).
+    @Test func aDragsDestinationIsTheIndexAfterTheRemoval() {
+        #expect(DeckPage.moveIndex(from: 1, to: 0) == 0)      // the second above the first
+        #expect(DeckPage.moveIndex(from: 0, to: 2) == 1)      // the first below the second
+        #expect(DeckPage.moveIndex(from: 0, to: 3) == 2)
+        #expect(DeckPage.moveIndex(from: 2, to: 1) == 1)
+        #expect(DeckPage.moveIndex(from: 1, to: 1) == 1)      // dropped where it was
+        #expect(DeckPage.moveIndex(from: 1, to: 2) == 1)
+    }
+
+    /// E6: "Move Up" / "Move Down" give the deck's index one step up or down in the deck order; nil at the ends (the item is
+    /// off) and for a deck that is not there.
+    @Test func moveUpAndDownStopAtTheEnds() {
+        let decks = [named("a", []), named("b", []), named("c", [])]
+        #expect(DeckPage.movedIndex(of: "b", in: decks, by: -1) == 0)
+        #expect(DeckPage.movedIndex(of: "b", in: decks, by: 1) == 2)
+        #expect(DeckPage.movedIndex(of: "a", in: decks, by: -1) == nil)
+        #expect(DeckPage.movedIndex(of: "c", in: decks, by: 1) == nil)
+        #expect(DeckPage.movedIndex(of: "gone", in: decks, by: 1) == nil)
+        #expect(DeckPage.movedIndex(of: "a", in: [named("a", [])], by: 1) == nil)
     }
 }

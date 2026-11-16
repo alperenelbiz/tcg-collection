@@ -170,15 +170,18 @@ nonisolated enum DeckPage {
     /// - `catalogSettled`: only on a settled catalog is a card without a printing "not in the catalog" (D13); otherwise
     ///   it is pending, with the downloading line.
     /// A card without a printing has no picture, no price and no missing copies either way, and its count still works.
-    static func content(_ deck: Deck, game: GameDefinition, read: DeckRead?, joinFailed: Bool, catalogHasProducts: Bool,
-                        catalogSettled: Bool, price: ([ProductRecord]) -> ShownPrice?) -> DeckContent {
+    /// `available`: the copies of each card the deck may count as owned (E4, `available(to:needs:read:)`); the lines of a
+    /// card take them in section order. The shown printing (A18) still follows the real copies owned per printing.
+    static func content(_ deck: Deck, game: GameDefinition, read: DeckRead?, available: [String: Int], joinFailed: Bool,
+                        catalogHasProducts: Bool, catalogSettled: Bool,
+                        price: ([ProductRecord]) -> ShownPrice?) -> DeckContent {
         let keys = Set(deck.cards.map(\.cardKey))
         // A card the join did not read (added since) has no printings in `read`: it shows as pending (no picture, no
         // "missing") until the next join reads it.
         func listed(_ read: DeckRead?, note: String?) -> DeckContent {
             let basics = read?.basics ?? [], kinds = read?.kinds ?? [:]
             let sections = DeckMaths.sections(deck, format: game.format(deck.format), game: game,
-                                              printings: read?.printings ?? [:], ownedByCard: read?.ownedByCard ?? [:],
+                                              printings: read?.printings ?? [:], ownedByCard: available,
                                               ownedByPrinting: read?.ownedByPrinting ?? [:], isBasic: { basics.contains($0) }, kindOf: { kinds[$0] }, price: price)
             return DeckContent(sections: sections, note: note)
         }
@@ -245,13 +248,41 @@ nonisolated enum DeckPage {
         }
     }
 
-    /// The sidebar row's count (A14, D7): the deck's missing copies (`DeckMaths.missingCopies`) for an active deck that
-    /// misses any; nil for a deck that is not active, misses nothing, or while the read is not there.
-    static func sidebarCount(_ deck: Deck, read: DeckRead?) -> String? {
+    /// The sidebar row's count (A14, D7): the deck's missing copies (`DeckMaths.missingCopies` on the copies `available`
+    /// to it, E4) for an active deck that misses any; nil for a deck that is not active, misses nothing, or while the read
+    /// is not there.
+    static func sidebarCount(_ deck: Deck, read: DeckRead?, available: [String: Int]) -> String? {
         guard deck.active, let read else { return nil }
-        let missing = DeckMaths.missingCopies(deck, printings: read.printings, ownedByCard: read.ownedByCard,
+        let missing = DeckMaths.missingCopies(deck, printings: read.printings, ownedByCard: available,
                                               isBasic: { read.basics.contains($0) })
         return missing > 0 ? "\(missing)" : nil
+    }
+
+    /// E2–E4 over the game's decks (`DeckNeeds.needs`, only the active ones count), with the owned copies and the basic
+    /// cards of `read`: a card the read does not cover counts 0 owned and is not basic (its page shows it pending).
+    static func needs(decks: [Deck], sharing: [String: Bool], read: DeckRead?) -> [String: CardNeed] {
+        let owned = read?.ownedByCard ?? [:], basics = read?.basics ?? []
+        return DeckNeeds.needs(decks: decks, sharing: sharing, owned: { owned[$0] ?? 0 }, isBasic: { basics.contains($0) })
+    }
+
+    /// The copies `deck` may count as owned, per card it uses (`DeckNeeds.available`): an active deck is served in deck
+    /// order unless the card is shared; a deck that is not active counts every owned copy.
+    static func available(to deck: Deck, needs: [String: CardNeed], read: DeckRead?) -> [String: Int] {
+        let owned = read?.ownedByCard ?? [:]
+        return DeckNeeds.available(to: deck, needs: needs, owned: { owned[$0] ?? 0 })
+    }
+
+    /// E6: `onMove`'s destination (an offset in the list before the move) as the index after the removal
+    /// (`UserLibrary.moveDeck(to:)`).
+    static func moveIndex(from source: Int, to destination: Int) -> Int {
+        destination > source ? destination - 1 : destination
+    }
+
+    /// E6, "Move Up" (`by: -1`) / "Move Down" (`by: 1`): the deck's index one step along the deck order; nil at the ends
+    /// (the item is off) and for a deck that is not in `decks`.
+    static func movedIndex(of id: String, in decks: [Deck], by step: Int) -> Int? {
+        guard let index = decks.firstIndex(where: { $0.id == id }), decks.indices.contains(index + step) else { return nil }
+        return index + step
     }
 
     /// The muted line under the sidebar's decks for decks of the game's file this build cannot read.
@@ -290,11 +321,15 @@ extension CatalogJoin where Read == DeckRead {
     func read(game: String) -> DeckRead? { joined?.game == game ? read : nil }
 
     /// What the deck page lists (`DeckPage.content`); nil until a join of this game has ended. The catalog counts as
-    /// settled as it was for the join that made `read`.
-    func content(_ deck: Deck, game: GameDefinition, price: ([ProductRecord]) -> ShownPrice?) -> DeckContent? {
+    /// settled as it was for the join that made `read`. `decks` and `sharing`: the game's decks and sharing answers in
+    /// memory, so the other active decks' use of this deck's cards needs no catalog read (E4).
+    func content(_ deck: Deck, game: GameDefinition, decks: [Deck], sharing: [String: Bool],
+                 price: ([ProductRecord]) -> ShownPrice?) -> DeckContent? {
         guard let joined, joined.game == game.id else { return nil }
-        return DeckPage.content(deck, game: game, read: read, joinFailed: failed, catalogHasProducts: catalogHasProducts,
-                                catalogSettled: joined.catalogSettled, price: price)
+        let available = DeckPage.available(to: deck, needs: DeckPage.needs(decks: decks, sharing: sharing, read: read),
+                                           read: read)
+        return DeckPage.content(deck, game: game, read: read, available: available, joinFailed: failed,
+                                catalogHasProducts: catalogHasProducts, catalogSettled: joined.catalogSettled, price: price)
     }
 
     /// Reads the printings of `cardKeys` (one store call), counts the copies owned of each card, and works out each card's
@@ -382,7 +417,12 @@ struct DeckView: View {
         let game = Games.game(gameID) ?? Games.all[0]
         let deck = library.deck(game: gameID, id: state.deckID)
         let prices = model.prices
-        let listed = deck.flatMap { state.join.content($0, game: game) { prices.cheapest(game: gameID, productIDs: $0.map(\.productID)) } }
+        let decks = library.decks(game: gameID), sharing = library.sharing(game: gameID)
+        let listed = deck.flatMap {
+            state.join.content($0, game: game, decks: decks, sharing: sharing) {
+                prices.cheapest(game: gameID, productIDs: $0.map(\.productID))
+            }
+        }
         let phase = DeckPage.phase(deck: deck, listed: listed, canChange: library.canChange(game: gameID),
                                    problem: library.problem(game: gameID))
         let join = DeckJoin.deckKey(game: gameID, model: model)
@@ -535,8 +575,15 @@ struct DeckView: View {
         }
     }
 
-    /// "Deck": Rename…, Format ▸ (a game with more than one format), Active (a toggle), Delete Deck…. Off while the deck is
-    /// gone or the game cannot change.
+    /// Moves the deck one step along the deck order, from the order at the click (not at the render).
+    private func move(by step: Int) {
+        let library = model.library
+        guard let index = DeckPage.movedIndex(of: state.deckID, in: library.decks(game: state.gameID), by: step) else { return }
+        library.moveDeck(game: state.gameID, id: state.deckID, to: index)
+    }
+
+    /// "Deck": Rename…, Format ▸ (a game with more than one format), Active (a toggle), Move Up, Move Down (off at the ends),
+    /// Delete Deck…. Off while the deck is gone or the game cannot change.
     private func deckMenu(_ deck: Deck?, game: GameDefinition, kinds: [String: CardKind]) -> some View {
         let library = model.library, gameID = state.gameID, deckID = state.deckID
         return Menu {
@@ -564,6 +611,14 @@ struct DeckView: View {
                 }
             }))
             .accessibilityIdentifier("deck-active")
+            // E6: one step along the deck order (the sidebar's order, which serves the active decks, E4).
+            let decks = library.decks(game: gameID)
+            Button("Move Up") { move(by: -1) }
+                .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: -1) == nil)
+                .accessibilityIdentifier("deck-move-up")
+            Button("Move Down") { move(by: 1) }
+                .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: 1) == nil)
+                .accessibilityIdentifier("deck-move-down")
             Divider()
             Button("Delete Deck…") { state.confirmsDelete = true }
                 .accessibilityIdentifier("deck-delete")

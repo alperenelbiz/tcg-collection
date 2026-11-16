@@ -979,4 +979,61 @@ final class DecksFlowTests: UITestCase {
         app.toolbars.buttons["Back"].click()
         XCTAssertTrue(waitUntil { deckCell.label == "Swiftwind Panther Warrior, ×1, $9.00" }, deckCell.label)
     }
+
+    // MARK: The deck order (phase 3B task 4: E4, E6)
+
+    /// Two active decks use Kai'Sa ×2 and 2 are owned, with no sharing answer: the first deck in the order gets both copies,
+    /// the second misses 2.
+    private static let twoDecksOneKaisa = """
+        {"version": 1,
+         "collection": [{"productID": 721337, "finish": "Normal", "count": 2, "condition": "", "name": "Kai'Sa, Rebel"}],
+         "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2}]},
+                   {"id": "rb2", "name": "Cheap", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2}]}]}
+        """
+
+    /// E4, E6: the second deck's row shows 2 and its cell `×2 · 2 missing`; Deck ▸ "Move Up" on it makes it the first:
+    /// the counts swap (the first row none, the moved one served first), its cell has no "missing", the file's `decks`
+    /// order changed, and on the first deck "Move Up" is off while "Move Down" is on. (The sidebar's drag, `onMove`, has no
+    /// UI test: XCUITest's drags did not move a row on macOS 27, phase 3B task 4.)
+    func testDecksAreServedInDeckOrder() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb2"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.twoDecksOneKaisa)
+        }
+        let cell = element(app, "deck-cell-kai sa rebel-main")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        let first = element(app, "sidebar-deck-missing-rb1"), second = element(app, "sidebar-deck-missing-rb2")
+        XCTAssertTrue(second.waitForExistence(timeout: 10), "no count on the second deck")
+        XCTAssertEqual(text(second), "2")
+        XCTAssertFalse(first.exists, "the first deck in the order shows a count")
+        XCTAssertTrue(waitUntil { cell.label.hasPrefix("Kai'Sa, Rebel, ×2 · 2 missing, ") }, cell.label)
+        XCTAssertEqual(identifiersInOrder(deckRows(app)), ["sidebar-deck-rb1", "sidebar-deck-rb2"])
+        shot("decks-44-second-deck-misses")
+
+        element(app, "deck-menu").click()
+        let up = app.menuItems["Move Up"].firstMatch, down = app.menuItems["Move Down"].firstMatch
+        XCTAssertTrue(up.waitForExistence(timeout: 5))
+        XCTAssertTrue(up.isEnabled, "Move Up is off on the second deck")
+        XCTAssertFalse(down.isEnabled, "Move Down is on on the last deck")
+        shot("decks-45-deck-menu-move-up")
+        up.click()
+
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "no count on the deck moved second")
+        XCTAssertEqual(text(first), "2")
+        XCTAssertTrue(waitUntil { !second.exists }, "the deck moved first still shows a count")
+        XCTAssertTrue(waitUntil { cell.label.hasPrefix("Kai'Sa, Rebel, ×2, ") }, cell.label)
+        XCTAssertTrue(waitUntil { self.identifiersInOrder(self.deckRows(app)) == ["sidebar-deck-rb2", "sidebar-deck-rb1"] },
+                      "\(identifiersInOrder(deckRows(app)))")
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.map(\.id) == ["rb2", "rb1"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+        shot("decks-46-moved-up-counts-swapped")
+
+        element(app, "deck-menu").click()
+        XCTAssertTrue(app.menuItems["Move Up"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.menuItems["Move Up"].firstMatch.isEnabled, "Move Up is on on the first deck")
+        XCTAssertTrue(app.menuItems["Move Down"].firstMatch.isEnabled, "Move Down is off on the first deck")
+        app.typeKey(.escape, modifierFlags: [])
+    }
 }
