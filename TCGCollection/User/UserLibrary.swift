@@ -62,6 +62,9 @@ final class UserLibrary {
     private(set) var isLoaded = false
     /// Tests only: runs on the main actor before each game file is read, so a test can act while a read is in progress.
     @ObservationIgnored var beforeRead: (@MainActor (URL) async -> Void)?
+    /// Phase 5A (H11): a reported `<game>.prices.json` of this folder goes here, with its game. It is no game file: the
+    /// library reads nothing again for it and its `version` does not move.
+    @ObservationIgnored var historyFileChanged: (@MainActor (String) -> Void)?
     #if DEBUG
     /// `-writeDelay` (DEBUG): each write of a game file waits this long first, so a UI test can quit the app while a write
     /// is still queued (the quit must wait for it).
@@ -592,6 +595,11 @@ final class UserLibrary {
     /// the load is read again, so its return is seen.
     @discardableResult
     func fileChanged(_ url: URL) -> Task<Void, Never>? {
+        if let folder, let game = HistoryFiles.gameID(ofFileNamed: url.lastPathComponent),
+           UserFolder.isSameFolder(url.deletingLastPathComponent(), folder) {
+            historyFileChanged?(game)
+            return nil
+        }
         guard let folder, readsAgain, let game = UserFiles.gameID(ofFileNamed: url.lastPathComponent),
               UserFolder.isSameFolder(url.deletingLastPathComponent(), folder) else { return nil }
         return queueReload(game, in: folder)

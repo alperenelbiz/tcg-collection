@@ -205,6 +205,56 @@ final class AppModel {
     /// and asked for its scans, then the games queued or scanning. Observed: the Sets list's note says so.
     private(set) var setIndexesInWork: Set<String> = Set(Games.all.map(\.id))
 
+    // MARK: Price history (phase 5A task 4; the logic is in AppModel+History.swift)
+    // Stored properties cannot live in an extension: they stay here, internal so that file can set them.
+
+    /// Each followed game's price history in memory (H2), as its file holds it (or as the last pass made it). Observed.
+    var histories: [String: PriceHistory] = [:]
+    /// Goes up for a game each time its history in memory changes (a read, a pass), so views read it again. Observed.
+    private(set) var historyVersions: [String: Int] = [:]
+    /// The games whose history file must not be rewritten in this run (H3): `.newerVersion` or `.notDownloaded`, from the
+    /// last read of the file. Observed (`historyState`).
+    var historyBlocked: [String: HistoryState] = [:]
+    /// Each game's tracked product ids as the last prepared pass computed them (H6). Observed (`historyState`).
+    var historyTracked: [String: Set<Int>] = [:]
+    /// What the last read of each game's history file found in `historyFolder`; no entry: not read yet.
+    @ObservationIgnored var historyOnDisk: [String: HistoryOnDisk] = [:]
+    /// Games whose history in memory differs from their file after a write that failed: the next pass writes them.
+    @ObservationIgnored var historyUnwritten: Set<String> = []
+    /// Games whose history file changed on disk (another device, H11, or a creating write that met a file): the next
+    /// pass reads it again first; a running pass keeps nothing of them.
+    @ObservationIgnored var historyStale: Set<String> = []
+    /// The archive days that could not be read in this run (H8): not tried again.
+    @ObservationIgnored var historyFailedDays: Set<String> = []
+    /// The folder whose history files memory holds; a pass on another folder drops memory first.
+    @ObservationIgnored var historyFolder: URL?
+    /// The task that runs the passes, one at a time; nil while none runs.
+    @ObservationIgnored var historyTask: Task<Void, Never>?
+    /// A pass is asked for and has not started (a newer request replaces a queued one: it is one flag).
+    @ObservationIgnored var historyQueued = false
+    /// The wait of `historyQuietTime` after the last library change (H10); nil when none waits.
+    @ObservationIgnored var historyQuietTask: Task<Void, Never>?
+    /// The checks of history files reported changed (H11), each after the one before.
+    @ObservationIgnored var historyChecks: Task<Void, Never>?
+    /// The library version the change watcher saw last (`waitForHistory`); nil before it runs.
+    @ObservationIgnored var historySeenVersion: Int?
+    /// True once the launch's price step has ended (or, offline and with a store in memory, the launch has read prices
+    /// from disk): passes run only from then on (H10), so a launch makes one pass with the day's archive.
+    @ObservationIgnored var historyLaunchReady = false
+    /// H10: how long a library change waits for the next one before it asks for a pass. Tests set 0.
+    @ObservationIgnored var historyQuietTime: Duration = .seconds(3)
+    /// Reads one archive for a pass. Tests count the reads.
+    @ObservationIgnored var historyArchiveReader: HistoryPass.Reader = PriceArchive.read
+    #if DEBUG
+    /// Test only: called with the games of a pass after their tracked printings are known, before the archives are read.
+    @ObservationIgnored var historyPassHook: (@MainActor ([String]) async -> Void)?
+    /// Test only: the passes that ran past the gates.
+    @ObservationIgnored var historyPassCount = 0
+    #endif
+
+    /// The game's history in memory changed: `historyVersions` goes up (its setter stays private to this file).
+    func historyChanged(_ game: String) { historyVersions[game, default: 0] += 1 }
+
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
     /// Set by `-exportPDF` where it is allowed (`LaunchOptions.launchPDF`): the list screen it names writes its PDF once
@@ -334,7 +384,8 @@ final class AppModel {
     @ObservationIgnored private let catalogSync: CatalogSync
     @ObservationIgnored private let priceSync: PriceSync
     @ObservationIgnored private let ygoLoader: YGOIndexLoader
-    @ObservationIgnored private let now: () -> Date
+    /// The clock (internal: the price history reads it too).
+    @ObservationIgnored let now: () -> Date
     /// The status line when no catalog store file is open: the app then runs on an empty store in memory and downloads
     /// nothing. Nil when a store file is open.
     @ObservationIgnored let storeFailure: String?
@@ -350,7 +401,10 @@ final class AppModel {
     /// The games whose catalog step of this run is still to come or running: every game from a launch that syncs until
     /// its step of the first sync has ended, and again during each Refresh or Rebuild. A step that ended with failed sets
     /// counts as ended. Empty offline, with a store in memory, and while the catalog waits for the next UTC day.
-    private(set) var catalogPending: Set<String> = []
+    private(set) var catalogPending: Set<String> = [] {
+        // H10: a game whose catalog settled may now get its price history (H7).
+        didSet { if !oldValue.isSubset(of: catalogPending) { requestHistory() } }
+    }
     /// The status of the first catalog check. After a store was moved aside it says so, until the first set is in.
     @ObservationIgnored private var checkingText = StatusText.checking
     @ObservationIgnored private var isRunning = false
@@ -422,6 +476,8 @@ final class AppModel {
         }
         // A launch that syncs has every game's catalog step still to come.
         if !options.offline, opened.failure == nil, !catalogWaits { catalogPending = Set(Games.all.map(\.id)) }
+        // H11: a history file another device changed.
+        library.historyFileChanged = { [weak self] game in self?.historyFileChanged(game) }
     }
 
     /// True when no catalog step of this run is running or still to come for the game (`catalogPending`): the catalog
@@ -461,9 +517,9 @@ final class AppModel {
 
     /// The games the sync, the scans and the price fill work on: the followed games, none while the first-run question is
     /// due (task 5 fix round 1 (e): a new folder "follows" every game until "Continue", and nothing may start for them).
-    private var syncedGames: [GameDefinition] { onboardingDue ? [] : followedGames }
+    var syncedGames: [GameDefinition] { onboardingDue ? [] : followedGames }
 
-    private func isSynced(_ gameID: String) -> Bool { syncedGames.contains { $0.id == gameID } }
+    func isSynced(_ gameID: String) -> Bool { syncedGames.contains { $0.id == gameID } }
 
     // MARK: Roles (G7–G9)
 
@@ -715,6 +771,7 @@ final class AppModel {
         catalogResetRequested = true
         // The store is set aside at the next launch: no index scan of it runs on.
         cancelSetIndexes()
+        cancelHistoryPass()
     }
 
     /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
@@ -836,11 +893,14 @@ final class AppModel {
         }
         needsUserFolder = false
         showsFolderSheet = false
+        // H11: the old folder's history leaves memory before the new folder is read; a running pass keeps nothing.
+        historyFolderWillChange()
         await library.use(folder: folder)
         // In the same main-actor turn as the end of the read (no suspension since `isLoaded` was set): the gate never sees
         // the new folder read without its decision.
         decideOnboarding()
         rememberFollowedGames()
+        requestHistory()
     }
 
     // MARK: Onboarding (G11)
@@ -960,6 +1020,8 @@ final class AppModel {
         onboardingProblem = nil
         onboardingWrote = []
         profilesChanged()
+        // H10: the chosen games' history (nothing was read or written while the question was due).
+        requestHistory()
         // B5: the local scans an offline (or store-failure) launch left out while the question was due.
         guard scansWaitForAnswer else { return }
         scansWaitForAnswer = false
@@ -1263,6 +1325,7 @@ final class AppModel {
 
     private func launch() async {
         watchSaleNotices()
+        watchHistoryChanges()
         readSetIndexFiles()
         // Once per launch, with the window on screen: at background priority, off the main thread and off the picture
         // store's actor, so neither the window nor a picture load waits for it. Only the run's own picture folder.
@@ -1316,6 +1379,8 @@ final class AppModel {
         await writeMissingFacetLists()
         await setIndexRead?.value
         requestMissingSetIndexes()
+        // H10: a run that does not sync has no price step; its passes read the archives on disk from here on.
+        if !canSync { historyPriceStepEnded(newDay: true) }
         if let storeFailure {
             status = .failed(storeFailure)
             return
@@ -1619,7 +1684,10 @@ final class AppModel {
             first = await syncCatalog(of: [chosen], now: now, rebuild: rebuild)
         }
         catalogPending.remove(chosen.id)
+        let dayBefore = syncedGames.map { prices.day(game: $0.id) }
         let priceFailure = await syncPrices(now: now)
+        // H10: the launch's price step, and any later one that brought a new day, ask for a pass.
+        historyPriceStepEnded(newDay: syncedGames.map { prices.day(game: $0.id) } != dayBefore)
         if !held {
             // The followed games of this moment: a game turned on since the launch is among them.
             let others = syncedGames.filter { $0.id != chosen.id }

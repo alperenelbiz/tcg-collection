@@ -175,6 +175,22 @@ struct UserLibraryTests {
         #expect(lib.rows(game: "riftbound").map(\.productID) == [9])
     }
 
+    /// Phase 5A task 4 (H11): a reported `<game>.prices.json` of the folder goes to `historyFileChanged`. It is no game file:
+    /// nothing is read again and `version` stays. A history file of an unknown game or of another folder is not reported.
+    @MainActor @Test func aReportedHistoryFileGoesToTheHistoryHandler() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
+        var reported: [String] = [], reads: [String] = []
+        lib.historyFileChanged = { reported.append($0) }
+        lib.beforeRead = { reads.append($0.lastPathComponent) }
+        let version = lib.version
+        #expect(lib.fileChanged(dir.appending(path: "riftbound.prices.json")) == nil)
+        #expect(lib.fileChanged(dir.appending(path: "pokemon.prices.json")) == nil)
+        #expect(lib.fileChanged(tempDir().appending(path: "riftbound.prices.json")) == nil)
+        #expect(reported == ["riftbound"])
+        #expect(lib.version == version); #expect(reads.isEmpty)
+    }
+
     /// Item 9: false before the first load, true after it, false while a folder is switched and when the folder is missing.
     @MainActor @Test(.timeLimit(.minutes(1))) func isLoadedFollowsTheFolder() async throws {
         let a = tempDir(), b = tempDir()
