@@ -47,6 +47,14 @@ nonisolated struct DeckCardToAdd: Equatable, Sendable {
     var productID: Int? = nil
 }
 
+/// A card page's deck line button as rendered (`DeckPage.printingChoice`): its title, the line's stored printing it saw,
+/// and the printing a click sets (nil: clear).
+nonisolated struct PrintingChoice: Equatable, Sendable {
+    let title: String
+    let rendered: Int?
+    let target: Int?
+}
+
 /// What a deck's navigation stack pushes for "Add cards": the catalog search with that deck as its target.
 nonisolated struct DeckSearch: Hashable, Sendable {
     let deckID: String
@@ -124,6 +132,20 @@ nonisolated enum DeckPage {
         let copies = DeckRules.copies(deck, cardKey: card.cardKey)
         let inSection = deck.cards.first { $0.cardKey == card.cardKey && $0.section == section }?.count ?? 0
         return (copies, copies - inSection + DeckRules.maxCount)
+    }
+
+    /// A18: what a card page's deck line button says and does, decided at render: "Any printing" (clear) when the line's
+    /// stored printing is the page's, else "Use this printing" (store the page's), with the stored value it saw.
+    static func printingChoice(stored: Int?, page: Int) -> PrintingChoice {
+        stored == page ? PrintingChoice(title: "Any printing", rendered: stored, target: nil)
+            : PrintingChoice(title: "Use this printing", rendered: stored, target: page)
+    }
+
+    /// The printing a click of `choice` sets (`.some(nil)`: clear), or nil (nothing) when the line's stored printing is
+    /// no longer what the button saw at render (fix round 2: a double click across a re-render does nothing the second
+    /// time).
+    static func printingToApply(_ choice: PrintingChoice, current: Int?) -> Int?? {
+        current == choice.rendered ? .some(choice.target) : nil
     }
 
     /// The card page's "Decks" lines: one per (deck, section) that holds the card, in deck order, then in the order of the

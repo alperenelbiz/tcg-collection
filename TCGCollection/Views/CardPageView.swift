@@ -504,10 +504,14 @@ struct DeckLines: View {
     /// A18: "Any printing" when the line is stored on the page's printing (clears it, also a value this build cannot read),
     /// else "Use this printing" (stores it). It keeps its width.
     private func printingButton(_ line: DeckCardLine, page: Int) -> some View {
-        let isPage = line.productID == page
-        return Button(isPage ? "Any printing" : "Use this printing") {
-            model.library.setDeckPrinting(isPage ? nil : page, game: gameID, deck: line.deckID,
-                                          key: DeckCardKey(cardKey: card.cardKey, section: line.section))
+        let choice = DeckPage.printingChoice(stored: line.productID, page: page)
+        let key = DeckCardKey(cardKey: card.cardKey, section: line.section)
+        return Button(choice.title) {
+            // What the button said at render, and only while the line still holds what it saw then (fix round 2).
+            let library = model.library
+            let current = library.deck(game: gameID, id: line.deckID)?.cards.first { $0.key == key }?.productID
+            guard let target = DeckPage.printingToApply(choice, current: current) else { return }
+            library.setDeckPrinting(target, game: gameID, deck: line.deckID, key: key)
         }
         .buttonStyle(FieldButtonStyle())
         .fixedSize()

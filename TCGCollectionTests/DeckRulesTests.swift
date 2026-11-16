@@ -211,6 +211,29 @@ struct DeckRulesTests {
                                   card("sol", "deck", 2, printing: 2)])
     }
 
+    /// Fix round 2: in a format change the card that stays in its section is the target whatever the deck order: its
+    /// printing stays; only a target without one takes the moved card's. Two moved lines on one key with no target: the
+    /// first in deck order.
+    @Test func aFormatChangeKeepsTheTargetsPrintingWhateverTheOrder() throws {
+        let commander = try #require(Games.game("magic-the-gathering")?.format("commander"))
+        let both = deck([card("bolt", "sideboard", 1, printing: 5), card("bolt", "deck", 1, printing: 7)])
+        #expect(DeckRules.changingFormat(both, to: commander) { _ in "deck" }.cards == [card("bolt", "deck", 2, printing: 7)])
+        let none = deck([card("bolt", "sideboard", 1, printing: 5), card("bolt", "deck", 1, printing: nil)])
+        #expect(DeckRules.changingFormat(none, to: commander) { _ in "deck" }.cards == [card("bolt", "deck", 2, printing: 5)])
+        let moved = deck([card("bolt", "sideboard", 1, printing: nil), card("bolt", "maybe", 1, printing: 8),
+                          card("bolt", "other", 1, printing: 9)])
+        #expect(DeckRules.changingFormat(moved, to: commander) { _ in "deck" }.cards == [card("bolt", "deck", 3, printing: 8)])
+    }
+
+    /// `moving` has no order dependence: the line already in the target section keeps its printing, before or after the
+    /// moved one.
+    @Test func aMoveKeepsTheTargetsPrintingWhateverTheOrder() {
+        let before = deck([card("bolt", "sideboard", 1, printing: 5), card("bolt", "deck", 1, printing: 7)])
+        #expect(DeckRules.moving(before, cardKey: "bolt", from: "sideboard", to: "deck").cards == [card("bolt", "deck", 2, printing: 7)])
+        let after = deck([card("bolt", "deck", 1, printing: 7), card("bolt", "sideboard", 1, printing: 5)])
+        #expect(DeckRules.moving(after, cardKey: "bolt", from: "sideboard", to: "deck").cards == [card("bolt", "deck", 2, printing: 7)])
+    }
+
     /// A paste neither saves nor changes a printing: its cards are summed into a line, whose printing stays.
     @Test func aPasteKeepsTheLinesPrinting() {
         let start = deck([card("bolt", "deck", 2, printing: 3), card("ring", "deck", 1, printing: nil)])

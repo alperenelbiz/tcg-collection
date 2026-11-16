@@ -720,6 +720,34 @@ struct GameUserFileTests {
         #expect(file.decks[0].cards.map(\.productID) == [nil, 9])
     }
 
+    /// Fix round 2: the note "printing set or cleared" is per line (deck, card, section): setting and clearing the Side
+    /// line's printing does not stop the Main line's unreadable value from being written back. A line moved after its
+    /// printing was cleared keeps the note with its object.
+    @Test func touchingOneLinesPrintingKeepsTheOtherLinesUnreadableValue() throws {
+        let json = #"{"decks":[{"id":"a","name":"A","format":"standard","cards":[{"cardKey":"p","name":"P","section":"main","count":1,"productID":"x"},{"cardKey":"p","name":"P","section":"side","count":1,"productID":"y"}]}]}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        file.setPrinting(4, deck: "a", key: DeckCardKey(cardKey: "p", section: "side"))
+        file.setPrinting(nil, deck: "a", key: DeckCardKey(cardKey: "p", section: "side"))
+        func cards() throws -> [[String: Any]] {
+            ((try JSONSerialization.jsonObject(with: try file.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]]
+        }
+        var written = try cards()
+        #expect(written[0]["productID"] as? String == "x")
+        #expect(written[1].keys.contains("productID") == false)
+        // The same through `decks` directly (the didSet's note).
+        var other = try GameUserFile(data: Data(json.utf8))
+        other.decks[0] = DeckRules.settingPrinting(other.decks[0], key: DeckCardKey(cardKey: "p", section: "side"), productID: 3)
+        other.decks[0] = DeckRules.settingPrinting(other.decks[0], key: DeckCardKey(cardKey: "p", section: "side"), productID: nil)
+        let otherCards = ((try JSONSerialization.jsonObject(with: try other.data()) as! [String: Any])["decks"] as! [[String: Any]])[0]["cards"] as! [[String: Any]]
+        #expect(otherCards[0]["productID"] as? String == "x")
+        #expect(otherCards[1].keys.contains("productID") == false)
+        // The cleared Side line moved to a section of its own: its object goes with it, and so does the note.
+        file.decks[0] = DeckRules.moving(file.decks[0], cardKey: "p", from: "side", to: "extra")
+        written = try cards()
+        #expect(written[0]["productID"] as? String == "x")
+        #expect(written[1]["section"] as? String == "extra" && written[1].keys.contains("productID") == false)
+    }
+
     /// Cards of one (card, section) summed on read: the first one's printing wins; a first without one takes the first
     /// later one that has one.
     @Test func mergedDeckCardsKeepTheFirstPrinting() throws {

@@ -394,6 +394,23 @@ struct DeckViewTests {
         #expect(DeckPage.newDeckCards(search, format: "standard", game: yugioh).map(\.productID) == [nil])
     }
 
+    /// Fix round 2: the printing button applies what it said at render, and only while the line's stored printing is still
+    /// what it was then; a double click across a re-render does nothing the second time.
+    @Test func thePrintingButtonAppliesWhatItSaid() {
+        let use = DeckPage.printingChoice(stored: nil, page: 7)
+        #expect(use.title == "Use this printing" && use.target == 7)
+        #expect(DeckPage.printingToApply(use, current: nil) == .some(7))
+        #expect(DeckPage.printingToApply(use, current: 7) == nil)            // changed since: nothing
+        let any = DeckPage.printingChoice(stored: 7, page: 7)
+        #expect(any.title == "Any printing" && any.target == nil)
+        #expect(DeckPage.printingToApply(any, current: 7) == .some(nil))
+        #expect(DeckPage.printingToApply(any, current: nil) == nil)
+        let move = DeckPage.printingChoice(stored: 3, page: 7)
+        #expect(move.title == "Use this printing")
+        #expect(DeckPage.printingToApply(move, current: 3) == .some(7))
+        #expect(DeckPage.printingToApply(move, current: 5) == nil)
+    }
+
     /// The card page's deck lines carry each line's stored printing, for "Use this printing" / "Any printing".
     @Test func theCardPagesDeckLinesCarryTheirPrinting() {
         let held = Deck(id: "a", name: "Wind", format: "standard", active: false,

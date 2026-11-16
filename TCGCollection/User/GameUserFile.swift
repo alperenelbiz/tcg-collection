@@ -16,11 +16,12 @@ nonisolated private struct RawList<Key: Hashable> {
     var unparseable: [Any] = []
 }
 
-/// A deck card by its deck and card key: where a printing set or cleared is noted (A18). Not by section: a card moved to
-/// another section keeps the object, so the note, of the card it was.
+/// A deck card's raw object by its deck and the key (card, section) it was read under: where a printing set or cleared
+/// is noted (A18; fix round 2: per line, not per card). A card moved to another section keeps the object it was read
+/// with, so the note goes with it.
 nonisolated private struct DeckCardRef: Hashable {
     let deckID: String
-    let cardKey: String
+    let key: DeckCardKey
 }
 
 /// The raw JSON of one deck's cards: each parsed card's own object, in the order of the deck's cards as read, and the
@@ -245,8 +246,10 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     mutating func setPrinting(_ productID: Int?, deck id: String, key: DeckCardKey) {
         guard let i = decks.firstIndex(where: { $0.id == id }), decks[i].cards.contains(where: { $0.key == key }) else { return }
         decks[i] = DeckRules.settingPrinting(decks[i], key: key, productID: productID)
-        let unreadable = raw.deckCards[id]?.objects.contains { $0.key.cardKey == key.cardKey && Self.hasUnreadablePrinting($0.object) }
-        if unreadable == true { printingsChanged.insert(DeckCardRef(deckID: id, cardKey: key.cardKey)) }
+        let deck = decks[i]
+        guard let j = deck.cards.firstIndex(where: { $0.key == key }), let source = rawCardObjects(deck)[j],
+              Self.hasUnreadablePrinting(source.object) else { return }
+        printingsChanged.insert(DeckCardRef(deckID: id, key: source.key))
     }
 
     /// The lists and the decks are equal (what the app reads and changes); keys it does not know are not compared.
@@ -275,18 +278,36 @@ nonisolated struct GameUserFile: Sendable, Equatable {
     }
 
     /// Notes the deck cards whose printing changed (set or cleared) in this change of `decks`, when the file read had a
-    /// printing this build cannot read (A18). A card is matched by its deck and key (card, section).
+    /// printing this build cannot read (A18). A card is matched with its old self by its deck and key (card, section); the
+    /// note names the raw object the card is written over (`rawCardObjects`).
     private mutating func notePrintingChanges(from old: [Deck]) {
         guard raw.hasUnreadablePrintings else { return }
         let before = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for deck in decks {
             guard let was = before[deck.id] else { continue }
-            for card in deck.cards {
-                let ref = DeckCardRef(deckID: deck.id, cardKey: card.cardKey)
-                guard !printingsChanged.contains(ref),
-                      let previous = was.cards.first(where: { $0.key == card.key }) else { continue }
-                if previous.productID != card.productID { printingsChanged.insert(ref) }
+            let sources = rawCardObjects(deck)
+            for (card, source) in zip(deck.cards, sources) {
+                guard let source, let previous = was.cards.first(where: { $0.key == card.key }),
+                      previous.productID != card.productID else { continue }
+                printingsChanged.insert(DeckCardRef(deckID: deck.id, key: source.key))
             }
+        }
+    }
+
+    /// For each card of `deck`, in order, the raw object it is written over and the key it was read under: its own key's
+    /// object, else the object of a card of the same card key that is no longer in the deck (a move, a format change),
+    /// else none.
+    private func rawCardObjects(_ deck: Deck) -> [(key: DeckCardKey, object: [String: Any])?] {
+        let rawCards = raw.deckCards[deck.id] ?? RawCards()
+        var byKey: [DeckCardKey: [String: Any]] = [:]
+        for card in rawCards.objects { byKey[card.key] = card.object }
+        let current = Set(deck.cards.map(\.key))
+        var spare = rawCards.objects.filter { !current.contains($0.key) }
+        return deck.cards.map { card in
+            if let own = byKey[card.key] { return (key: card.key, object: own) }
+            guard let i = spare.firstIndex(where: { $0.key.cardKey == card.cardKey }) else { return nil }
+            let found = spare.remove(at: i)
+            return (key: found.key, object: found.object)
         }
     }
 
@@ -300,21 +321,13 @@ nonisolated struct GameUserFile: Sendable, Equatable {
         guard var object = try Self.objects([(deck, raw.decks.objects[deck.id])], owned: Deck.storedKeys,
                                             encoder: encoder)[0] as? [String: Any] else { return [:] }
         let rawCards = raw.deckCards[deck.id] ?? RawCards()
-        var byKey: [DeckCardKey: [String: Any]] = [:]
-        for card in rawCards.objects { byKey[card.key] = card.object }
-        let current = Set(deck.cards.map(\.key))
-        var spare = rawCards.objects.filter { !current.contains($0.key) }
-        let pairs = deck.cards.map { card -> (DeckCard, [String: Any]?) in
-            if let own = byKey[card.key] { return (card, own) }
-            guard let i = spare.firstIndex(where: { $0.key.cardKey == card.cardKey }) else { return (card, nil) }
-            return (card, spare.remove(at: i).object)
-        }
-        // A18: a `productID` this build could not read stays while the card has no printing and nobody set or cleared it.
-        object["cards"] = try pairs.map { card, raw in
-            let keeps = card.productID == nil && Self.hasUnreadablePrinting(raw)
-                && !printingsChanged.contains(DeckCardRef(deckID: deck.id, cardKey: card.cardKey))
+        // A18: a `productID` this build could not read stays while the card has no printing and nobody set or cleared the
+        // printing of the line its object was read under.
+        object["cards"] = try zip(deck.cards, rawCardObjects(deck)).map { card, source in
+            let keeps = card.productID == nil && Self.hasUnreadablePrinting(source?.object)
+                && !(source.map { printingsChanged.contains(DeckCardRef(deckID: deck.id, key: $0.key)) } ?? true)
             let owned = keeps ? DeckCard.storedKeys.subtracting(["productID"]) : DeckCard.storedKeys
-            return try Self.objects([(card, raw)], owned: owned, encoder: encoder)[0]
+            return try Self.objects([(card, source?.object)], owned: owned, encoder: encoder)[0]
         } + rawCards.unparseable
         return object
     }

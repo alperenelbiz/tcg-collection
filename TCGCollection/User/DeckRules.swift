@@ -78,17 +78,28 @@ nonisolated enum DeckRules {
 
     /// D12: the deck takes `format`; a card whose section the new format has stays there, every other card goes to
     /// `defaultSection(card)` with its printing. Cards that land on one (card, section) are summed into the first (its
-    /// printing; when it has none, the first later one's). No card and no copy is lost.
+    /// place and name). The printing of that line: the printing of a card that stayed in its section (the target), else
+    /// the first one in deck order that has one. No card and no copy is lost.
     static func changingFormat(_ deck: Deck, to format: DeckFormat, defaultSection: (DeckCard) -> String) -> Deck {
         var deck = deck
         deck.format = format.id
+        // A card that stays in its section is the target of the cards moved onto it, wherever it stands in the deck's
+        // order: its printing stays (fix round 2).
+        var targets: [DeckCardKey: Int] = [:]
+        for card in deck.cards where format.section(card.section) != nil {
+            if let productID = card.productID, targets[card.key] == nil { targets[card.key] = productID }
+        }
         let moved = deck.cards.map { card -> DeckCard in
             guard format.section(card.section) == nil else { return card }
             var card = card
             card.section = defaultSection(card)
             return card
         }
-        deck.cards = summed(moved)
+        deck.cards = summed(moved).map { card in
+            var card = card
+            if let productID = targets[card.key] { card.productID = productID }
+            return card
+        }
         return deck
     }
 
