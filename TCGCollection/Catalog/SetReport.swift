@@ -26,19 +26,30 @@ enum SetReport {
     private static func gameLines(_ game: GameDefinition, model: AppModel) async throws -> [String] {
         let container = model.reader.modelContainer
         var lines = ["\(game.name):"]
-        // The scan, as the model's queue runs it: a throwaway store on the container, never `reader`.
+        // The scan, as the model's queue runs it: throwaway stores on the container, never `reader`.
         var index = SetIndex(sets: [:])
         var scans: [Duration] = []
         for _ in 0..<3 {
-            let scan = CatalogStore(modelContainer: container)
             let start = ContinuousClock.now
-            index = try await scan.setIndex(game: game.id)
+            index = try await CatalogStore.setIndex(game: game.id, container: container)
             scans.append(ContinuousClock.now - start)
         }
-        // The scan's two halves alone: the pages read (the same fetches) and the sort of every set (`SetOrder.sorted`).
+        // The scan's two halves alone: the key ranges read (the same fetches, one after another) and the sort of every set
+        // (`SetOrder.sorted`).
         var entries: [Int: [(number: String, name: String, id: Int)]] = [:]
-        let fetch = try await durations(1) { entries = try await CatalogStore(modelContainer: container).setIndexEntries(game: game.id) }
+        let fetch = try await durations(1) {
+            entries = [:]
+            let ends = CatalogStore.nameRangeEnds.map { Optional($0) }
+            for (low, high) in zip([nil] + ends, ends + [nil]) {
+                for row in try await CatalogStore(modelContainer: container).setIndexRows(game: game.id, after: low, through: high) {
+                    entries[row.groupID, default: []].append((row.number, row.name, row.productID))
+                }
+            }
+        }
         let sort = await durations(1) { _ = entries.mapValues(SetOrder.sorted) }
+        // Before final fix A2: the paged scan by product id, once (its index must equal the new one).
+        var old = SetIndex(sets: [:])
+        let before = try await durations(1) { old = try await CatalogStore(modelContainer: container).setIndexByProductID(game: game.id) }
         let storeProducts = try await CatalogStore(modelContainer: container).productIDs(game: game.id).count
         let sizes = index.sets.values.map(\.count).sorted()
         let indexed = sizes.reduce(0, +)
@@ -46,9 +57,10 @@ enum SetReport {
         let listed = storeSets.filter { !(index.sets[$0.groupID] ?? []).isEmpty }.count
         lines.append("  index: \(index.sets.count) sets, \(indexed) products (store: \(storeProducts) products, "
                      + "\(storeSets.count) set rows, \(listed) of them listed)")
-        lines.append("  setIndex(game:) scan: \(ms(scans[0])) first, \(ms(scans.sorted()[1])) median of 3"
-                     + (scans.contains { $0 > .seconds(5) } ? "  ** over 5 s **" : "")
-                     + "; alone: pages read \(ms(fetch)), sort \(ms(sort))")
+        lines.append("  setIndex(game:container:) scan: \(ms(scans[0])) first, \(ms(scans.sorted()[1])) median of 3"
+                     + (scans.contains { $0 > .seconds(3) } ? "  ** over 3 s **" : "")
+                     + "; alone: key ranges read one after another \(ms(fetch)), sort \(ms(sort))")
+        lines.append("  before final fix A2, the paged scan by product id: \(ms(before)); its index equal to this scan's: \(old == index)")
         let file = model.paths.sets(game.id)
         if FileManager.default.fileExists(atPath: file.path) {
             let read = await durations(3) { _ = SetIndex.read(file) }
@@ -170,22 +182,24 @@ enum SetReport {
 }
 
 extension CatalogStore {
-    /// The rows `setIndex(game:)` reads, grouped by set and not sorted: only for the report's split of the scan's time.
-    func setIndexEntries(game: String, pageSize: Int = 2_000) throws -> [Int: [(number: String, name: String, id: Int)]] {
+    /// The set index's scan of phase 4A before its final fix A2: the game's products in pages of `pageSize` rows by
+    /// product id (`gameID == ? AND productID > ? ORDER BY productID LIMIT n`), each page sorted by SQLite in a temporary
+    /// B-tree. Kept only to compare its index with `setIndex(game:container:)` (a unit test, and the report's "before").
+    func setIndexByProductID(game: String, pageSize: Int = 2_000) throws -> SetIndex {
         var bySet: [Int: [(number: String, name: String, id: Int)]] = [:]
         var last = Int.min
         while true {
             let after = last
             var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game && $0.productID > after },
                                                              sortBy: [SortDescriptor(\.productID)])
-            descriptor.fetchLimit = pageSize
+            descriptor.fetchLimit = max(pageSize, 1)
             descriptor.propertiesToFetch = [\.productID, \.groupID, \.number, \.name]
             let page = try modelContext.fetch(descriptor)
             for row in page { bySet[row.groupID, default: []].append((row.number, row.name, row.productID)) }
-            guard page.count == pageSize, let end = page.last else { break }
+            guard page.count == descriptor.fetchLimit, let end = page.last else { break }
             last = end.productID
         }
-        return bySet
+        return SetIndex(sets: bySet.mapValues(SetOrder.sorted))
     }
 }
 #endif

@@ -335,15 +335,18 @@ struct CatalogStoreTests {
         #expect(await writer.runsOnMainThread() == false)
         #expect(await reader.runsOnMainThread() == false)
         // The set index's scan runs on a throwaway store, called from the main actor as `AppModel` does.
-        let scan = CatalogStore(modelContainer: writer.modelContainer)
-        #expect(try await scan.setIndex(game: "riftbound") == SetIndex(sets: [:]))
-        #expect(await scan.runsOnMainThread() == false)
+        #expect(try await CatalogStore.setIndex(game: "riftbound", container: writer.modelContainer) == SetIndex(sets: [:]))
+        // Each key range's read runs on a throwaway store of its own, off the main thread.
+        let range = CatalogStore(modelContainer: writer.modelContainer)
+        #expect(try await range.setIndexRows(game: "riftbound", after: nil, through: nil).isEmpty)
+        #expect(await range.runsOnMainThread() == false)
     }
 
-    /// Two sets (3 and 2 products, numbers out of order, one without a number): each in card-number order, small pages
-    /// so the scan crosses page ends; another game's products are not in it; a set whose products went is not in it.
+    /// Two sets (3 and 2 products, numbers out of order, one without a number): each in card-number order; another
+    /// game's products are not in it; a set whose products went is not in it.
     @Test func theSetIndexListsEachSetInCardNumberOrder() async throws {
         let s = try CatalogStore.inMemory()
+        let container = s.modelContainer
         try await s.replaceProducts(of: 1, with: [product(id: 30, groupID: 1, name: "C", number: "10"),
                                                   product(id: 31, groupID: 1, name: "A", number: ""),
                                                   product(id: 32, groupID: 1, name: "B", number: "2")], at: .now)
@@ -351,12 +354,46 @@ struct CatalogStoreTests {
                                                   product(id: 41, groupID: 2, name: "D", number: "OGN-001")], at: .now)
         try await s.replaceProducts(of: 3, with: [product(id: 50, groupID: 3, name: "F", number: "1")], at: .now)
         try await s.replaceProducts(of: 9, with: [product(id: 60, game: "cyberpunk", groupID: 9, name: "G", number: "1")], at: .now)
-        #expect(try await s.setIndex(game: "riftbound", pageSize: 2) == SetIndex(sets: [1: [32, 30, 31], 2: [41, 40], 3: [50]]))
+        #expect(try await CatalogStore.setIndex(game: "riftbound", container: container)
+                == SetIndex(sets: [1: [32, 30, 31], 2: [41, 40], 3: [50]]))
         try await s.replaceProducts(of: 3, with: [], at: .now)                       // every product of set 3 removed
-        let index = try await s.setIndex(game: "riftbound", pageSize: 2)
+        let index = try await CatalogStore.setIndex(game: "riftbound", container: container)
         #expect(index == SetIndex(sets: [1: [32, 30, 31], 2: [41, 40]]))
-        #expect(index.groupOf[50] == nil)
-        #expect(try await s.setIndex(game: "cyberpunk") == SetIndex(sets: [9: [60]]))
+        #expect(!index.sets.values.joined().contains(50))
+        #expect(try await CatalogStore.setIndex(game: "cyberpunk", container: container) == SetIndex(sets: [9: [60]]))
+    }
+
+    /// A2: the scan in card-key ranges reads every product exactly once, also an empty card key (`""`, punctuation only),
+    /// keys equal to a range's end (`e`, `k`, `r`) and just past it, and one card key in two sets; its index equals the
+    /// one of the old paged scan by product id (pages of 2, so that scan crosses page ends), and on the fixture catalog of
+    /// every game too.
+    @Test func theSetIndexInKeyRangesEqualsThePagedScanByProductID() async throws {
+        let s = try CatalogStore.inMemory()
+        let container = s.modelContainer
+        let names = ["", "!!!", "Alpha", "E", "E a", "Ea", "Fire", "K", "K!", "Ka", "Mist", "R", "Ra", "Zed", "zz top", "Ω"]
+        var products: [ProductRecord] = []
+        for (i, name) in names.enumerated() {
+            products.append(product(id: 100 + i, groupID: 1 + i % 3, name: name, number: "\(names.count - i)"))
+        }
+        products.append(product(id: 300, groupID: 2, name: "Alpha", number: ""))      // a card key in two sets
+        products.append(product(id: 301, groupID: 3, name: "Alpha", number: "1"))
+        for group in 1...3 {
+            try await s.replaceProducts(of: group, with: products.filter { $0.groupID == group }, at: .now)
+        }
+        try await s.replaceProducts(of: 9, with: [product(id: 400, game: "cyberpunk", groupID: 9, name: "Alpha", number: "1")], at: .now)
+        let new = try await CatalogStore.setIndex(game: "riftbound", container: container)
+        let old = try await CatalogStore(modelContainer: container).setIndexByProductID(game: "riftbound", pageSize: 2)
+        #expect(new == old)
+        #expect(new.sets.values.map(\.count).reduce(0, +) == products.count)
+        #expect(Set(new.sets.values.joined()) == Set(products.map(\.productID)))
+
+        let filled = try await filledStore()
+        for game in Games.all {
+            let byRanges = try await CatalogStore.setIndex(game: game.id, container: filled.modelContainer)
+            let byID = try await CatalogStore(modelContainer: filled.modelContainer).setIndexByProductID(game: game.id)
+            #expect(byRanges == byID, "\(game.id)")
+            #expect(!byRanges.sets.isEmpty, "\(game.id)")
+        }
     }
 
     /// The writer is busy with one long set; a read through the reader ends before that write does.

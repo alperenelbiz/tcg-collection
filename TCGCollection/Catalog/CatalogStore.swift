@@ -537,27 +537,48 @@ actor CatalogStore: ModelActor {
         return FacetLists(rarities: rarities.sorted(), types: types)
     }
 
-    /// The set index of a game (F3, F4): one scan of its products in pages of `pageSize` rows by product id (each page
-    /// starts after the last id read), keeping only the set, number, name and id of each row; then each set's products
-    /// in card-number order (`SetOrder.sorted`: each row's order key made once). A set without a product is not in it.
-    /// A long scan: run it on a throwaway store on the container, never on `reader` or the writer. Cancellation stops it
-    /// between pages.
-    func setIndex(game: String, pageSize: Int = 2_000) throws -> SetIndex {
-        typealias Entry = (number: String, name: String, id: Int)
-        var bySet: [Int: [Entry]] = [:]
-        var last = Int.min
-        while true {
-            try Task.checkCancellation()
-            let after = last
-            var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game && $0.productID > after },
-                                                             sortBy: [SortDescriptor(\.productID)])
-            descriptor.fetchLimit = max(pageSize, 1)
-            descriptor.propertiesToFetch = [\.productID, \.groupID, \.number, \.name]
-            let page = try modelContext.fetch(descriptor)
-            for row in page { bySet[row.groupID, default: []].append((row.number, row.name, row.productID)) }
-            guard page.count == descriptor.fetchLimit, let end = page.last else { break }
-            last = end.productID
+    /// The set index's rows of `game` whose card key is in `(after, through]` (nil: no end on that side, so `""` is in the
+    /// first range): one read of the `(gameID, cardKey)` index's range, no sort, no paging. A part of
+    /// `setIndex(game:container:)`; run it on a throwaway store on the container, never on `reader` or the writer.
+    func setIndexRows(game: String, after low: String?, through high: String?) throws -> [SetIndexRow] {
+        let predicate: Predicate<CatalogProduct>
+        switch (low, high) {
+        case let (low?, high?): predicate = #Predicate { $0.gameID == game && $0.cardKey > low && $0.cardKey <= high }
+        case let (low?, nil): predicate = #Predicate { $0.gameID == game && $0.cardKey > low }
+        case let (nil, high?): predicate = #Predicate { $0.gameID == game && $0.cardKey <= high }
+        case (nil, nil): predicate = #Predicate { $0.gameID == game }
         }
+        var descriptor = FetchDescriptor<CatalogProduct>(predicate: predicate)
+        descriptor.propertiesToFetch = [\.productID, \.groupID, \.number, \.name]
+        return try modelContext.fetch(descriptor).map {
+            SetIndexRow(groupID: $0.groupID, number: $0.number, name: $0.name, productID: $0.productID)
+        }
+    }
+
+    /// The set index of a game (F3, F4): its products read in four card-key ranges at once (`nameRangeEnds`, as
+    /// `cardNames(game:container:)`), each on a throwaway store of its own on `container` (its own context and queue),
+    /// keeping only the set, number, name and id of each row; then each set's products in card-number order
+    /// (`SetOrder.sorted`: each row's order key made once). A set without a product is not in it. Cancellation stops it
+    /// after the running reads.
+    ///
+    /// Phase 4A final fix A2: the paged read by product id it replaces (`gameID == ? AND productID > ? ORDER BY productID
+    /// LIMIT 2000`) had no index that orders by product id within a game: SQLite walked the game's `(gameID, cardKey)`
+    /// index and sorted the rest of the game in a temporary B-tree for every page (`EXPLAIN QUERY PLAN`; about 0.13 s a
+    /// page, 59 pages for Magic). A key range is one walk of that index, without a sort.
+    nonisolated static func setIndex(game: String, container: ModelContainer) async throws -> SetIndex {
+        let ends = nameRangeEnds.map { Optional($0) }
+        let lows: [String?] = [nil] + ends, highs: [String?] = ends + [nil]
+        let rows = try await withThrowingTaskGroup(of: [SetIndexRow].self) { group in
+            for (low, high) in zip(lows, highs) {
+                group.addTask { try await CatalogStore(modelContainer: container).setIndexRows(game: game, after: low, through: high) }
+            }
+            var all: [SetIndexRow] = []
+            for try await part in group { all += part }
+            return all
+        }
+        try Task.checkCancellation()
+        var bySet: [Int: [(number: String, name: String, id: Int)]] = [:]
+        for row in rows { bySet[row.groupID, default: []].append((row.number, row.name, row.productID)) }
         return SetIndex(sets: bySet.mapValues(SetOrder.sorted))
     }
 

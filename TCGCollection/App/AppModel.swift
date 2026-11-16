@@ -914,7 +914,7 @@ final class AppModel {
             #if DEBUG
             try await setIndexScanHook?(request.game)
             #endif
-            let index = try await scan.setIndex(game: request.game)
+            let index = try await CatalogStore.setIndex(game: request.game, container: store.modelContainer)
             guard !Task.isCancelled else { return }
             setIndexes[request.game] = index
             setIndexVersions[request.game, default: 0] += 1

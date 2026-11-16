@@ -73,6 +73,14 @@ nonisolated struct SetIndex: Codable, Sendable, Equatable {
     }
 }
 
+/// One product as the set index's scan reads it (`CatalogStore.setIndexRows`).
+nonisolated struct SetIndexRow: Sendable, Equatable {
+    let groupID: Int
+    let number: String
+    let name: String
+    let productID: Int
+}
+
 /// Card-number order (F4): by the product's number, compared piece by piece (runs of digits as numbers, other runs as
 /// text, ignoring case; a digit run before a text run): `1, 2, 10, 10a, BETB-EN001, BETB-EN002, T-01`. The number is
 /// trimmed of white space; a product without a number (empty or only spaces) comes after those with one. Equal numbers
