@@ -8,7 +8,9 @@ import Foundation
 /// threshold is 3 s per archive), and the time to make a `PriceChart` from a 90-day series. It runs after the model's own
 /// pass (`waitForHistory`), on the model's tracked sets (`historyTracked`), so the archives are in the system's file cache
 /// by then. The written numbers are in `docs/reports/2026-11-catalog-report.md`, "Price history, phase 5A check". It
-/// prints counts of days, archives and products, sizes and times only: no card name and no product id.
+/// prints counts of days and archives, sizes and times only: no card name, no product id and no count of products (they
+/// come from the owner's collection). The pass's times are warm (the archives are in the file cache); the peak memory is
+/// the process's lifetime `ru_maxrss`; the chart's time is `PriceChart`'s construction, not the view's rendering.
 @MainActor
 enum HistoryReport {
     /// H12: a one-printing fill over this per archive asks for a group filter of the archive reader.
@@ -26,8 +28,7 @@ enum HistoryReport {
         let tracked = model.syncedGames.compactMap { game in
             model.historyTracked[game.id].map { (game: game, ids: $0) }
         }
-        lines.append("followed games the model's pass tracked: \(tracked.count) of \(model.syncedGames.count); "
-                     + "tracked products in all: \(tracked.reduce(0) { $0 + $1.ids.count })")
+        lines.append("followed games the model's pass tracked: \(tracked.count) of \(model.syncedGames.count)")
         guard !inWindow.isEmpty, !tracked.isEmpty else {
             lines.append(inWindow.isEmpty ? "no archive in the window: nothing measured" : "no game was passed: nothing measured")
             return lines.joined(separator: "\n") + "\n"
@@ -53,8 +54,8 @@ enum HistoryReport {
             }
             let data = history.data()
             let same = model.history(game: game.id) == history
-            lines.append("\(game.name): \(history.products.count) products, \(history.days.count) days, "
-                         + "\(kilobytes(data.count)) written; equal to the model's history: \(same)")
+            lines.append("\(game.name): \(history.days.count) days, \(kilobytes(data.count)) written; "
+                         + "equal to the model's history: \(same)")
             // H12: one product new to the history, read from every archive of the window.
             let catalog = try await CatalogStore(modelContainer: model.reader.modelContainer).productIDs(game: game.id)
             guard let new = newProduct(catalog: catalog, tracked: ids) else {
