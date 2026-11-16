@@ -49,6 +49,25 @@ struct SetIndexTests {
         #expect(SetOrder.precedes(("9", "A", 1), ("99999999999999999999999", "A", 2)))
     }
 
+    /// A number of only spaces is no number; spaces around a number do not count.
+    @Test func numbersAreTrimmed() {
+        let keys: [Key] = [("   ", "A", 1), (" 5", "B", 2), ("4 ", "C", 3), ("6", "D", 4), ("", "E", 5)]
+        #expect(sorted(keys).map(\.id) == [3, 2, 4, 1, 5])
+        #expect(!SetOrder.precedes(("5", "B", 2), (" 5", "B", 2)) && !SetOrder.precedes((" 5", "B", 2), ("5", "B", 2)))
+    }
+
+    /// The keyed sort (each product's pieces made once) gives the order of `precedes`.
+    @Test func theKeyedSortGivesTheSameOrder() {
+        let keys: [Key] = [("1", "A", 1), ("10", "B", 2), ("2a", "C", 3), ("", "D", 4), ("T-01", "E", 5),
+                           ("BETB-EN010", "F", 6), ("2", "G", 7), ("02", "H", 8), (" 3 ", "I", 9), ("  ", "J", 10)]
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<20 {
+            let shuffled = keys.shuffled(using: &generator)
+            #expect(SetOrder.sorted(shuffled) == sorted(shuffled).map(\.id))
+        }
+        #expect(SetOrder.sorted(keys) == [1, 7, 8, 3, 9, 2, 6, 5, 4, 10])
+    }
+
     @Test func anIndexRoundTripsThroughItsFile() throws {
         let index = SetIndex(sets: [24819: [3, 1, 2], 7: [10]])
         let url = tempDir().appending(path: "sets-riftbound.json")
@@ -76,8 +95,29 @@ struct SetIndexTests {
         #expect(SetIndex.read(dir.appending(path: "missing.json")) == nil)
     }
 
+    /// Only canonical decimal keys: "01", "+1" and " 1" would name set 1 a second time.
+    @Test func aKeyThatIsNotCanonicalReadsAsNil() throws {
+        let dir = tempDir()
+        for (name, text) in [("zero", #"{"version":1,"sets":{"1":[1],"01":[2]}}"#),
+                             ("plus", #"{"version":1,"sets":{"+1":[1]}}"#),
+                             ("space", #"{"version":1,"sets":{" 1":[1]}}"#)] {
+            let url = dir.appending(path: "\(name).json")
+            try Data(text.utf8).write(to: url)
+            #expect(SetIndex.read(url) == nil, "\(name)")
+        }
+        let good = dir.appending(path: "good.json")
+        try Data(#"{"version":1,"sets":{"1":[1],"10":[2]}}"#.utf8).write(to: good)
+        #expect(SetIndex.read(good) == SetIndex(sets: [1: [1], 10: [2]]))
+        #expect(SetIndex.read(good)?.groupOf == [1: 1, 2: 10])
+    }
+
     @Test func groupOfMapsEachProductToItsSet() {
         let index = SetIndex(sets: [1: [10, 11], 2: [20]])
         #expect(index.groupOf == [10: 1, 11: 1, 20: 2])
+        var changed = index
+        changed.sets[3] = [30]
+        changed.sets[2] = nil
+        #expect(changed.groupOf == [10: 1, 11: 1, 30: 3])
+        #expect(changed != index)
     }
 }

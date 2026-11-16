@@ -187,8 +187,9 @@ final class AppModel {
     /// The Rarity and Type menu values per game: read from `facets-<game>.json` at launch, rewritten after a catalog
     /// step that changed the game. A game with no entry shows empty menus.
     @ObservationIgnored private var facetLists: [String: FacetLists] = [:]
-    /// Each game's set index (F3): read from `sets-<game>.json` at launch, made again where the filter lists are
-    /// (`storeFacetLists(of:)`). A game with no entry has no index yet. Observed: the Sets screen reads it.
+    /// Each game's set index (F3): read from `sets-<game>.json` at launch; made again, in the model's own task, after a
+    /// catalog step that changed the game and at launch for a game with products and no file (`requestSetIndex`). A game
+    /// with no entry has no index yet. Observed: the Sets screen reads it.
     private(set) var setIndexes: [String: SetIndex] = [:]
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
@@ -415,6 +416,8 @@ final class AppModel {
     func requestCatalogReset() {
         defaults.set(true, forKey: Self.resetKey)
         catalogResetRequested = true
+        // The store is set aside at the next launch: no index scan of it runs on.
+        cancelSetIndexes()
     }
 
     /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
@@ -791,6 +794,7 @@ final class AppModel {
         ygoIndex = await ygoLoader.current()
         await openLaunchCard()
         await writeMissingFacetLists()
+        requestMissingSetIndexes()
         if let storeFailure {
             status = .failed(storeFailure)
             return
@@ -803,45 +807,113 @@ final class AppModel {
     }
 
     /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once
-    /// (`storeFacetLists`), so the menus do not wait for a sync. A game with products and no set index file (a store from
-    /// before phase 4A) gets its index made the same way (F3); a game that lacks only the index is not scanned for its
-    /// lists again.
+    /// (`storeFacetLists`), so the menus do not wait for a sync.
     private func writeMissingFacetLists() async {
         let chosen = gameID
         var wrote = false
-        for game in Games.all.sorted(by: { $0.id == chosen && $1.id != chosen })
-        where facetLists[game.id] == nil || setIndexes[game.id] == nil {
+        for game in Games.all.sorted(by: { $0.id == chosen && $1.id != chosen }) where facetLists[game.id] == nil {
             guard (try? await reader.progress(game: game.id))?.fetched ?? 0 > 0 else { continue }
-            if facetLists[game.id] == nil {
-                wrote = await storeFacetLists(of: game) || wrote
-            } else {
-                await storeSetIndex(of: game, on: CatalogStore(modelContainer: store.modelContainer))
-            }
+            wrote = await storeFacetLists(of: game) || wrote
         }
         if wrote { filtersVersion += 1 }
     }
 
-    /// Reads a game's lists from the store, keeps them in memory and writes the file, then does the same for its set
-    /// index (F3), on the same scan store. False when the lists' store read failed (the index's result does not change
-    /// it). The scans (2.6 s for Magic's lists) run on a store of their own on the same container, released after them,
-    /// so a search or a card page on `reader` does not wait behind them (M1).
+    /// Reads a game's lists from the store, keeps them in memory and writes the file. False when the store read failed.
+    /// The scan (2.6 s for Magic) runs on a store of its own on the same container, released after it, so a search or a
+    /// card page on `reader` does not wait behind it (M1).
     private func storeFacetLists(of game: GameDefinition) async -> Bool {
         let scan = CatalogStore(modelContainer: store.modelContainer)
-        let lists = try? await scan.facetLists(game: game.id)
-        if let lists {
-            facetLists[game.id] = lists
-            try? lists.write(to: paths.facets(game.id))
-        }
-        await storeSetIndex(of: game, on: scan)
-        return lists != nil
+        guard let lists = try? await scan.facetLists(game: game.id) else { return false }
+        facetLists[game.id] = lists
+        try? lists.write(to: paths.facets(game.id))
+        return true
     }
 
-    /// Makes a game's set index on `scan` (a throwaway store), keeps it and writes `sets-<game>.json`, as the lists are
-    /// kept. A failed scan keeps the old index and the old file.
-    private func storeSetIndex(of game: GameDefinition, on scan: CatalogStore) async {
-        guard let index = try? await scan.setIndex(game: game.id) else { return }
-        setIndexes[game.id] = index
-        try? index.write(to: paths.sets(game.id))
+    // MARK: Set indexes (F3)
+
+    /// A queued scan of a game's set index. `onlyWithProducts`: a launch's request for a game without a file, which is
+    /// made only when the game has products (as the facets file at launch).
+    private struct SetIndexRequest {
+        let game: String
+        let onlyWithProducts: Bool
+    }
+
+    /// The scans still to run, one per game (a newer request replaces a queued one of its game).
+    @ObservationIgnored private var setIndexQueue: [SetIndexRequest] = []
+    /// The task that runs the queue, one scan at a time; nil while the queue is empty and nothing runs.
+    @ObservationIgnored private var setIndexTask: Task<Void, Never>?
+    #if DEBUG
+    /// Test only: called with the game before each scan (after a launch request's products check); a throw counts as a
+    /// failed scan.
+    @ObservationIgnored var setIndexScanHook: (@MainActor (String) async throws -> Void)?
+    #endif
+
+    /// A launch: every game without a set index gets one made when it has products (F3). Nothing waits for it.
+    private func requestMissingSetIndexes() {
+        for game in Games.all where setIndexes[game.id] == nil { enqueueSetIndex(game.id, onlyWithProducts: true) }
+    }
+
+    /// Asks for a scan of the game's set index after a catalog step that changed it. It runs in the model's own task,
+    /// after the scans before it (the game on screen first), on a throwaway store: nothing waits for it.
+    func requestSetIndex(_ game: String) {
+        enqueueSetIndex(game, onlyWithProducts: false)
+    }
+
+    /// Drops every queued scan and stops the running one; the stopped scan stores nothing.
+    func cancelSetIndexes() {
+        setIndexQueue = []
+        setIndexTask?.cancel()
+    }
+
+    #if DEBUG
+    /// Test only: returns when no set index scan is queued or running.
+    func waitForSetIndexes() async {
+        while let task = setIndexTask { await task.value }
+    }
+    #endif
+
+    private func enqueueSetIndex(_ game: String, onlyWithProducts: Bool) {
+        setIndexQueue.removeAll { $0.game == game }
+        setIndexQueue.append(SetIndexRequest(game: game, onlyWithProducts: onlyWithProducts))
+        runSetIndexes()
+    }
+
+    /// The next request: the game on screen when it is queued, else the oldest.
+    private func takeSetIndexRequest() -> SetIndexRequest? {
+        guard let i = setIndexQueue.firstIndex(where: { $0.game == gameID }) ?? setIndexQueue.indices.first else { return nil }
+        return setIndexQueue.remove(at: i)
+    }
+
+    private func runSetIndexes() {
+        guard setIndexTask == nil, !setIndexQueue.isEmpty else { return }
+        setIndexTask = Task { [weak self] in
+            while !Task.isCancelled, let self, let request = self.takeSetIndexRequest() {
+                await self.scanSetIndex(request)
+            }
+            // A cancel leaves its task here; requests made since then get a new one.
+            self?.setIndexTask = nil
+            self?.runSetIndexes()
+        }
+    }
+
+    /// One scan on a throwaway store (never `reader`): keeps the index and writes `sets-<game>.json`. A failed or
+    /// cancelled scan keeps the old index and the old file.
+    private func scanSetIndex(_ request: SetIndexRequest) async {
+        let scan = CatalogStore(modelContainer: store.modelContainer)
+        if request.onlyWithProducts {
+            guard (try? await scan.progress(game: request.game))?.fetched ?? 0 > 0 else { return }
+        }
+        do {
+            #if DEBUG
+            try await setIndexScanHook?(request.game)
+            #endif
+            let index = try await scan.setIndex(game: request.game)
+            guard !Task.isCancelled else { return }
+            setIndexes[request.game] = index
+            try? index.write(to: paths.sets(request.game))
+        } catch {
+            return
+        }
     }
 
     /// `-card <productId>`: switches to the product's game and to All cards (card pages live there), and asks the window
@@ -949,7 +1021,10 @@ final class AppModel {
         if done.fetched > 0 || done.removedSets > 0 {
             // A game that reported progress had a set stored or failed; its lists are read again before the menus are told.
             // A removal can leave a game with no event (every set excluded), so then every game of the step is read.
-            for game in games where done.removedSets > 0 || touched.contains(game.id) { _ = await storeFacetLists(of: game) }
+            let changed = games.filter { done.removedSets > 0 || touched.contains($0.id) }
+            for game in changed { _ = await storeFacetLists(of: game) }
+            // The set indexes follow in the model's own task: neither the menus nor the settled state wait for them.
+            for game in changed { requestSetIndex(game.id) }
             catalogVersion += 1
             filtersVersion += 1
         }

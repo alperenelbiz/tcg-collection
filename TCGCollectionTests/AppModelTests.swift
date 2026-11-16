@@ -704,6 +704,7 @@ struct AppModelTests {
         let model = model(["app", "-store", root.path, "-offline", "YES"])
         #expect(model.setIndexes["riftbound"] == nil)
         await model.start()
+        await model.waitForSetIndexes()
         #expect(model.setIndexes["riftbound"] == SetIndex(sets: [1: [1, 2, 3]]))
         #expect(SetIndex.read(paths.sets("riftbound")) == model.setIndexes["riftbound"])
         #expect(model.setIndexes["yu-gi-oh"] == nil)
@@ -718,26 +719,132 @@ struct AppModelTests {
         try await writeClosedStore(at: paths.catalogStore, products: [product(id: 1, number: "1")])
         let first = model(["app", "-store", root.path, "-offline", "YES"])
         await first.start()                                                         // makes the facets and sets files
+        await first.waitForSetIndexes()
         #expect(first.setIndexes["riftbound"] == SetIndex(sets: [1: [1]]))
         let madeUp = SetIndex(sets: [77: [5, 6]])
         try madeUp.write(to: paths.sets("riftbound"))
         let second = model(["app", "-store", root.path, "-offline", "YES"])
         #expect(second.setIndexes["riftbound"] == madeUp)                            // before any store read
+        var scanned: [String] = []
+        second.setIndexScanHook = { scanned.append($0) }
         await second.start()
+        await second.waitForSetIndexes()
         #expect(second.setIndexes["riftbound"] == madeUp)                            // no scan replaced it
         #expect(SetIndex.read(paths.sets("riftbound")) == madeUp)
+        #expect(!scanned.contains("riftbound"))
     }
 
-    /// F3: a catalog step that changed a game writes its set index, as it writes the facets file.
+    /// F3: a catalog step that changed a game writes its set index after its facets file, once the step has told the
+    /// menus; the next launch reads it.
     @MainActor @Test func theSetIndexIsWrittenAfterASync() async throws {
         let root = tempRoot()
         let first = model(["app", "-store", root.path])
+        var seen: [(game: String, facets: Bool)] = []
+        first.setIndexScanHook = { game in seen.append((game, first.facets(game: game) != nil)) }
         await first.start()
+        await first.waitForSetIndexes()
         let index = try #require(first.setIndexes["riftbound"])
         #expect(!index.sets.isEmpty)
         #expect(SetIndex.read(AppPaths(root: root).sets("riftbound")) == index)
+        let riftbound = seen.filter { $0.game == "riftbound" }
+        let afterFacets = riftbound.allSatisfy { $0.facets }
+        #expect(!riftbound.isEmpty); #expect(afterFacets)
         let second = model(["app", "-store", root.path, "-offline", "YES"])
         #expect(second.setIndexes["riftbound"] == index)
+    }
+
+    /// The owner's first launch after phase 4A: facets files, no sets files. The facets are not scanned again, and the
+    /// launch (its sync, prices and settled state) ends while every index scan is still held; the index comes after.
+    @MainActor @Test func aLaunchWithFacetsAndNoSetIndexDoesNotWaitForTheIndex() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let first = model(["app", "-store", root.path])
+        await first.start()
+        await first.waitForSetIndexes()
+        let made = try #require(first.setIndexes["riftbound"])
+        try FileManager.default.removeItem(at: paths.sets("riftbound"))
+        let madeUpLists = FacetLists(rarities: ["Made Up"], types: ["Made Up"])
+        try madeUpLists.write(to: paths.facets("riftbound"))
+        let second = model(["app", "-store", root.path])
+        let (release, releaser) = AsyncStream.makeStream(of: Void.self)
+        var held: [String] = []
+        second.setIndexScanHook = { game in
+            held.append(game)
+            for await _ in release {}
+        }
+        await second.start()                                                         // returns with the scan held
+        #expect(second.status == .idle("Catalog up to date · prices of 2026-01-02"))
+        #expect(second.catalogSettled(game: "riftbound"))
+        #expect(second.setIndexes["riftbound"] == nil)
+        #expect(second.facets(game: "riftbound") == madeUpLists)                     // no facets scan
+        #expect(FacetLists.read(paths.facets("riftbound")) == madeUpLists)
+        #expect(held == ["riftbound"])
+        releaser.finish()
+        await second.waitForSetIndexes()
+        #expect(second.setIndexes["riftbound"] == made)
+        #expect(SetIndex.read(paths.sets("riftbound")) == made)
+    }
+
+    /// A failed scan keeps the old index in memory and the old file.
+    @MainActor @Test func aFailedSetIndexScanKeepsTheOldIndex() async throws {
+        struct Failed: Error {}
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore, products: [product(id: 1, number: "1")])
+        let old = SetIndex(sets: [77: [5]])
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        model.setIndexScanHook = { _ in throw Failed() }
+        await model.start()                                                          // no sets file: a scan is asked for
+        await model.waitForSetIndexes()
+        #expect(model.setIndexes["riftbound"] == nil)
+        #expect(!FileManager.default.fileExists(atPath: paths.sets("riftbound").path))
+        try old.write(to: paths.sets("riftbound"))
+        model.requestSetIndex("riftbound")
+        await model.waitForSetIndexes()
+        #expect(SetIndex.read(paths.sets("riftbound")) == old)
+        model.setIndexScanHook = nil
+        model.requestSetIndex("riftbound")
+        await model.waitForSetIndexes()
+        #expect(model.setIndexes["riftbound"] == SetIndex(sets: [1: [1]]))
+    }
+
+    /// A newer request for a game replaces its queued one, the game on screen goes first, and a cancel drops the queue
+    /// and stores nothing of the scan it stops.
+    @MainActor @Test func theIndexQueueTakesTheGameOnScreenFirstAndKeepsOneRequestPerGame() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "magic-the-gathering"])
+        let (release, releaser) = AsyncStream.makeStream(of: Void.self)
+        var order: [String] = []
+        model.setIndexScanHook = { game in
+            order.append(game)
+            if order.count == 1 { for await _ in release {} }
+        }
+        model.requestSetIndex("riftbound")                                           // runs, held
+        await Task.yield()
+        model.requestSetIndex("yu-gi-oh")
+        model.requestSetIndex("cyberpunk")
+        model.requestSetIndex("magic-the-gathering")                                 // the game on screen
+        model.requestSetIndex("yu-gi-oh")                                            // replaces the queued one
+        releaser.finish()
+        await model.waitForSetIndexes()
+        #expect(order == ["riftbound", "magic-the-gathering", "cyberpunk", "yu-gi-oh"])
+        try await model.store.replaceProducts(of: 1, with: [product(id: 1)], at: .now)
+        let before = model.setIndexes
+        order = []
+        let (hold, holder) = AsyncStream.makeStream(of: Void.self)
+        model.setIndexScanHook = { game in
+            order.append(game)
+            for await _ in hold {}
+        }
+        model.requestSetIndex("riftbound")
+        await Task.yield()
+        model.requestSetIndex("yu-gi-oh")
+        model.cancelSetIndexes()
+        holder.finish()
+        await model.waitForSetIndexes()
+        #expect(order == ["riftbound"])
+        #expect(model.setIndexes == before)
+        #expect(model.setIndexes["riftbound"] != SetIndex(sets: [1: [1]]))
     }
 
     /// The owner's migrated store has no facets files: the lists are computed once at launch, also offline.

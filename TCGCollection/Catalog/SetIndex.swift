@@ -11,17 +11,21 @@ nonisolated struct SetIndex: Codable, Sendable, Equatable {
     static let version = 1
 
     /// Group id -> the set's product ids in card-number order.
-    var sets: [Int: [Int]]
+    var sets: [Int: [Int]] {
+        didSet { groupOf = Self.groups(of: sets) }
+    }
+
+    /// Product id -> its set. Made once from `sets` (at init, at a read, and when `sets` changes), not per access.
+    private(set) var groupOf: [Int: Int]
 
     init(sets: [Int: [Int]]) {
         self.sets = sets
+        groupOf = Self.groups(of: sets)
     }
 
-    /// The set's product ids in card-number order; empty for a set the index does not hold.
-    func products(of groupID: Int) -> [Int] { sets[groupID] ?? [] }
+    static func == (a: SetIndex, b: SetIndex) -> Bool { a.sets == b.sets }
 
-    /// Product id -> its set.
-    var groupOf: [Int: Int] {
+    private static func groups(of sets: [Int: [Int]]) -> [Int: Int] {
         var map: [Int: Int] = [:]
         for (group, products) in sets {
             for product in products { map[product] = group }
@@ -29,7 +33,11 @@ nonisolated struct SetIndex: Codable, Sendable, Equatable {
         return map
     }
 
-    /// Nil when the file does not exist, cannot be decoded, or is of another version (it then counts as none).
+    /// The set's product ids in card-number order; empty for a set the index does not hold.
+    func products(of groupID: Int) -> [Int] { sets[groupID] ?? [] }
+
+    /// Nil when the file does not exist, cannot be decoded, is of another version, or has a set key that is not a
+    /// canonical decimal number (`"01"`, `"+1"`, `" 1"` would name a set twice): it then counts as none.
     static func read(_ url: URL) -> SetIndex? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(SetIndex.self, from: data)
@@ -50,12 +58,12 @@ nonisolated struct SetIndex: Codable, Sendable, Equatable {
         guard try container.decode(Int.self, forKey: .version) == Self.version else { throw VersionMismatch() }
         var sets: [Int: [Int]] = [:]
         for (key, products) in try container.decode([String: [Int]].self, forKey: .sets) {
-            guard let group = Int(key) else {
-                throw DecodingError.dataCorruptedError(forKey: .sets, in: container, debugDescription: "set key \(key) is not a number")
+            guard let group = Int(key), String(group) == key else {
+                throw DecodingError.dataCorruptedError(forKey: .sets, in: container, debugDescription: "set key \(key) is not a canonical number")
             }
             sets[group] = products
         }
-        self.sets = sets
+        self.init(sets: sets)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -66,23 +74,46 @@ nonisolated struct SetIndex: Codable, Sendable, Equatable {
 }
 
 /// Card-number order (F4): by the product's number, compared piece by piece (runs of digits as numbers, other runs as
-/// text, ignoring case; a digit run before a text run): `1, 2, 10, 10a, BETB-EN001, BETB-EN002, T-01`. A product without
-/// a number comes after those with one. Equal numbers (`2` and `02`, `t-01` and `T-01`) go by name (ignoring case,
-/// then as written), then by product id, so the order is total and the same on every run.
+/// text, ignoring case; a digit run before a text run): `1, 2, 10, 10a, BETB-EN001, BETB-EN002, T-01`. The number is
+/// trimmed of white space; a product without a number (empty or only spaces) comes after those with one. Equal numbers
+/// (`2` and `02`, `t-01` and `T-01`) go by name (ignoring case, then as written), then by product id, so the order is
+/// total and the same on every run.
 nonisolated enum SetOrder {
     static func precedes(_ a: (number: String, name: String, id: Int), _ b: (number: String, name: String, id: Int)) -> Bool {
-        if a.number.isEmpty != b.number.isEmpty { return b.number.isEmpty }
-        let byNumber = compareNumbers(a.number, b.number)
-        if byNumber != .orderedSame { return byNumber == .orderedAscending }
-        let foldedA = a.name.lowercased(), foldedB = b.name.lowercased()
-        if foldedA != foldedB { return foldedA < foldedB }
-        if a.name != b.name { return a.name < b.name }
-        return a.id < b.id
+        Key(a) < Key(b)
+    }
+
+    /// The ids in card-number order: each entry's key (its number's pieces, its folded name) is made once, then sorted.
+    static func sorted(_ entries: [(number: String, name: String, id: Int)]) -> [Int] {
+        entries.map(Key.init).sorted(by: <).map(\.id)
     }
 
     private enum Piece {
         case digits(String)     // without leading zeros ("" for zero)
         case text(String)       // lowercased
+    }
+
+    private struct Key {
+        let pieces: [Piece]
+        let foldedName: String
+        let name: String
+        let id: Int
+
+        init(_ entry: (number: String, name: String, id: Int)) {
+            pieces = SetOrder.pieces(entry.number.trimmingCharacters(in: .whitespacesAndNewlines))
+            foldedName = entry.name.lowercased()
+            name = entry.name
+            id = entry.id
+        }
+
+        static func < (a: Key, b: Key) -> Bool {
+            if a.pieces.isEmpty != b.pieces.isEmpty { return b.pieces.isEmpty }
+            let byNumber = SetOrder.compare(a.pieces, b.pieces)
+            if byNumber != .orderedSame { return byNumber == .orderedAscending }
+            if a.foldedName != b.foldedName { return a.foldedName < b.foldedName }
+            if a.name != b.name { return a.name < b.name }
+            return a.id < b.id
+        }
     }
 
     private static func pieces(_ number: String) -> [Piece] {
@@ -108,8 +139,7 @@ nonisolated enum SetOrder {
         return result
     }
 
-    private static func compareNumbers(_ a: String, _ b: String) -> ComparisonResult {
-        let left = pieces(a), right = pieces(b)
+    private static func compare(_ left: [Piece], _ right: [Piece]) -> ComparisonResult {
         for (x, y) in zip(left, right) {
             switch (x, y) {
             case (.digits(let p), .digits(let q)):

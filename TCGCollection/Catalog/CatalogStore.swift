@@ -539,8 +539,9 @@ actor CatalogStore: ModelActor {
 
     /// The set index of a game (F3, F4): one scan of its products in pages of `pageSize` rows by product id (each page
     /// starts after the last id read), keeping only the set, number, name and id of each row; then each set's products
-    /// in card-number order (`SetOrder`). A set without a product is not in it. A long scan: run it on a throwaway store
-    /// on the container, never on `reader` or the writer. Cancellation stops it between pages.
+    /// in card-number order (`SetOrder.sorted`: each row's order key made once). A set without a product is not in it.
+    /// A long scan: run it on a throwaway store on the container, never on `reader` or the writer. Cancellation stops it
+    /// between pages.
     func setIndex(game: String, pageSize: Int = 2_000) throws -> SetIndex {
         typealias Entry = (number: String, name: String, id: Int)
         var bySet: [Int: [Entry]] = [:]
@@ -557,7 +558,7 @@ actor CatalogStore: ModelActor {
             guard page.count == descriptor.fetchLimit, let end = page.last else { break }
             last = end.productID
         }
-        return SetIndex(sets: bySet.mapValues { $0.sorted(by: SetOrder.precedes).map(\.id) })
+        return SetIndex(sets: bySet.mapValues(SetOrder.sorted))
     }
 
     /// One scan each: kept for the catalog report; the views read `facetLists`.
