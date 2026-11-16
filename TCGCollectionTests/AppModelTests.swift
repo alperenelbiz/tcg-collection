@@ -1218,7 +1218,11 @@ struct AppModelTests {
     /// Final fix A3: a change that is not a sale and is dropped at its write keeps today's behaviour: the problem line
     /// says why, the status line says nothing.
     @MainActor @Test(.timeLimit(.minutes(1))) func anotherChangeDroppedAtItsWriteIsNotSaidAsASale() async throws {
-        let model = model(["app", "-store", tempRoot().path, "-offline", "YES"])
+        // The game's file is read at launch (task 5 fix round 1: a write that would create the file is said as not saved
+        // when a file appears; this test is about a write that replaces a read file).
+        let root = tempRoot()
+        try writeUserFile(root, "riftbound", #"{"version":1,"collection":[]}"#)
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
         await model.start()
         let folder = try #require(model.library.folder), key = PrintingKey(productID: 721334, finish: "Normal")
         model.library.setCount(2, game: "riftbound", key: key, name: "Dockside Lock-Up")
@@ -1730,6 +1734,122 @@ struct AppModelTests {
         model.onboardingSheetClosed()
         model.askForFolder()
         #expect(model.showsFolderSheet)
+    }
+
+    // MARK: Onboarding, fix round 1 (the owner's folder arriving late)
+
+    /// A game file with one row (2 copies), as another device writes it.
+    private static let lateFile = Data(#"{"collection":[{"count":2,"finish":"Normal","productID":7,"name":"Owner"}],"version":1}"#.utf8)
+
+    /// (a) A new folder is due; a game file arrives (another writer) and the watcher's read runs: the question closes,
+    /// nothing is written, the gate opens, the game shows its rows.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aGameFileThatArrivesClosesTheQuestion() async throws {
+        let root = tempRoot(), user = AppPaths.userTestRoot(root)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+        await model.start()
+        #expect(model.onboardingDue); #expect(model.showsOnboarding); #expect(!model.catalogMayStart)
+        let file = user.appending(path: "cyberpunk.json")
+        try Self.lateFile.write(to: file)
+        await model.library.fileChanged(file)?.value
+        try await until { !model.onboardingDue }
+        #expect(!model.showsOnboarding); #expect(model.catalogMayStart)
+        await model.library.flush()
+        #expect(try Data(contentsOf: file) == Self.lateFile)
+        #expect(gameFiles(user) == ["cyberpunk.json"])
+        #expect(model.library.rows(game: "cyberpunk").map(\.count) == [2])
+    }
+
+    /// (b) A new folder is due; a valid game file is put on disk with no read of it. "Continue" reads the folder first and
+    /// stops: the file keeps its bytes, the question closes, no other game file is made (with that game ticked or not).
+    @MainActor @Test(.timeLimit(.minutes(1))) func continueReadsTheFolderFirstAndWritesNothingOverIt() async throws {
+        for ticked in [false, true] {
+            let root = tempRoot(), user = AppPaths.userTestRoot(root)
+            let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES"])
+            await model.start()
+            #expect(model.onboardingDue)
+            let file = user.appending(path: "riftbound.json")
+            try Self.lateFile.write(to: file)                                    // no reload
+            var draft = ProfileRows.toggled(Onboarding.draft(games: Games.all), game: "cyberpunk", member: .followed)
+            if ticked { draft = ProfileRows.toggled(draft, game: "riftbound", member: .followed) }
+            await model.finishOnboarding(draft)
+            await model.library.flush()
+            #expect(try Data(contentsOf: file) == Self.lateFile, "ticked: \(ticked)")
+            #expect(gameFiles(user) == ["riftbound.json"], "ticked: \(ticked)")
+            #expect(!model.onboardingDue); #expect(!model.showsOnboarding); #expect(model.catalogMayStart)
+            #expect(model.library.rows(game: "riftbound").map(\.count) == [2])
+        }
+    }
+
+    /// (d) Refresh (and "Try again") while the question is due makes no catalog request.
+    @MainActor @Test(.timeLimit(.minutes(1))) func refreshWaitsForContinue() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-onboarding", "YES", "-game", "riftbound"])
+        let run = Task { await model.start() }
+        try await until { model.onboardingDue }
+        await model.refresh(rebuild: false)
+        await model.refresh(rebuild: true)
+        #expect(await fakeCatalog.groupCalls == 0); #expect(await fakeArchive.calls.isEmpty)
+        await model.finishOnboarding(ProfileRows.toggled(Onboarding.draft(games: Games.all), game: "riftbound",
+                                                         member: .followed))
+        await run.value
+        #expect(await fakeCatalog.groupCalls == 1)                           // Riftbound only
+    }
+
+    /// (e) A switch from a folder with Yu-Gi-Oh! off to a new empty folder: the new folder "follows" every game, but while
+    /// the question is due no catalog step, price fill, filter list or set index scan starts for any game.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aSwitchToANewFolderStartsNothingBeforeContinue() async throws {
+        let root = tempRoot()
+        let first = root.appending(path: "icloud").appending(path: "TCG Collection")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        try Data(Self.notFollowed.utf8).write(to: first.appending(path: "yu-gi-oh.json"))
+        // Yu-Gi-Oh!'s set index is marked due (a scan waits for the game to be followed again).
+        let preferences = try #require(UserDefaults(suiteName: AppPaths(root: root).support.appending(path: "preferences").path))
+        AppModel.markSetIndexDue("yu-gi-oh", in: preferences)
+        let network = CountingFixtures()
+        let model = fixtureModel(root, network, ["-askUserFolder", "YES", "-onboarding", "YES", "-game", "riftbound"])
+        var scanned: [String] = []
+        model.setIndexScanHook = { scanned.append($0) }
+        let run = Task { await model.start() }
+        try await Task.sleep(for: .milliseconds(100))
+        try await model.useICloudDrive()
+        #expect(!model.onboardingDue)
+        await run.value
+        await model.waitForProfileWork(); await model.waitForSetIndexes()
+        #expect(await !network.groups.contains(2))
+        #expect(!scanned.contains("yu-gi-oh")); #expect(model.prices.day(game: "yu-gi-oh") == nil)
+        let before = (await network.groups, await network.products.count, await network.archives, await network.fetches)
+        let scansBefore = scanned
+
+        let empty = root.appending(path: "empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        try await model.useFolder(empty)
+        #expect(model.onboardingDue)
+        try await Task.sleep(for: .milliseconds(500))
+        await model.waitForProfileWork(); await model.waitForSetIndexes()
+        #expect(await network.groups == before.0); #expect(await network.products.count == before.1)
+        #expect(await network.archives == before.2); #expect(await network.fetches == before.3)
+        #expect(scanned == scansBefore, "\(scanned)")
+        #expect(model.prices.day(game: "yu-gi-oh") == nil)                     // no price fill either
+        #expect(!FileManager.default.fileExists(atPath: model.paths.facets("yu-gi-oh").path))
+        #expect(gameFiles(empty).isEmpty)
+    }
+
+    /// The review's small items: `-importCSV` with `-onboarding YES` on a new folder opens no import sheet; a newer-version
+    /// file as the only game file is a game file (not asked).
+    @MainActor @Test func noImportUnderTheQuestionAndANewerFileIsAGameFile() async throws {
+        let root = tempRoot()
+        let csv = root.appending(path: "x.csv")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not an export".utf8).write(to: csv)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-onboarding", "YES", "-importCSV", csv.path])
+        await model.start()
+        #expect(model.onboardingDue); #expect(model.importing == nil)
+
+        let newer = tempRoot()
+        try writeUserFile(newer, "cyberpunk", #"{"version": 99, "collection": []}"#)
+        let other = self.model(["app", "-store", newer.path, "-offline", "YES", "-onboarding", "YES"])
+        await other.start()
+        #expect(!other.onboardingDue); #expect(other.library.hasGameFile)
     }
 
     // MARK: Roles (phase 4B task 3: G7–G9)

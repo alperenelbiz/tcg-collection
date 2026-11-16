@@ -384,9 +384,12 @@ struct UserLibraryTests {
     }
 
     /// A change made here while another device's file comes in: our write finishes first, then the file is read again.
-    /// The last writer wins on disk; nothing is merged.
+    /// The last writer wins on disk; nothing is merged. (Task 5 fix round 1: the game's file was read before, so our write
+    /// replaces a file memory has read. A write that would CREATE the file never replaces one: see
+    /// `aNewGameFileNeverReplacesAFileThatAppearedOnDisk`.)
     @MainActor @Test func aPendingWriteOfOursWinsOverAChangeThatArrivesWithIt() async throws {
         let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        try UserFiles.write(try GameUserFile().data(), to: file)
         let lib = UserLibrary(folder: dir, watcher: nil); await lib.load()
         var other = GameUserFile(); other.collection = [.init(productID: 9, finish: "Normal", count: 7, condition: "", name: "Other")]
         try UserFiles.write(try other.data(), to: file)
@@ -1408,6 +1411,70 @@ struct UserLibraryTests {
         await watcher.fire(file)
         #expect(lib.version > before)
         #expect(lib.profile(game: "riftbound") == GameProfile(followed: false, player: false, collector: true))
+    }
+
+    /// Task 5 fix round 1 (c): a change that would CREATE a game file (memory has none) never replaces a file that is on
+    /// disk at the write (it arrived after the read: iCloud brought it down, another device wrote it). Each create path —
+    /// a count, an import's replace, a new deck, a profile — writes nothing; memory then holds the disk's file; the change
+    /// is said once as not saved.
+    @MainActor @Test func aNewGameFileNeverReplacesAFileThatAppearedOnDisk() async throws {
+        let edits: [(String, @MainActor (UserLibrary) -> Void)] = [
+            ("setCount", { $0.setCount(1, game: "riftbound", key: .init(productID: 1, finish: "Normal"), name: "A") }),
+            ("replace", { $0.replace(game: "riftbound", rows: [CollectionRow(productID: 1, finish: "Normal", count: 3, condition: "", name: "A")]) }),
+            ("addDeck", { _ = $0.addDeck(game: "riftbound", name: "Wind", format: "standard") }),
+            ("setProfile", { $0.setProfile(GameProfile(followed: false), game: "riftbound") }),
+            ("setProfile writesKey", { $0.setProfile(.all, game: "riftbound", writesKey: true) }),
+        ]
+        for (name, edit) in edits {
+            let dir = tempDir()
+            let lib = UserLibrary(folder: dir, watcher: nil)
+            await lib.load()
+            let file = dir.appending(path: "riftbound.json")
+            try ownersFile.write(to: file)                                        // arrives after the read, no reload
+            edit(lib)
+            await lib.flush()
+            #expect(try Data(contentsOf: file) == ownersFile, "\(name)")
+            #expect(lib.rows(game: "riftbound").map(\.count) == [2], "\(name): memory holds the disk's file")
+            #expect(lib.decks(game: "riftbound").isEmpty, "\(name)")
+            #expect(lib.unsavedChangeNotice == "The change was not saved: Riftbound was just read from your folder. Do it again.",
+                    "\(name)")
+            #expect(lib.canChange(game: "riftbound"), "\(name)")
+            #expect(lib.problem(game: "riftbound") == nil, "\(name)")
+            lib.clearUnsavedChangeNotice()
+            // Once memory holds the file, a change replaces it as any change does.
+            lib.setCount(5, game: "riftbound", key: .init(productID: 7, finish: "Normal"), name: "Owner")
+            await lib.flush()
+            #expect(try GameUserFile(data: Data(contentsOf: file)).collection.map(\.count) == [5], "\(name)")
+            #expect(lib.unsavedChangeNotice == nil, "\(name)")
+        }
+    }
+
+    /// (c) with an iCloud placeholder (`.riftbound.json.icloud`) on disk at the write: nothing is written beside it, the
+    /// change is said as not saved, and the game reads as not downloaded.
+    @MainActor @Test func aNewGameFileIsNotWrittenBesideAPlaceholder() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        await lib.load()
+        try Data().write(to: dir.appending(path: ".riftbound.json.icloud"))
+        lib.setCount(1, game: "riftbound", key: .init(productID: 1, finish: "Normal"), name: "A")
+        await lib.flush()
+        #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "riftbound.json").path))
+        #expect(lib.unsavedChangeNotice == "The change was not saved: Riftbound was just read from your folder. Do it again.")
+        #expect(lib.rows(game: "riftbound").isEmpty)
+        #expect(lib.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
+        #expect(lib.hasGameFile)
+    }
+
+    /// (c) leaves the ordinary case alone: with nothing on disk the first change creates the file, and says nothing.
+    @MainActor @Test func aFirstChangeStillCreatesTheFileWhenNothingIsThere() async throws {
+        let dir = tempDir()
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        await lib.load()
+        lib.setCount(2, game: "cyberpunk", key: .init(productID: 4, finish: "Normal"), name: "B")
+        lib.setCount(3, game: "cyberpunk", key: .init(productID: 4, finish: "Normal"), name: "B")
+        await lib.flush()
+        #expect(try GameUserFile(data: Data(contentsOf: dir.appending(path: "cyberpunk.json"))).collection.map(\.count) == [3])
+        #expect(lib.unsavedChangeNotice == nil)
     }
 
     /// G11, task 5: "Continue" writes every game's file, also of a game followed with both roles (all on): `writesKey`

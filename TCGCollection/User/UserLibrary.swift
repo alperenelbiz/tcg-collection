@@ -28,6 +28,10 @@ final class UserLibrary {
     /// became one this app must not rewrite between the read and the write), so the sale was dropped with it. Until
     /// `clearUnsavedSaleNotice()`.
     private(set) var unsavedSaleNotice: String?
+    /// "The change was not saved: <game> was just read from your folder. Do it again.": a change that would have created
+    /// the game's file found a file (or an iCloud placeholder) of it on disk at the write (it arrived after the read; task 5
+    /// fix round 1 (c)). Nothing was written, the game was read again. Until `clearUnsavedChangeNotice()`.
+    private(set) var unsavedChangeNotice: String?
     /// True when `load` found no folder at `folder`, or a reload found it gone: changes are refused until another folder
     /// is used, or (gone after the load) until a reload finds it back.
     private(set) var folderIsMissing = false
@@ -67,6 +71,10 @@ final class UserLibrary {
     @ObservationIgnored private var copiesOffSale = 0
     /// Games whose memory holds a sale that no write has saved yet: a refused write of such a game drops a sale.
     @ObservationIgnored private var unsavedSales: Set<String> = []
+    /// Games whose state in memory started from no file (a change with no file of the game read): their next write creates
+    /// the file, and refuses when one is on disk by then (`UserFilesError.appeared`). A read of the game or a write that
+    /// succeeded ends it.
+    @ObservationIgnored private var creates: Set<String> = []
     /// The serial path: every write and every read of a game file runs after the one queued before it.
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var queued = 0
@@ -205,6 +213,8 @@ final class UserLibrary {
     }
 
     func clearUnsavedSaleNotice() { unsavedSaleNotice = nil }
+
+    func clearUnsavedChangeNotice() { unsavedChangeNotice = nil }
 
     // MARK: Changing
 
@@ -348,6 +358,7 @@ final class UserLibrary {
         // Not only the lists: a pin this build cannot read, cleared, changes what is written (B3).
         guard file != current else { return false }
         addToSaleNotice(clampForSale(&file))
+        if files[game] == nil { creates.insert(game) }
         files[game] = file
         version += 1
         let number = changes[game, default: 0] + 1
@@ -393,14 +404,29 @@ final class UserLibrary {
         guard folder == target, let folder, let file = files[game] else { return }
         let error: (any Error)?
         do {
-            error = await Self.store(try file.data(), at: folder.appending(path: "\(game).json"))
+            error = await Self.store(try file.data(), at: folder.appending(path: "\(game).json"),
+                                     creating: creates.contains(game))
         } catch let encoding {
             error = encoding
         }
         guard let error else {
+            creates.remove(game)
             writeFailures[game] = nil
             // The whole state is on disk, every sale in it too.
             unsavedSales.remove(game)
+            return
+        }
+        if case .appeared? = error as? UserFilesError {
+            // Fix round 1 (c): a file of the game arrived after the read. Nothing was written; memory drops the change and
+            // reads the game from disk, so it holds the real file; the change is said once.
+            let shownBefore = shown(game)
+            files[game] = nil
+            creates.remove(game)
+            writeFailures[game] = nil
+            unsavedSales.remove(game)
+            if !shown(game).hasSameLists(as: shownBefore) { version += 1 }
+            unsavedChangeNotice = "The change was not saved: \(Games.game(game)?.name ?? game) was just read from your folder. Do it again."
+            queueReload(game, in: folder)
             return
         }
         if let refusal = error as? UserFilesError {
@@ -441,6 +467,7 @@ final class UserLibrary {
         writeFailures = [:]
         conflictFailures = [:]
         unsavedSales = []
+        creates = []
         // The reads of this load say what they take off sale; a notice not yet said about the memory just dropped would
         // count the same copies twice (B2).
         clearSaleNotice()
@@ -482,11 +509,21 @@ final class UserLibrary {
         writeFailures = [:]
         conflictFailures = [:]
         unsavedSales = []
+        creates = []
         notice = nil
         folderIsMissing = false
         watcher?.stop()
         self.folder = folder
         await load()
+    }
+
+    /// Reads every game's file of the folder again, now (not from memory; task 5 fix round 1 (b): "Continue" looks at the
+    /// folder before it writes). Returns when the reads have run. Nothing before the folder's load or for a missing folder.
+    func readAgain() async {
+        guard let folder, isLoaded, !folderIsMissing else { return }
+        var last: Task<Void, Never>?
+        for game in Games.all { last = queueReload(game.id, in: folder) }
+        await last?.value
     }
 
     /// A file of the folder changed (the watcher). Queues a read of it when it is a game file of this folder; returns that
@@ -549,6 +586,7 @@ final class UserLibrary {
         unreadableDeckCounts[game] = result.unreadableDecks
         switch result.content {
         case .file(var file):
+            creates.remove(game)
             let lost = clampForSale(&file)
             // A read that changes nothing on screen (the same file read again) says nothing again. With no file of the game
             // in memory (a load, a file that was missing or refused) what it takes off is new, also when the clamp leaves
@@ -560,6 +598,7 @@ final class UserLibrary {
             files[game] = nil
             refused[game] = nil
         case .refused(let text):
+            creates.remove(game)
             files[game] = nil
             refused[game] = text
         }
@@ -647,12 +686,13 @@ final class UserLibrary {
         case .notRewritable(newerVersion: true): "\(name) was written by a newer version of the app."
         case .notRewritable(newerVersion: false): "\(name) cannot be read."
         case .notDownloaded: "\(name) is not downloaded from iCloud yet."
+        case .appeared: "\(name) was just read from your folder."
         }
     }
 
-    @concurrent private nonisolated static func store(_ data: Data, at url: URL) async -> (any Error)? {
+    @concurrent private nonisolated static func store(_ data: Data, at url: URL, creating: Bool) async -> (any Error)? {
         do {
-            try UserFiles.writeGameFile(data, to: url)
+            try UserFiles.writeGameFile(data, to: url, creating: creating)
             return nil
         } catch {
             return error

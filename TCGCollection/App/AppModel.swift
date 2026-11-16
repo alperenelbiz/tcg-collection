@@ -424,6 +424,12 @@ final class AppModel {
 
     func isFollowed(_ gameID: String) -> Bool { followedGames.contains { $0.id == gameID } }
 
+    /// The games the sync, the scans and the price fill work on: the followed games, none while the first-run question is
+    /// due (task 5 fix round 1 (e): a new folder "follows" every game until "Continue", and nothing may start for them).
+    private var syncedGames: [GameDefinition] { onboardingDue ? [] : followedGames }
+
+    private func isSynced(_ gameID: String) -> Bool { syncedGames.contains { $0.id == gameID } }
+
     // MARK: Roles (G7–G9)
 
     /// The game's profile as the library holds it (every member on before the folder is read).
@@ -435,7 +441,7 @@ final class AppModel {
 
     /// The followed games with the collector role (G8): the games whose set index is made.
     private var collectingGames: [String] {
-        followedGames.map(\.id).filter { GameSections.showsSets(profile(of: $0)) }
+        syncedGames.map(\.id).filter { GameSections.showsSets(profile(of: $0)) }
     }
 
     /// The games `applyRoles` last saw with the collector role; nil before the launch has read the folder.
@@ -461,6 +467,8 @@ final class AppModel {
             pendingPaste = nil
             if renamingDeck { renamingDeck = false }
         }
+        // While the first-run question is due nothing is asked for: the roles before it stay the base (fix round 1 (e)).
+        guard !onboardingDue else { return }
         let collecting = collectingGames
         defer { lastCollecting = collecting }
         guard let last = lastCollecting else { return }
@@ -507,6 +515,9 @@ final class AppModel {
             showRoot(of: .collection)
         }
         applyRoles()
+        // Fix round 1 (e): while the first-run question is due no game is "turned on" (the folder only seems to follow
+        // every game); the followed games before it stay the base, and closing the question calls this again.
+        guard !onboardingDue else { return }
         guard let last = lastFollowed else {
             lastFollowed = followed
             return
@@ -551,7 +562,7 @@ final class AppModel {
         let haveDay = days.contains(nil) ? nil : days.compactMap { $0 }.min()
         guard !games.isEmpty,
               let fresh = try? await priceSync.run(games: games, now: now(), haveDay: haveDay, download: false) else { return }
-        for (game, table) in fresh where isFollowed(game) { try? prices.replace(game, with: table, paths: paths) }
+        for (game, table) in fresh where isSynced(game) { try? prices.replace(game, with: table, paths: paths) }
     }
 
     /// G5: the catalog steps of the games turned on, one after the other, when no sync runs (a running sync takes them at
@@ -559,7 +570,7 @@ final class AppModel {
     private func runTurnedOnGames() async {
         guard syncBegan, !isRunning else { return }
         while !turnedOn.isEmpty {
-            let games = turnedOn.compactMap { Games.game($0) }.filter { isFollowed($0.id) }
+            let games = turnedOn.compactMap { Games.game($0) }.filter { isSynced($0.id) }
             turnedOn = []
             let ids = Set(games.map(\.id))
             guard canSync, catalogMayStart, !games.isEmpty else {
@@ -814,6 +825,14 @@ final class AppModel {
         guard onboardingDue, !finishingOnboarding, Onboarding.canContinue(draft) else { return }
         finishingOnboarding = true
         defer { finishingOnboarding = false }
+        // Fix round 1 (b): the folder is read again first (not memory). A game file that arrived since the first read
+        // means the folder is not new: nothing is written, the question closes.
+        await library.readAgain()
+        guard onboardingDue else { return }
+        if library.hasGameFile || !library.isLoaded || library.folderIsMissing {
+            closeOnboarding()
+            return
+        }
         for game in Games.all {
             library.setProfile(Onboarding.written(draft[game.id]), game: game.id, writesKey: true)
         }
@@ -821,8 +840,34 @@ final class AppModel {
         let followed = followedGames.map(\.id)
         if let first = followed.first { gameID = first }
         showRoot(of: .collection)
+        closeOnboarding()
+    }
+
+    /// The question ends ("Continue", or a game file found meanwhile): the sheet closes, the gate opens, and the profiles
+    /// are applied from the base before the question (`profilesChanged`).
+    private func closeOnboarding() {
         showsOnboarding = false
         onboardingDue = false
+        profilesChanged()
+    }
+
+    /// Fix round 1 (a): while the question is due, a read that finds a game file (a reload, the watcher, the folder coming
+    /// back) closes it: nothing is written, the gate opens. Revised in that direction only. Not during "Continue" (its own
+    /// writes make the files).
+    private func reviseOnboarding() {
+        guard onboardingDue, !finishingOnboarding, library.isLoaded, !library.folderIsMissing, library.hasGameFile else {
+            return
+        }
+        closeOnboarding()
+    }
+
+    /// Calls `reviseOnboarding` whenever the library's read state or its game files change, for as long as the model lives.
+    private func watchOnboarding() {
+        let library = library
+        let changes = Observations { (library.isLoaded, library.folderIsMissing, library.hasGameFile, library.version) }
+        Task { [weak self] in
+            for await _ in changes { self?.reviseOnboarding() }
+        }
     }
 
     /// Off the main actor: coordinated work in iCloud Drive can wait for the sync.
@@ -1008,6 +1053,13 @@ final class AppModel {
     /// is to come (the import says it with its summary), and while the status line shows a problem sentence or a sale
     /// that was not saved (it never hides one); each of those ending calls this again (`watchSaleNotices`).
     private func sayPendingSaleNotice() {
+        // Fix round 1 (c): a change whose new file met a file that arrived meanwhile; it is said at once, as a lost sale.
+        if let unsaved = library.unsavedChangeNotice {
+            library.clearUnsavedChangeNotice()
+            unsavedSaleSaid = unsaved
+            say(unsaved)
+            return
+        }
         if let unsaved = library.unsavedSaleNotice {
             library.clearUnsavedSaleNotice()
             unsavedSaleSaid = unsaved
@@ -1025,7 +1077,8 @@ final class AppModel {
     private func watchSaleNotices() {
         let library = library
         let changes = Observations { [weak self] in
-            (library.saleNotice, library.unsavedSaleNotice, self?.importing == nil, self?.statusNotice)
+            (library.saleNotice, library.unsavedSaleNotice, library.unsavedChangeNotice, self?.importing == nil,
+             self?.statusNotice)
         }
         Task { [weak self] in
             for await _ in changes {
@@ -1053,27 +1106,25 @@ final class AppModel {
         pictureCleaning = Task.detached(priority: .background) { pictures.clean() }
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
-        // `-importCSVDelay` it opens that long after the launch, so a UI test can open a page first; it holds nothing.
-        if let file = options.launchImport(isDebugBuild: Self.isDebugBuild) {
-            if let delay = options.importCSVDelay {
-                Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(delay))
-                    await self?.importCSV(from: file)
-                }
-            } else {
-                await importCSV(from: file)
-            }
-        }
+        // `-onboarding YES` it waits for the onboarding decision instead, and opens no sheet under the question.
+        if !options.onboarding { await openLaunchImport() }
         #endif
         await library.load()
         // G11: in the same turn as the end of the read, before anything waits on the gate.
         decideOnboarding()
+        watchOnboarding()
+        #if DEBUG
+        if options.onboarding { await openLaunchImport() }
+        #endif
         // G4: a stored or launched game that is not followed opens the first followed one.
         if library.isLoaded {
             let followed = followedGames.map(\.id)
             gameID = GameSelection.shown(asked: gameID, followed: followed)
-            lastFollowed = followed
-            lastCollecting = collectingGames
+            // With the question due the base is taken when it closes (`profilesChanged`), from the answer.
+            if !onboardingDue {
+                lastFollowed = followed
+                lastCollecting = collectingGames
+            }
         }
         watchProfiles()
         // A stored or launched deck screen whose deck is not in the game's file, or of a role that is off (G7, G8), opens
@@ -1106,12 +1157,28 @@ final class AppModel {
         await sync(rebuild: false)
     }
 
+    #if DEBUG
+    /// `-importCSV` (with `-store`): the import sheet on the file. With `-importCSVDelay` it opens that long after the
+    /// launch, so a UI test can open a page first; it holds nothing.
+    private func openLaunchImport() async {
+        guard let file = options.launchImport(isDebugBuild: Self.isDebugBuild) else { return }
+        if let delay = options.importCSVDelay {
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(delay))
+                await self?.importCSV(from: file)
+            }
+        } else {
+            await importCSV(from: file)
+        }
+    }
+    #endif
+
     /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once
     /// (`storeFacetLists`), so the menus do not wait for a sync.
     private func writeMissingFacetLists() async {
         let chosen = gameID
         var wrote = false
-        for game in followedGames.sorted(by: { $0.id == chosen && $1.id != chosen }) where facetLists[game.id] == nil {
+        for game in syncedGames.sorted(by: { $0.id == chosen && $1.id != chosen }) where facetLists[game.id] == nil {
             guard (try? await reader.progress(game: game.id))?.fetched ?? 0 > 0 else { continue }
             wrote = await storeFacetLists(of: game) || wrote
         }
@@ -1213,7 +1280,7 @@ final class AppModel {
     /// A launch: every game without a set index gets one made when it has products (F3), and every game marked due (A3)
     /// gets its scan. Nothing waits for it.
     private func requestMissingSetIndexes() {
-        for game in followedGames where GameSections.showsSets(profile(of: game.id)) {
+        for game in syncedGames where GameSections.showsSets(profile(of: game.id)) {
             if setIndexIsDue(game.id) {
                 enqueueSetIndex(game.id, onlyWithProducts: false)
             } else if setIndexes[game.id] == nil {
@@ -1269,7 +1336,7 @@ final class AppModel {
     /// (any more, G5) or has no collector role (G8) is dropped: its due mark stays until the game is followed and collected
     /// again (`profilesChanged`, `applyRoles`).
     private func takeSetIndexRequest() -> SetIndexRequest? {
-        setIndexQueue.removeAll { !isFollowed($0.game) || !GameSections.showsSets(profile(of: $0.game)) }
+        setIndexQueue.removeAll { !isSynced($0.game) || !GameSections.showsSets(profile(of: $0.game)) }
         guard let i = setIndexQueue.firstIndex(where: { $0.game == gameID }) ?? setIndexQueue.indices.first else { return nil }
         return setIndexQueue.remove(at: i)
     }
@@ -1339,7 +1406,8 @@ final class AppModel {
 
     /// Does nothing when the app cannot sync, or while a sync runs. Its catalog steps wait as `catalogHeld` says.
     func refresh(rebuild: Bool) async {
-        guard canSync else { return }
+        // Fix round 1 (d): not before the folder is read and not while the first-run question is due ("Try again" too).
+        guard canSync, catalogMayStart else { return }
         await sync(rebuild: rebuild)
     }
 
@@ -1372,7 +1440,7 @@ final class AppModel {
         // A held sync skips only the catalog steps: the price and index steps keep their own once-a-day rules.
         let held = await catalogHeld(now: now)
         catalogWaits = held
-        catalogPending = held ? [] : Set(followedGames.map(\.id))
+        catalogPending = held ? [] : Set(syncedGames.map(\.id))
         let chosen = game
         turnedOn.removeAll { $0 == chosen.id }
         var first = SyncResult(fetched: 0, failed: 0, newSets: [:]), rest = first
@@ -1383,7 +1451,7 @@ final class AppModel {
         let priceFailure = await syncPrices(now: now)
         if !held {
             // The followed games of this moment: a game turned on since the launch is among them.
-            let others = followedGames.filter { $0.id != chosen.id }
+            let others = syncedGames.filter { $0.id != chosen.id }
             turnedOn.removeAll { id in others.contains { $0.id == id } }
             rest = await syncCatalog(of: others, now: now, rebuild: rebuild)
             catalogPending = Set(turnedOn)
@@ -1394,7 +1462,7 @@ final class AppModel {
                                 newSets: first.newSets.merging(rest.newSets, uniquingKeysWith: +))
         // The new sets of the game whose pictures come from YGOPRODeck: the index maps their printings to pictures. No
         // index request while that game is not followed (G5).
-        let indexGames = followedGames.filter { $0.pictures == .ygoprodeck }
+        let indexGames = syncedGames.filter { $0.pictures == .ygoprodeck }
         let indexSets = indexGames.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
         let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: indexSets, now: now)
         if held {
@@ -1418,7 +1486,7 @@ final class AppModel {
     /// day.
     private func rulesPendingCount(now: Date) async -> Int {
         var count = 0
-        for game in followedGames {
+        for game in syncedGames {
             guard let versions = try? await reader.rulesVersions(game: game.id),
                   let dates = try? await reader.fetchDates(game: game.id) else { continue }
             count += versions.filter { SyncPlan.isOld($0.value) && dates[$0.key].map { SyncPlan.fetchedToday($0, now: now) } == true }.count
@@ -1482,7 +1550,7 @@ final class AppModel {
     private func syncPrices(now: Date) async -> String? {
         status = .syncing(StatusText.prices)
         // G5: the followed games only; the archive is downloaded once for them.
-        let games = followedGames
+        let games = syncedGames
         let days = games.map { prices.day(game: $0.id) }
         let haveDay = days.contains(nil) ? nil : days.compactMap { $0 }.min()
         do {

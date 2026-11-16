@@ -5,6 +5,9 @@ nonisolated enum UserFilesError: Error, Equatable {
     case notDownloaded
     /// The game file on disk is one this app must not replace: written by a newer version, or not readable as a game file.
     case notRewritable(newerVersion: Bool)
+    /// A write that would create the game's file (this app had read none) found a file or an iCloud placeholder of that
+    /// name on disk: it arrived after the read. Nothing was written (task 5 fix round 1 (c)).
+    case appeared
 }
 
 /// What `resolveConflicts` does with the versions of a file.
@@ -57,13 +60,19 @@ nonisolated enum UserFiles {
     /// Replaces a game file, unless the file on disk at that moment (read inside the same coordinated write) is one this
     /// app must not rewrite: then it throws `notRewritable` and the file stays as it is. A file iCloud has not downloaded
     /// (`.<name>.icloud`) throws `notDownloaded`: writing beside it would replace it on every device.
-    static func writeGameFile(_ data: Data, to url: URL) throws {
+    /// `creating` (the app has read no file of the game: the write would make it): any file or placeholder of that name on
+    /// disk at that moment throws `appeared` and nothing is written. The check and the write are one coordinated write, so
+    /// a file that arrives late is never replaced by a new one (task 5 fix round 1 (c)).
+    static func writeGameFile(_ data: Data, to url: URL, creating: Bool = false) throws {
         try coordinate(writing: url, options: .forReplacing) { url in
             let onDisk: Data?
             do {
                 onDisk = try Data(contentsOf: url)
             } catch where isNoSuchFile(error) {
                 onDisk = nil
+            }
+            if creating, onDisk != nil || FileManager.default.fileExists(atPath: placeholder(of: url).path) {
+                throw UserFilesError.appeared
             }
             if let onDisk {
                 if let reason = refusal(onDisk) { throw reason }
