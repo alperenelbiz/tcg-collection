@@ -44,14 +44,12 @@ final class DecksFlowTests: UITestCase {
     }
 
     /// The sidebar's deck rows, not their counts (`sidebar-deck-missing-…`) and not `sidebar-decks-unreadable`.
-    private func deckRows(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format:
-            "identifier BEGINSWITH 'sidebar-deck-' AND NOT (identifier BEGINSWITH 'sidebar-deck-missing-')"))
+    private static var deckRowMatch: ElementMatch {
+        ElementMatch(.any, "identifier BEGINSWITH 'sidebar-deck-' AND NOT (identifier BEGINSWITH 'sidebar-deck-missing-')")
     }
+    private static var sectionTitleMatch: ElementMatch { ElementMatch(.any, "identifier BEGINSWITH 'deck-section-'") }
 
-    private func sectionTitles(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'deck-section-'"))
-    }
+    private func deckRows(_ app: XCUIApplication) -> XCUIElementQuery { Self.deckRowMatch.query(app) }
 
     private var title: String { XCUIApplication(bundleIdentifier: Self.debugBundleID).windows.firstMatch.title }
 
@@ -96,7 +94,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'deck-warning-'")).count, 0)
         XCTAssertTrue(waitUntil { self.title.hasPrefix("Deck") }, title)
         let rows = deckRows(app)
-        XCTAssertTrue(waitUntil { rows.count == 1 }, "\(identifiers(rows))")
+        XCTAssertTrue(waitUntil { rows.count == 1 }, "\(identifiers(app, Self.deckRowMatch))")
         let id = String(rows.firstMatch.identifier.dropFirst("sidebar-deck-".count))
         XCTAssertFalse(element(app, "sidebar-deck-missing-\(id)").exists, "a new deck shows a count")
         assertAccentFill(app, row: "sidebar-deck-\(id)")
@@ -117,7 +115,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(kaisa.waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntilSynced(app))
         XCTAssertTrue(waitUntil { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×2 · 1 missing, ") }, kaisa.label)
-        XCTAssertEqual(identifiersInOrder(sectionTitles(app)),
+        XCTAssertEqual(identifiersInOrder(app, Self.sectionTitleMatch),
                        ["deck-section-legend", "deck-section-champion", "deck-section-main", "deck-section-runes",
                         "deck-section-battlefields", "deck-section-sideboard"])
         XCTAssertEqual(text(element(app, "deck-section-main")), "Main Deck · 4")
@@ -286,8 +284,8 @@ final class DecksFlowTests: UITestCase {
                 == [StoredDeck(id: "mg1", name: "Lifegain", format: "constructed", active: false,
                                cards: ["ajani resolute|deck|1", "bloodline recollector|deck|1"])] },
                       "\(String(describing: try? storedDecks(game: "magic-the-gathering")))")
-        XCTAssertTrue(waitUntil { self.identifiersInOrder(self.sectionTitles(app)) == ["deck-section-deck", "deck-section-sideboard"] },
-                      "\(identifiersInOrder(sectionTitles(app)))")
+        XCTAssertTrue(waitUntil { self.identifiersInOrder(app, Self.sectionTitleMatch) == ["deck-section-deck", "deck-section-sideboard"] },
+                      "\(identifiersInOrder(app, Self.sectionTitleMatch))")
         XCTAssertEqual(text(element(app, "deck-section-deck")), "Deck · 2")
         XCTAssertTrue(element(app, "deck-cell-bloodline recollector-deck").waitForExistence(timeout: 10))
         _ = reveal(app, "deck-cell-ajani resolute-deck")
@@ -557,7 +555,7 @@ final class DecksFlowTests: UITestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         decks = try storedDecks(game: "riftbound")
         XCTAssertEqual(decks.map(\.name), ["Rift", "Deck"], "a double click made \(decks.count - 1) decks")
-        XCTAssertEqual(deckRows(app).count, 2, "\(identifiers(deckRows(app)))")
+        XCTAssertEqual(deckRows(app).count, 2, "\(identifiers(app, Self.deckRowMatch))")
     }
 
     /// C1: a card page opened from a deck cell is kept across a switch of the sidebar to the Collection and back; Back shows
@@ -1009,7 +1007,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(text(second), "2")
         XCTAssertFalse(first.exists, "the first deck in the order shows a count")
         XCTAssertTrue(waitUntil { cell.label.hasPrefix("Kai'Sa, Rebel, ×2 · 2 missing, ") }, cell.label)
-        XCTAssertEqual(identifiersInOrder(deckRows(app)), ["sidebar-deck-rb1", "sidebar-deck-rb2"])
+        XCTAssertEqual(identifiersInOrder(app, Self.deckRowMatch), ["sidebar-deck-rb1", "sidebar-deck-rb2"])
         shot("decks-44-second-deck-misses")
 
         element(app, "deck-menu").click()
@@ -1024,8 +1022,8 @@ final class DecksFlowTests: UITestCase {
         XCTAssertEqual(text(first), "2")
         XCTAssertTrue(waitUntil { !second.exists }, "the deck moved first still shows a count")
         XCTAssertTrue(waitUntil { cell.label.hasPrefix("Kai'Sa, Rebel, ×2, ") }, cell.label)
-        XCTAssertTrue(waitUntil { self.identifiersInOrder(self.deckRows(app)) == ["sidebar-deck-rb2", "sidebar-deck-rb1"] },
-                      "\(identifiersInOrder(deckRows(app)))")
+        XCTAssertTrue(waitUntil { self.identifiersInOrder(app, Self.deckRowMatch) == ["sidebar-deck-rb2", "sidebar-deck-rb1"] },
+                      "\(identifiersInOrder(app, Self.deckRowMatch))")
         XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.map(\.id) == ["rb2", "rb1"] },
                       "\(String(describing: try? storedDecks(game: "riftbound")))")
         shot("decks-46-moved-up-counts-swapped")
@@ -1172,8 +1170,7 @@ final class DecksFlowTests: UITestCase {
         decisions.click()
         let sheet = element(app, "sharing-sheet")
         XCTAssertTrue(sheet.waitForExistence(timeout: 10), "no sharing sheet")
-        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'sharing-row-'"))
-        XCTAssertEqual(identifiersInOrder(rows), ["sharing-row-jackie welles ride or die choom",
+        XCTAssertEqual(identifiersInOrder(app, ElementMatch(.any, "identifier BEGINSWITH 'sharing-row-'")), ["sharing-row-jackie welles ride or die choom",
                                                  "sharing-row-kerry eurodyne the last rockerboy",
                                                  "sharing-row-satori sword of saburo"])
         let done = element(app, "sharing-done"), cancel = element(app, "sharing-cancel")

@@ -93,10 +93,12 @@ final class RealCollectionTests: UITestCase {
         if skipped.exists {
             notImported.count = try number(in: skipped.label, after: "Not imported · ")
             skipped.click()
-            let lines = sheet.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'import-skipped-line-'"))
+            let lineMatch = ElementMatch(.any, "identifier BEGINSWITH 'import-skipped-line-'")
+            let lines = lineMatch.query(sheet)
             XCTAssertTrue(waitUntil { lines.count > 0 }, "no line under \(skipped.label)")
             scrollView.scroll(byDeltaX: 0, deltaY: -2000)
-            notImported.lines = lines.allElementsBoundByIndex.map { text($0) }
+            // One snapshot: the table is a lazy stack.
+            notImported.lines = snapshotElements(sheet, lineMatch).map(\.text)
             for line in notImported.lines {
                 XCTAssertTrue(line.hasSuffix("not in the catalog"), "unexpected reason: \(line)")
             }
@@ -224,7 +226,7 @@ final class RealCollectionTests: UITestCase {
         let cells = collectionCells(app)
         XCTAssertTrue(waitUntil(timeout: 30) { cells.count >= 3 }, "\(identifiers(cells))")
         // `<productID>-<finish>`, as in the cells' identifiers.
-        let candidates = identifiersInOrder(cells).prefix(12).map { String($0.dropFirst("collection-cell-".count)) }
+        let candidates = identifiersInOrder(app, .collectionCells).prefix(12).map { String($0.dropFirst("collection-cell-".count)) }
         let owned = Dictionary(before.map { ("\($0.productID)-\($0.finish)", $0.count) }, uniquingKeysWith: +)
         // Its sale leaves its row in the collection with one copy fewer.
         let several = candidates.first { (owned[$0] ?? 0) >= 2 }
@@ -296,8 +298,8 @@ final class RealCollectionTests: UITestCase {
         shot("real-lists-2-for-sale")
         element(app, "sidebar-wanted").click()
         let wantedIDs = Set(wanted.map { "wanted-cell-\($0["cardKey"] as? String ?? "")" })
-        XCTAssertTrue(waitUntil { Set(self.identifiers(self.wantedCells(app))) == wantedIDs },
-                      "\(identifiers(wantedCells(app))), not \(wantedIDs)")
+        XCTAssertTrue(waitUntil { Set(self.identifiers(app, .wantedCells)) == wantedIDs },
+                      "\(identifiers(app, .wantedCells)), not \(wantedIDs)")
         assertListSubtitle(app, copies: 2, items: 2, item: "card", unpriced: unpriced)
         shot("real-lists-3-wanted")
         quit(app)
@@ -368,7 +370,7 @@ final class RealCollectionTests: UITestCase {
         let wantedWritten = seconds(launched)
         let wantedMade = try checkPDF(wantedPDF, list: "Wanted", names: wantedNames, copies: 2, unpriced: unpriced, picture: "real-lists-pdf-wanted")
         times.append("launch -> Wanted PDF written (2 cards, 2 copies): \(wantedWritten), \(wantedMade.bytes) bytes, \(wantedMade.pages) page(s)")
-        XCTAssertTrue(waitUntil { Set(self.identifiers(self.wantedCells(app))) == wantedIDs }, "\(identifiers(wantedCells(app)))")
+        XCTAssertTrue(waitUntil { Set(self.identifiers(app, .wantedCells)) == wantedIDs }, "\(identifiers(app, .wantedCells))")
         assertListSubtitle(app, copies: 2, items: 2, item: "card", unpriced: unpriced)
         quit(app)
 
@@ -581,13 +583,13 @@ final class RealCollectionTests: UITestCase {
 
     /// The identifiers of the Sets list's rows, top to bottom.
     private func setRows(_ app: XCUIApplication) -> [String] {
-        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sets-row-'")))
+        identifiersInOrder(app, ElementMatch(.button, "identifier BEGINSWITH 'sets-row-'"))
     }
 
     /// The identifiers of a set page's cells in reading order (not their count controls).
     private func setCellIDs(_ app: XCUIApplication) -> [String] {
-        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
-            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'")))
+        identifiersInOrder(app, ElementMatch(.button, "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
+            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'"))
     }
 
     /// A segment of a segmented picker (`sets-scope`, `set-filter`).
@@ -1044,12 +1046,13 @@ final class RealCollectionTests: UITestCase {
         let match = try XCTUnwrap(title.firstMatch(of: pattern), title)
         let number = { (text: Substring) in Int(text.replacingOccurrences(of: ",", with: "")) ?? -1 }
         let copies = number(match.1), printings = number(match.2)
-        let cells = collectionCells(app)
         var seen: [String: String] = [:]                        // identifier → label
         for _ in 0..<20 where seen.count < printings {
-            for cell in cells.allElementsBoundByIndex where cell.exists { seen[cell.identifier] = cell.label }
-            if seen.count < printings, let shown = cells.allElementsBoundByIndex.last(where: \.isHittable) {
-                shown.scroll(byDeltaX: 0, deltaY: -300)
+            // One snapshot per step: the lazy grid drops cells while it scrolls.
+            let shown = elementsInOrder(app, .collectionCells)
+            for cell in shown { seen[cell.identifier] = cell.label }
+            if seen.count < printings, let last = lastInWindow(app, shown) {
+                last.scroll(byDeltaX: 0, deltaY: -300)
             }
         }
         guard seen.count == printings else { return nil }
@@ -1126,15 +1129,17 @@ final class RealCollectionTests: UITestCase {
         let cells = collectionCells(app)
         XCTAssertTrue(waitUntil(timeout: 30) { cells.count > 0 }, "no Collection cell")
         for _ in 0..<40 where names.count < count {
-            for identifier in identifiersInOrder(cells) {
-                let label = app.buttons[identifier].label
+            // One snapshot per step (identifiers, labels and frames together): the lazy grid drops cells while it scrolls.
+            let shown = elementsInOrder(app, .collectionCells)
+            for cell in shown {
+                let label = cell.label
                 guard let end = label.range(of: ", ×") else { continue }
                 let name = Self.withoutBrackets(String(label[..<end.lowerBound]))
                 if !names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) { names.append(name) }
             }
             // The gallery's scroll view is not found by its identifier on every run: a cell's scroll moves its gallery.
-            if names.count < count, let shown = cells.allElementsBoundByIndex.last(where: \.isHittable) {
-                shown.scroll(byDeltaX: 0, deltaY: -300)
+            if names.count < count, let last = lastInWindow(app, shown) {
+                last.scroll(byDeltaX: 0, deltaY: -300)
             }
         }
         XCTAssertGreaterThanOrEqual(names.count, count, "\(names)")

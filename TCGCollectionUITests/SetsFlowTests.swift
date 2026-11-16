@@ -80,8 +80,8 @@ final class SetsFlowTests: UITestCase {
 
     /// The identifiers of the set page's cells, in reading order (the count controls left out).
     private func cellOrder(_ app: XCUIApplication) -> [String] {
-        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
-            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'")))
+        identifiersInOrder(app, ElementMatch(.button, "identifier BEGINSWITH 'set-cell-' AND NOT identifier "
+            + "BEGINSWITH 'set-cell-minus-' AND NOT identifier BEGINSWITH 'set-cell-plus-'"))
     }
 
     private static let kaisa = 721337, docksideID = 721334, calmRune = 722282, originsCard = 799001
@@ -125,7 +125,7 @@ final class SetsFlowTests: UITestCase {
 
     /// The group ids of the shown rows, top to bottom.
     private func rowOrder(_ app: XCUIApplication) -> [String] {
-        identifiersInOrder(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sets-row-'")))
+        identifiersInOrder(app, ElementMatch(.button, "identifier BEGINSWITH 'sets-row-'"))
     }
 
     /// A27: one owned printing → "My sets" lists its set alone with `1 / 4` and the missing targets' cost; "All sets" lists

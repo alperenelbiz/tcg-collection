@@ -193,10 +193,10 @@ final class CollectionFlowTests: UITestCase {
                                      game: "riftbound", in: root)
         }
         let cells = collectionCells(app)
-        XCTAssertTrue(waitUntil(timeout: 20) { cells.count == 5 }, "\(identifiers(cells))")
+        XCTAssertTrue(waitUntil(timeout: 20) { cells.count == 5 }, "\(identifiers(app, .collectionCells))")
         XCTAssertTrue(waitUntilSynced(app))                     // the prices: Dockside Normal $5.12, Foil ~$9.50; the rest none
         let ids = { (names: [String]) in names.map { "collection-cell-\($0)" } }
-        func shown() -> [String] { identifiersInOrder(cells) }
+        func shown() -> [String] { identifiersInOrder(app, .collectionCells) }
         // Name: card key (calm rune, dockside lock up, kai sa rebel), then set, then finish.
         let byName = ids(["722282-Foil", "722282-Normal", "721334-Foil", "721334-Normal", "721337-Normal"])
         XCTAssertTrue(waitUntil { shown() == byName }, "\(shown())")
@@ -506,8 +506,7 @@ final class CollectionFlowTests: UITestCase {
         let note = element(app, "collection-catalog-note")
         XCTAssertTrue(note.waitForExistence(timeout: 20))
         XCTAssertEqual(text(note), "The catalog is empty. Pictures and prices need the catalog.")
-        let cells = collectionCells(app)
-        XCTAssertEqual(identifiersInOrder(cells), ["collection-cell-722282-Normal", "collection-cell-721334-Foil"])
+        XCTAssertEqual(identifiersInOrder(app, .collectionCells), ["collection-cell-722282-Normal", "collection-cell-721334-Foil"])
         XCTAssertEqual(element(app, "collection-cell-721334-Foil").label, "Dockside Lock-Up, ×2, Foil, no price")
         XCTAssertEqual(element(app, "collection-cell-722282-Normal").label, "Calm Rune (R02a), ×1, Normal, no price")
         XCTAssertTrue(app.windows.firstMatch.title.hasSuffix("3 copies · 2 printings"), app.windows.firstMatch.title)

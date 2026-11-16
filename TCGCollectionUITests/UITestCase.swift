@@ -119,23 +119,14 @@ class UITestCase: XCTestCase {
     }
 
     /// Every cell of the Collection's gallery (`collection-cell-<productID>-<finish>`).
-    func collectionCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'collection-cell-'"))
-    }
+    func collectionCells(_ app: XCUIApplication) -> XCUIElementQuery { ElementMatch.collectionCells.query(app) }
 
     /// Every cell of For Sale's gallery (`for-sale-cell-<productID>-<finish>`).
-    func forSaleCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'for-sale-cell-'"))
-    }
+    func forSaleCells(_ app: XCUIApplication) -> XCUIElementQuery { ElementMatch.forSaleCells.query(app) }
 
     /// Every cell of Wanted's gallery (`wanted-cell-<card key>`), not the controls under them (`wanted-cell-minus-…`).
     /// A card key has no hyphen (`CardName.searchKey`).
-    func wantedCells(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(NSPredicate(format: """
-            identifier BEGINSWITH 'wanted-cell-' AND NOT (identifier BEGINSWITH 'wanted-cell-minus-' \
-            OR identifier BEGINSWITH 'wanted-cell-value-' OR identifier BEGINSWITH 'wanted-cell-plus-')
-            """))
-    }
+    func wantedCells(_ app: XCUIApplication) -> XCUIElementQuery { ElementMatch.wantedCells.query(app) }
 
     /// The device's calendar day, as the app writes it in a sold record.
     static func today() -> String {
@@ -147,19 +138,61 @@ class UITestCase: XCTestCase {
         return formatter.string(from: Date())
     }
 
-    /// The identifiers of the elements of `query`, sorted.
+    /// The elements of `root` that `match` keeps, read from ONE snapshot of its accessibility tree, in the tree's order (the
+    /// order of `match.query(…)`). Lazy grids and stacks make and drop elements while they scroll: resolving a query's
+    /// elements one by one (`allElementsBoundByIndex`) counts them in one snapshot and reads each in a later one, so an
+    /// element dropped in between fails the test ("Failed to get matching snapshot", phase 4A final fixes). A snapshot is
+    /// one consistent picture.
+    func snapshotElements(_ root: XCUIElement, _ match: ElementMatch, file: StaticString = #filePath,
+                          line: UInt = #line) -> [SnapshotElement] {
+        let snapshot: any XCUIElementSnapshot
+        do {
+            snapshot = try root.snapshot()
+        } catch {
+            XCTFail("no snapshot of \(root): \(error)", file: file, line: line)
+            return []
+        }
+        var found: [SnapshotElement] = []
+        func walk(_ node: any XCUIElementSnapshot, isRoot: Bool) {
+            if !isRoot, match.keeps(node) { found.append(SnapshotElement(node)) }
+            for child in node.children { walk(child, isRoot: false) }
+        }
+        walk(snapshot, isRoot: true)
+        return found
+    }
+
+    /// The identifiers of the elements of `query`, sorted. It resolves the elements one by one: use it only on a gallery
+    /// that does not scroll or change while it is read (the fixture galleries' waits and failure messages); a lazy grid
+    /// that scrolls needs `identifiers(_:_:)`, which reads one snapshot.
     func identifiers(_ query: XCUIElementQuery) -> [String] {
         query.allElementsBoundByIndex.map(\.identifier).sorted()
     }
 
-    /// The identifiers of the elements of `query` in reading order: by row, then left to right.
-    func identifiersInOrder(_ query: XCUIElementQuery) -> [String] {
-        let placed: [(frame: CGRect, id: String)] = query.allElementsBoundByIndex.map { ($0.frame, $0.identifier) }
-        let ordered = placed.sorted { (a: (frame: CGRect, id: String), b: (frame: CGRect, id: String)) -> Bool in
+    /// The identifiers of the elements `match` keeps in `app`, sorted (one snapshot).
+    func identifiers(_ app: XCUIApplication, _ match: ElementMatch) -> [String] {
+        snapshotElements(app, match).map(\.identifier).sorted()
+    }
+
+    /// The elements `match` keeps in `app` in reading order: by row (tops within 1 pt), then left to right (one snapshot).
+    func elementsInOrder(_ app: XCUIApplication, _ match: ElementMatch) -> [SnapshotElement] {
+        snapshotElements(app, match).sorted { a, b in
             let sameRow = abs(a.frame.minY - b.frame.minY) <= 1
             return sameRow ? a.frame.minX < b.frame.minX : a.frame.minY < b.frame.minY
         }
-        return ordered.map(\.id)
+    }
+
+    /// The identifiers of the elements `match` keeps in `app` in reading order: by row, then left to right (one snapshot).
+    func identifiersInOrder(_ app: XCUIApplication, _ match: ElementMatch) -> [String] {
+        elementsInOrder(app, match).map(\.identifier)
+    }
+
+    /// The last element of `elements` (reading order) whose centre is inside the app's window (as `isHittable` asks, a
+    /// gallery cell is often taller than the part of the 450 pt window it shows): what a scroll is sent to (it moves the
+    /// scroll view under it). Nil when none is.
+    func lastInWindow(_ app: XCUIApplication, _ elements: [SnapshotElement]) -> XCUIElement? {
+        let window = app.windows.firstMatch.frame
+        return elements.last { $0.frame.width > 0 && window.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
+            .map { element(app, $0.identifier).firstMatch }
     }
 
     /// The `.searchable` field: SwiftUI gives it no identifier of ours on macOS, so it is found by type.
@@ -317,5 +350,58 @@ private struct NotTheDebugApp: LocalizedError {
         "The UI tests run only on the Debug app (\(UITestCase.debugBundleID)). This run was built in another "
             + "configuration, whose app has the installed app's bundle id, so nothing is launched. "
             + "Run scripts/ui-test.sh, which passes -configuration Debug."
+    }
+}
+
+/// Which elements a helper reads from a snapshot: an element type (`.any` for all) and a predicate over `identifier`,
+/// `label`, `value` and `title`. `query(_:)` is the same choice as a live query (for `count`, waits and clicks).
+@MainActor struct ElementMatch {
+    let type: XCUIElement.ElementType
+    let predicate: NSPredicate
+
+    init(_ type: XCUIElement.ElementType = .any, _ format: String) {
+        self.type = type
+        predicate = NSPredicate(format: format)
+    }
+
+    func query(_ root: XCUIElement) -> XCUIElementQuery { root.descendants(matching: type).matching(predicate) }
+
+    func keeps(_ node: any XCUIElementSnapshot) -> Bool {
+        guard type == .any || node.elementType == type else { return false }
+        return predicate.evaluate(with: ["identifier": node.identifier, "label": node.label, "title": node.title,
+                                         "value": node.value as? String ?? ""])
+    }
+
+    static var collectionCells: ElementMatch { ElementMatch(.any, "identifier BEGINSWITH 'collection-cell-'") }
+    static var forSaleCells: ElementMatch { ElementMatch(.any, "identifier BEGINSWITH 'for-sale-cell-'") }
+    static var wantedCells: ElementMatch { ElementMatch(.any, """
+        identifier BEGINSWITH 'wanted-cell-' AND NOT (identifier BEGINSWITH 'wanted-cell-minus-' \
+        OR identifier BEGINSWITH 'wanted-cell-value-' OR identifier BEGINSWITH 'wanted-cell-plus-')
+        """) }
+}
+
+/// One element as a snapshot saw it.
+@MainActor struct SnapshotElement {
+    let identifier: String
+    let label: String
+    let frame: CGRect
+    /// What `UITestCase.text(_:)` reads: the first static text inside it, else the element itself; its value, else its
+    /// label.
+    let text: String
+
+    init(_ node: any XCUIElementSnapshot) {
+        identifier = node.identifier
+        label = node.label
+        frame = node.frame
+        func firstStaticText(_ n: any XCUIElementSnapshot) -> (any XCUIElementSnapshot)? {
+            for child in n.children {
+                if child.elementType == .staticText { return child }
+                if let found = firstStaticText(child) { return found }
+            }
+            return nil
+        }
+        let shown = firstStaticText(node) ?? node
+        let value = shown.value as? String ?? ""
+        text = value.isEmpty ? shown.label : value
     }
 }
