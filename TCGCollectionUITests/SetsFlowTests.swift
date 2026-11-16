@@ -215,7 +215,8 @@ final class SetsFlowTests: UITestCase {
         shot("sets-06-no-match")
     }
 
-    /// The list's scope, sort and open set page survive a visit to another screen; Back returns to the list as it was.
+    /// The list's scope, sort and open set page survive a visit to another screen; Back returns to the list as it was; the
+    /// set opened again starts on "All" (final fix A5).
     func testTheSetsScreenIsKeptAcrossASidebarSwitch() throws {
         let app = try launchSets(owning: [Self.dockside])
         XCTAssertTrue(row(app, Self.radiance).waitForExistence(timeout: 30))
@@ -246,6 +247,13 @@ final class SetsFlowTests: UITestCase {
         XCTAssertTrue(row(app, Self.origins).waitForExistence(timeout: 10), "All sets was not kept")
         XCTAssertEqual(rowOrder(app), ["sets-row-\(Self.origins)", "sets-row-\(Self.radiance)"], "the Name sort was not kept")
         XCTAssertEqual(scope(app, "All sets").value as? Int, 1)
+
+        // Final fix A5: the set opened again from the list starts on "All" with no search text.
+        row(app, Self.radiance).click()
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        XCTAssertTrue(cell(app, Self.docksideID).waitForExistence(timeout: 10), "the set did not start on All")
+        XCTAssertEqual(filter(app, "All").value as? Int, 1, "the set did not start on All")
+        shot("sets-07b-reopened-on-all")
     }
 
     /// A26, F8: Radiance's targets in card-number order (Kai'Sa 063, Dockside Lock-Up 136 Normal and Foil side by side,

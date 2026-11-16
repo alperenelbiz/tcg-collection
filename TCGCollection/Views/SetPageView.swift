@@ -24,8 +24,53 @@ nonisolated struct SetPageKey: Equatable, Sendable {
     }
 }
 
+/// What a set page's cells are made from (final fix A9): while none of it changes, the cells, the numbers and the owned
+/// lookup are still right. `readCount` goes up with every products read that succeeded.
+nonisolated struct SetPageCellsKey: Equatable, Sendable {
+    let readCount: Int
+    let priceDay: String?
+    let libraryVersion: Int
+}
+
+/// A set page's cells, numbers, owned lookup and prices, made once per `SetPageCellsKey` (A9); the filter and the search
+/// run on these cells.
+nonisolated struct SetPageContent: Sendable {
+    let cells: [SetCell]
+    let numbers: SetNumbers
+    let owned: SetOwned
+    /// The game had a collection row when the content was made (a refused file has none).
+    let hasRows: Bool
+    /// Each read product's finishes and prices, asked once per product.
+    let prices: [Int: [FinishPrice]]
+
+    /// A target's own price: its finish's in its product's prices (`GamePrices.shown`'s rule); nil when there is none.
+    func price(_ key: PrintingKey) -> ShownPrice? {
+        prices[key.productID]?.first { $0.finish == key.finish }?.price.shown
+    }
+}
+
 /// The cells, numbers and texts of a set's page, pure.
 nonisolated enum SetPage {
+    /// A9: the page's content from the index's products, the read, the game's collection rows (read once per making) and
+    /// the price lookup, asked once per product the read has.
+    static func content(products: [Int], read: [Int: ProductRecord], rows: [CollectionRow],
+                        prices lookup: (Int) -> [FinishPrice]) -> SetPageContent {
+        let owned = SetOwned(rows: rows)
+        var prices: [Int: [FinishPrice]] = [:]
+        for id in products where read[id] != nil && prices[id] == nil { prices[id] = lookup(id) }
+        let priced = { (id: Int) in (prices[id] ?? []).map(\.finish) }
+        let cells = Self.cells(products: products, read: read, owned: owned, priced: priced)
+        let numbers = SetMaths.numbers(products: products.filter { read[$0] != nil }, prices: { prices[$0] ?? [] },
+                                       ownedCount: owned.count, ownedFinishes: owned.finishes(of:))
+        return SetPageContent(cells: cells, numbers: numbers, owned: owned, hasRows: !rows.isEmpty, prices: prices)
+    }
+
+    /// A6: the toolbar's subtitle, `187 of 412`, only while the page has a cell; nothing beside the sentence of a page
+    /// without one (no "0 of 0").
+    @MainActor static func subtitle(_ phase: ListPhase, numbers: SetNumbers) -> String {
+        phase == .list ? SetMaths.pageCount(numbers) : ""
+    }
+
     /// The page's targets: the index's products in card-number order (F4), each printing's finishes side by side in the
     /// finishes' order (F1: the priced ones, `Normal` when none, then every owned finish they lack). A product id the read
     /// lacks is skipped (F5).
@@ -102,6 +147,10 @@ final class SetPageState {
     /// The set's products by id, from the last read that succeeded. Nil until one did.
     private(set) var products: [Int: ProductRecord]?
     private(set) var readKey: SetPageKey?
+    /// Goes up with every read that succeeded (`SetPageCellsKey`).
+    @ObservationIgnored private(set) var readCount = 0
+    /// The content made last and its key (A9). Not observed: it is made while the view's body runs.
+    @ObservationIgnored private var cached: (key: SetPageCellsKey, content: SetPageContent)?
     /// The latest read threw: `products` stays as it was, and the next appearance of the page tries again.
     private(set) var failed = false
 
@@ -131,7 +180,16 @@ final class SetPageState {
         guard !Task.isCancelled else { return }
         failed = false
         readKey = key
+        readCount += 1
         if products != value { products = value }
+    }
+
+    /// The page's content for `key`, made by `make` only when the key differs from the last one (A9).
+    func content(for key: SetPageCellsKey, make: () -> SetPageContent) -> SetPageContent {
+        if let cached, cached.key == key { return cached.content }
+        let made = make()
+        cached = (key, made)
+        return made
     }
 
     /// The set's products from the index, in one batched read through `reader` (off the main thread).
@@ -152,32 +210,32 @@ struct SetPageView: View {
     let name: String
 
     var body: some View {
-        let game = state.gameID, library = model.library
-        let ids = model.setIndexes[game]?.products(of: state.groupID) ?? []
-        let read = state.products ?? [:]
-        // The rows are live: a count change shows at once. Only the products are read once per key.
-        let owned = SetOwned(rows: library.rows(game: game))
-        let prices = model.prices
-        let priced = { (id: Int) in prices.prices(game: game, productID: id).map(\.finish) }
-        let cells = SetPage.cells(products: ids, read: read, owned: owned, priced: priced)
-        let numbers = SetPage.numbers(products: ids, read: read, owned: owned, priced: priced,
-                                      price: { prices.shown(game: game, key: $0) })
-        let shown = SetPage.shown(cells, filter: state.filter, text: state.text, owned: owned)
+        let game = state.gameID, library = model.library, prices = model.prices
+        // A9: the cells, numbers and owned lookup are made once per (products read, price day, collection version), so a
+        // count change still shows at once; the filter and the search run on them.
+        let cellsKey = SetPageCellsKey(readCount: state.readCount, priceDay: prices.day(game: game),
+                                       libraryVersion: library.version)
+        let content = state.content(for: cellsKey) {
+            SetPage.content(products: model.setIndexes[game]?.products(of: state.groupID) ?? [], read: state.products ?? [:],
+                            rows: library.rows(game: game), prices: { prices.prices(game: game, productID: $0) })
+        }
+        let numbers = content.numbers
+        let shown = SetPage.shown(content.cells, filter: state.filter, text: state.text, owned: content.owned)
         // As the Collection: listed while the rows are known (a refused file has none: unavailable, the problem line says
         // why); the controls are off while the game cannot change.
         let canChange = library.canChange(game: game)
-        let rowsKnown = canChange || !library.rows(game: game).isEmpty
-        let phase = ListPhase.of(listing: rowsKnown ? state.products.map { _ in !cells.isEmpty } : nil,
+        let rowsKnown = canChange || content.hasRows
+        let phase = ListPhase.of(listing: rowsKnown ? state.products.map { _ in !content.cells.isEmpty } : nil,
                                  game: game, library: library)
         let note = SetPage.note(catalogSettled: model.catalogSettled(game: game), failed: state.failed,
                                 hasProducts: state.products != nil)
         let key = SetPageKey.of(game: game, groupID: state.groupID, model: model)
-        content(phase, shown: shown, owned: owned, canChange: canChange)
+        gallery(phase, shown: shown, content: content, canChange: canChange)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // The set's whole cost, whatever the filter or the search text shows (nothing for a complete set). In the
             // content, not the toolbar's subtitle: there it was cut at 900 pt.
             .safeAreaInset(edge: .top, spacing: 0) {
-                CatalogNote(text: phase == .list || phase == .empty ? SetMaths.pageCost(numbers) : nil, identifier: "set-cost")
+                CatalogNote(text: phase == .list ? SetMaths.pageCost(numbers) : nil, identifier: "set-cost")
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 CatalogNote(text: phase == .unavailable ? nil : note, identifier: "set-note")
@@ -186,7 +244,7 @@ struct SetPageView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("set-screen")
             .navigationTitle(name)
-            .navigationSubtitle(phase == .list || phase == .empty ? SetMaths.pageCount(numbers) : "")
+            .navigationSubtitle(SetPage.subtitle(phase, numbers: numbers))
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
@@ -206,7 +264,7 @@ struct SetPageView: View {
             .task(id: key) { await state.read(key, model: model) }
     }
 
-    @ViewBuilder private func content(_ phase: ListPhase, shown: [SetCell], owned: SetOwned, canChange: Bool) -> some View {
+    @ViewBuilder private func gallery(_ phase: ListPhase, shown: [SetCell], content: SetPageContent, canChange: Bool) -> some View {
         switch phase {
         case .loading:
             LoadingGallery()
@@ -220,7 +278,8 @@ struct SetPageView: View {
                 ScrollView {
                     GalleryGrid {
                         ForEach(shown) { cell in
-                            self.cell(cell, count: owned.count(cell.key), canChange: canChange)
+                            self.cell(cell, count: content.owned.count(cell.key), price: content.price(cell.key),
+                                      canChange: canChange)
                         }
                     }
                 }
@@ -229,9 +288,8 @@ struct SetPageView: View {
     }
 
     /// F8: the cell (faded while missing), 8 pt, then its owned count control, which is never faded.
-    private func cell(_ cell: SetCell, count: Int, canChange: Bool) -> some View {
+    private func cell(_ cell: SetCell, count: Int, price: ShownPrice?, canChange: Bool) -> some View {
         let product = cell.product, suffix = "\(product.productID)-\(cell.finish)"
-        let price = model.prices.shown(game: state.gameID, key: cell.key)
         let content = CellContent(product: product, name: product.name,
                                   left: SetMaths.leftText(count: count, finish: cell.finish), price: price)
         return VStack(alignment: .leading, spacing: 8) {
@@ -243,16 +301,18 @@ struct SetPageView: View {
             .accessibilityLabel(SetPage.label(name: product.name, count: count, finish: cell.finish, price: price))
             .accessibilityIdentifier("set-cell-\(suffix)")
             CountControl(count: count, label: "\(product.name), \(cell.finish)", prefix: "set-cell", key: suffix) {
-                step(by: $0 - count, cell: cell)
+                SetPage.step(by: $0 - count, key: cell.key, name: product.name, game: state.gameID, library: model.library)
             }
             .disabled(!canChange)
         }
     }
+}
 
-    /// The card page's rule: the step goes onto the library's current count, so two clicks before the next render both
-    /// count; a row that reaches 0 is removed. A new row saves the product's name.
-    private func step(by delta: Int, cell: SetCell) {
-        let library = model.library, game = state.gameID
-        library.setCount(library.count(game: game, key: cell.key) + delta, game: game, key: cell.key, name: cell.product.name)
+extension SetPage {
+    /// A set cell's count control, the card page's rule: the step goes onto the library's current count, so two clicks
+    /// before the next render both count; a row that reaches 0 is removed (its for-sale count follows it down and the
+    /// library says so, C8). A new row saves the product's name.
+    @MainActor static func step(by delta: Int, key: PrintingKey, name: String, game: String, library: UserLibrary) {
+        library.setCount(library.count(game: game, key: key) + delta, game: game, key: key, name: name)
     }
 }

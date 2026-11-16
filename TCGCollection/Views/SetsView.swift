@@ -31,7 +31,12 @@ final class SetsScreenState: GameScreenState {
     var scope: SetScope = .mine
     var sort: SetSort = .newest
     var text = ""
-    var path = NavigationPath()
+    /// The list's stack. A set opened from the list starts afresh (final fix A5): when the path leaves the list (a set is
+    /// opened) or comes back to it (Back from the set), the page states are dropped with their products. Back from a card
+    /// page and a sidebar switch keep them (the path stays on the set).
+    var path = NavigationPath() {
+        didSet { if path.isEmpty || oldValue.isEmpty { pages = [:] } }
+    }
     /// The set at the top of the list.
     var scrolledTo: Int?
     /// The rows made last, for `rowsKey`. Nil until rows of this game were made once.
@@ -40,8 +45,9 @@ final class SetsScreenState: GameScreenState {
     /// The latest making of the rows threw (the catalog's sets could not be read): `rows` stays as it was, and the next
     /// appearance of the screen tries again.
     private(set) var failed = false
-    /// One page state per set opened (its filter, text and products), kept with the list, so Back from a card page and a
-    /// sidebar switch lose none of it. Not observed: a page asks for its state while its view is made.
+    /// One page state per set opened (its filter, text and products), kept with the list while the set is on the stack,
+    /// so Back from a card page and a sidebar switch lose none of it. Not observed: a page asks for its state while its
+    /// view is made.
     @ObservationIgnored private var pages: [Int: SetPageState] = [:]
 
     init(gameID: String) {

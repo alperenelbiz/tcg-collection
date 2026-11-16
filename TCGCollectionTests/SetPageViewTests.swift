@@ -137,15 +137,108 @@ struct SetPageViewTests {
         #expect(SetPage.note(catalogSettled: true, failed: false, hasProducts: true) == nil)
     }
 
-    /// The window keeps one page state per set with the list's state, so the filter and the text survive Back and a
-    /// sidebar switch.
+    /// The window keeps one page state per set with the list's state while the page is on Sets' stack, so the filter
+    /// and the text survive Back from a card page and a sidebar switch (the path does not change then).
     @Test func theListKeepsOnePageStatePerSet() {
         let list = SetsScreenState(gameID: "riftbound")
+        list.path.append(SetPageTarget(groupID: 7))
         let page = list.page(7)
         page.filter = .missing
         page.text = "alpha"
         #expect(list.page(7) === page)
         #expect(list.page(8) !== page)
+        list.path.append(CardTarget(gameID: "riftbound", cardKey: "alpha", startProductID: 1))   // a card page
+        list.path.removeLast()                                                                   // Back to the set
+        #expect(list.page(7) === page)
+        #expect(page.filter == .missing && page.text == "alpha")
+    }
+
+    /// Final fix A5: Back from the set's page to the list drops its state (and its products); the set opened again
+    /// starts on "All" with no search text.
+    @Test func aSetOpenedAgainFromTheListStartsOnAll() async {
+        let list = SetsScreenState(gameID: "riftbound")
+        list.path.append(SetPageTarget(groupID: 7))
+        let page = list.page(7)
+        page.filter = .owned
+        page.text = "alpha"
+        await page.run(key()) { read }
+        list.path.removeLast()                                                     // Back to the list
+        list.path.append(SetPageTarget(groupID: 7))                                // the set again
+        let again = list.page(7)
+        #expect(again !== page)
+        #expect(again.filter == .all && again.text.isEmpty && again.products == nil)
+    }
+
+    /// Final fix A6: a page with no cell shows no count beside its sentence; a page with cells shows `1 of 4`.
+    @Test func aPageWithNoCellShowsNoCount() {
+        let none = SetNumbers(owned: 0, total: 0, missingSum: nil, missingUnpriced: 0)
+        #expect(SetPage.subtitle(.empty, numbers: none) == "")
+        #expect(SetPage.subtitle(.loading, numbers: none) == "")
+        #expect(SetPage.subtitle(.list, numbers: SetNumbers(owned: 1, total: 4, missingSum: 1, missingUnpriced: 0)) == "1 of 4")
+    }
+
+    // MARK: The cells' making (A9)
+
+    private func cellsKey(read: Int = 1, day: String? = "2026-11-16", library: Int = 1) -> SetPageCellsKey {
+        SetPageCellsKey(readCount: read, priceDay: day, libraryVersion: library)
+    }
+
+    /// Final fix A9: the cells, the numbers and the owned lookup are made once per (products read, price day, library
+    /// version); two renders with one key make them once.
+    @Test func twoRendersWithOneKeyMakeTheCellsOnce() {
+        let state = SetPageState(gameID: "riftbound", groupID: 7)
+        var makings = 0
+        func make() -> SetPageContent {
+            makings += 1
+            return SetPage.content(products: [1, 2, 3], read: read, rows: [row(1, "Foil", 1)], prices: { prices.prices(productID: $0) })
+        }
+        let first = state.content(for: cellsKey(), make: make)
+        let second = state.content(for: cellsKey(), make: make)
+        #expect(makings == 1)
+        #expect(first.cells == second.cells)
+        _ = state.content(for: cellsKey(library: 2), make: make)
+        _ = state.content(for: cellsKey(day: "2026-11-17", library: 2), make: make)
+        _ = state.content(for: cellsKey(read: 2, day: "2026-11-17", library: 2), make: make)
+        #expect(makings == 4)
+    }
+
+    /// A9: the cached content is the one of the separate functions (same output), with one price lookup per product,
+    /// and a target's price is its finish's.
+    @Test func theContentIsTheSameAsTheSeparateFunctions() {
+        let rows = [row(1, "Foil", 1), row(2, "Etched", 2)]
+        var lookups = 0
+        let content = SetPage.content(products: [1, 99, 2, 3], read: read, rows: rows,
+                                      prices: { lookups += 1; return prices.prices(productID: $0) })
+        #expect(lookups == 3)                                                      // 99 is not in the read
+        let owned = SetOwned(rows: rows)
+        #expect(content.cells == SetPage.cells(products: [1, 99, 2, 3], read: read, owned: owned, priced: priced))
+        #expect(content.numbers == SetPage.numbers(products: [1, 99, 2, 3], read: read, owned: owned, priced: priced,
+                                                   price: { prices.shown(key: $0) }))
+        #expect(content.owned.count(PrintingKey(productID: 2, finish: "Etched")) == 2)
+        #expect(content.hasRows)
+        #expect(content.price(PrintingKey(productID: 3, finish: "Foil")) == ShownPrice(amount: 0.5, isLow: true))
+        #expect(content.price(PrintingKey(productID: 2, finish: "Normal")) == nil)
+        #expect(!SetPage.content(products: [1], read: read, rows: [], prices: { _ in [] }).hasRows)
+    }
+
+    /// B: `−` from 1 on a target that is also for sale: the row goes, the for-sale count follows it down (C8), and the
+    /// library says so (the status line's notice).
+    @Test func aStepToZeroOnAPrintingForSaleLowersTheSale() async throws {
+        let folder = tempDir()
+        try Data(#"{"version": 1, "collection": [{"productID": 1, "finish": "Normal", "count": 1, "condition": "", "name": "Alpha"}], "forSale": [{"productID": 1, "finish": "Normal", "count": 1, "name": "Alpha"}]}"#.utf8)
+            .write(to: folder.appending(path: "riftbound.json"))
+        let library = UserLibrary(folder: folder, watcher: nil)
+        await library.load()
+        let key = PrintingKey(productID: 1, finish: "Normal")
+        #expect(library.forSaleCount(game: "riftbound", key: key) == 1)
+        SetPage.step(by: -1, key: key, name: "Alpha", game: "riftbound", library: library)
+        #expect(library.count(game: "riftbound", key: key) == 0)
+        #expect(library.forSaleCount(game: "riftbound", key: key) == 0)
+        #expect(library.saleNotice == "1 copy is no longer for sale.")
+        await library.flush()
+        let file = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appending(path: "riftbound.json"))) as? [String: Any]
+        #expect((file?["collection"] as? [Any])?.isEmpty == true)
+        #expect((file?["forSale"] as? [Any])?.isEmpty == true)
     }
 
     /// The whole read on a real store: the index's products through `reader`.

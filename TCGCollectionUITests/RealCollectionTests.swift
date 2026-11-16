@@ -452,8 +452,10 @@ final class RealCollectionTests: UITestCase {
     /// launch, in the background):
     /// 1. The list opens on "My sets" with at least one row. The first row's `owned / total` equals the count the test makes
     ///    from the file and from the set index the app wrote (`support/sets-riftbound.json`): an owned target is a row of
-    ///    the set's products with a count of 1 or more (F2; F1 makes every owned row a target). On a root without a price
-    ///    file the total is known too: one Normal target per product plus every owned finish that is not Normal.
+    ///    the set's products with a count of 1 or more (F2; F1 makes every owned row a target). The total is checked only
+    ///    on a root without price files (`support/prices-riftbound.json` absent): then it is one Normal target per product
+    ///    plus every owned finish that is not Normal. With a price file the finishes come from the price table, which the
+    ///    test does not read, so the total is not checked.
     /// 2. The first row's page with the Owned filter: its cells (scrolled through) are exactly those owned targets, and the
     ///    window's subtitle is the row's count.
     /// 3. On the first set that is not complete, the Missing filter's first cell: one `+`. The cell leaves Missing, the
