@@ -34,6 +34,11 @@ struct ThemeTests {
         #expect(Theme.sheetTitleFont != Theme.pageTitleFont)                    // Font equality compares values
     }
 
+    /// The price chart's tokens (phase 5A, "The look of the new part").
+    @Test func theChartTokens() {
+        #expect(Theme.chartHeight == 132); #expect(Theme.chartLineWidth == 2); #expect(Theme.chartDot == 6)
+    }
+
     #if os(macOS)
     /// The app's `AccentColor` asset (the sidebar's selection, the system's selection colours) is the accent token.
     @Test func theAccentAssetIsTheAccentToken() throws {

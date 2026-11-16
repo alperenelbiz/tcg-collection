@@ -69,6 +69,11 @@ nonisolated enum Theme {
     static let tableRowSpacing: CGFloat = 6
     /// Between a heading and the line under it (a sheet's title and its summary, a game and why it is not imported).
     static let lineGap: CGFloat = 4
+    /// The card page's price chart (phase 5A): the plot's height, its line's width (also a day alone, drawn as a dot), and
+    /// the dot on the line under the pointer.
+    static let chartHeight: CGFloat = 132
+    static let chartLineWidth: CGFloat = 2
+    static let chartDot: CGFloat = 6
 
     // MARK: Type (the system face only; the window title is the system's)
 

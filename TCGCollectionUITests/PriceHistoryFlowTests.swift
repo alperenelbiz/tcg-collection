@@ -1,0 +1,185 @@
+import XCTest
+
+/// The price chart on the card page (phase 5A task 6: A38–A41, H3, H16). The history file is written into the fresh root
+/// before the launch (`writeHistory`), its days counted back from the day the app's window ends on (`wantedDay()`).
+/// Tests that must not depend on the fixture archive write their own price files (`writePinPrices`, a price day far ahead:
+/// no archive is downloaded, so a pass adds no day and writes nothing). Yu-Gi-Oh!'s 719834 (Swiftwind Panther Warrior,
+/// Super Rare) has two finish lines there, 1st Edition and Unlimited; 719835 (Starlight Rare) has one.
+final class PriceHistoryFlowTests: UITestCase {
+    private static let panther = 719834, starlight = 719835, dockside = 721334
+    private static let notTracked = "Price history is kept for cards you own, want, sell or use in a deck."
+
+    func testTheChartOfAnOwnedPrinting() throws {
+        let prices = (0..<30).map { Double(1000 + 10 * $0) / 100 }    // $10.00 … $12.90
+        let app = try launch(game: "yu-gi-oh") { root in
+            try self.writePinPrices(in: root)
+            try self.writeCollection([StoredRow(productID: Self.panther, finish: "1st Edition", count: 1,
+                                                name: "Swiftwind Panther Warrior")], game: "yu-gi-oh", in: root)
+            try self.writeHistory(game: "yu-gi-oh", productID: Self.panther, finish: "1st Edition", prices: prices)
+        }
+        openCard(app, "swiftwind panther warrior", product: Self.panther)
+        let chart = element(app, "price-history-chart")
+        XCTAssertTrue(chart.waitForExistence(timeout: 20), "no chart")
+        let summary = element(app, "price-history-summary")
+        XCTAssertTrue(waitUntil { self.text(summary) == "$12.90  +$2.90 in 30 days" }, shown(summary))
+        XCTAssertFalse(element(app, "price-history-note").exists, "a note beside the chart")
+        // The finish control: two finish lines, the owned one chosen.
+        XCTAssertTrue(element(app, "price-history-finish").exists)
+        XCTAssertEqual(app.radioButtons["1st Edition"].value as? Int, 1)
+
+        // A39: under the Wanted line and the Decks block, above the rules text.
+        let block = element(app, "price-history")
+        XCTAssertGreaterThanOrEqual(block.frame.minY, element(app, "wanted-plus").frame.maxY)
+        XCTAssertGreaterThanOrEqual(block.frame.minY, element(app, "card-add-to-deck").frame.maxY)
+        let rules = element(app, "card-rules-text")
+        if rules.exists { XCTAssertLessThanOrEqual(block.frame.maxY, rules.frame.minY) }
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, "the window grew")
+
+        let page = element(app, "card-page")
+        page.scroll(byDeltaX: 0, deltaY: -260)
+        XCTAssertTrue(waitUntil { chart.isHittable }, "the chart is not on screen")
+        shot("history-01-chart")
+
+        // Hover: the summary line shows the day under the pointer.
+        chart.hover()
+        XCTAssertTrue(waitUntil(timeout: 5) { self.text(summary).contains(" · ") }, shown(summary))
+        shot("history-02-hover")
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, "the window grew")
+    }
+
+    func testTheFinishControlSwitchesTheSeries() throws {
+        let app = try launch(game: "yu-gi-oh") { root in
+            try self.writePinPrices(in: root)
+            try self.writeCollection([StoredRow(productID: Self.panther, finish: "Unlimited", count: 1,
+                                                name: "Swiftwind Panther Warrior")], game: "yu-gi-oh", in: root)
+            try self.writeHistory(game: "yu-gi-oh", productID: Self.panther,
+                                  finishes: ["1st Edition": [14, 14.5], "Unlimited": [8, 9, 9.5, 9]],
+                                  low: ["Unlimited": [2]])                // one low day: two dashed segments
+        }
+        openCard(app, "swiftwind panther warrior", product: Self.panther)
+        let summary = element(app, "price-history-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 20), "no summary")
+        // A38: the owned finish first.
+        XCTAssertTrue(waitUntil { app.radioButtons["Unlimited"].value as? Int == 1 })
+        XCTAssertTrue(waitUntil { self.text(summary) == "$9.00  +$1.00 in 4 days" }, shown(summary))
+        let page = element(app, "card-page")
+        page.scroll(byDeltaX: 0, deltaY: -260)
+        let first = app.radioButtons["1st Edition"]
+        XCTAssertTrue(waitUntil { first.isHittable }, "the control is not on screen")
+        shot("history-03-unlimited")
+        first.click()
+        XCTAssertTrue(waitUntil { self.text(summary) == "$14.50  +$0.50 in 2 days" }, shown(summary))
+        shot("history-04-first-edition")
+
+        // A printing with one finish line has no control (and, not tracked, its sentence).
+        let row = element(app, "printing-row-\(Self.starlight)")
+        page.scroll(byDeltaX: 0, deltaY: -2000)
+        XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen")
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "card-facts-line")).contains("Starlight Rare") })
+        let note = element(app, "price-history-note")
+        XCTAssertTrue(waitUntil { note.exists && self.text(note) == Self.notTracked }, shown(note))
+        XCTAssertFalse(element(app, "price-history-finish").exists, "a control for one finish")
+        XCTAssertFalse(summary.exists)
+    }
+
+    func testACardThatIsNotTrackedSaysSo() throws {
+        let app = launch(game: "riftbound")
+        let note = element(app, "price-history-note")
+        openCard(app, "dockside lock up")
+        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == Self.notTracked }, shown(note))
+        XCTAssertFalse(element(app, "price-history-chart").exists)
+        let page = element(app, "card-page")
+        page.scroll(byDeltaX: 0, deltaY: -260)
+        XCTAssertTrue(waitUntil { note.isHittable }, "the note is not on screen")
+        shot("history-05-not-tracked")
+
+        // A41: owning it fills the block from the archive on disk (the fixture archive: one day, Normal $5.12).
+        page.scroll(byDeltaX: 0, deltaY: 2000)
+        let plus = element(app, "count-plus-Normal")
+        XCTAssertTrue(waitUntil { plus.isHittable }, "the owned control is not on screen")
+        plus.click()
+        let starts = "Price history starts on \(Self.dayLabel(Self.wantedDay()))."
+        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == starts }, shown(note))
+        page.scroll(byDeltaX: 0, deltaY: -260)
+        XCTAssertTrue(waitUntil { note.isHittable })
+        shot("history-06-one-day")
+    }
+
+    func testANewerHistoryFileSaysSo() throws {
+        let newer = Data(#"{"days": [], "products": {}, "version": 2}"#.utf8)
+        var file: URL?
+        let app = try launch(game: "riftbound") { root in
+            try self.writeCollection([StoredRow(productID: Self.dockside, finish: "Normal", count: 1, name: "Dockside Lock-Up")],
+                                     game: "riftbound", in: root)
+            try self.writeHistoryFile(game: "riftbound", data: newer)
+            file = root.appending(path: "user").appending(path: "riftbound.prices.json")
+        }
+        openCard(app, "dockside lock up")
+        let note = element(app, "price-history-note")
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            note.exists && self.text(note) == "The price history was written by a newer version of the app." }, shown(note))
+        element(app, "card-page").scroll(byDeltaX: 0, deltaY: -260)
+        XCTAssertTrue(waitUntil { note.isHittable })
+        shot("history-07-newer")
+        quit(app)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(file)), newer, "the newer file was rewritten")
+    }
+
+    func testTheFirstLaunchWritesOnlyTheHistoryFile() throws {
+        var folder: URL?
+        var before: [String: Data] = [:]
+        let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { root in
+            try self.writeCollection([StoredRow(productID: Self.dockside, finish: "Normal", count: 1, name: "Dockside Lock-Up")],
+                                     game: "riftbound", in: root)
+            let user = root.appending(path: "user", directoryHint: .isDirectory)
+            try Data(#"{"version": 1}"#.utf8).write(to: user.appending(path: "settings.json"))
+            folder = user
+            before = try Self.files(in: user)
+        }
+        let user = try XCTUnwrap(folder)
+        let history = user.appending(path: "riftbound.prices.json")
+        XCTAssertTrue(waitUntil(timeout: 30) { FileManager.default.fileExists(atPath: history.path) }, "no history file")
+        quit(app)
+        var after = try Self.files(in: user)
+        let written = try XCTUnwrap(after.removeValue(forKey: "riftbound.prices.json"))
+        XCTAssertEqual(after, before, "a file of the folder changed, or another one appeared")
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        XCTAssertEqual(object["days"] as? [String], [Self.wantedDay()])
+        XCTAssertNotNil((object["products"] as? [String: Any])?[String(Self.dockside)])
+    }
+
+    /// Waits for the fixture sync, opens the card's page from All cards and, with `product`, shows that printing (its row
+    /// is below the 450 pt window's edge), then scrolls back to the top.
+    private func openCard(_ app: XCUIApplication, _ cardKey: String, product: Int? = nil,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        let cell = element(app, "card-cell-\(cardKey)")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20), "no cell \(cardKey)", file: file, line: line)
+        XCTAssertTrue(waitUntilSynced(app), "the sync did not end", file: file, line: line)
+        cell.click()
+        XCTAssertTrue(element(app, "card-page").waitForExistence(timeout: 10), "no card page", file: file, line: line)
+        guard let product else { return }
+        let page = element(app, "card-page")
+        let row = element(app, "printing-row-\(product)")
+        XCTAssertTrue(row.waitForExistence(timeout: 5), file: file, line: line)
+        page.scroll(byDeltaX: 0, deltaY: -2000)
+        XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen", file: file, line: line)
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "card-facts-line")).contains("Super Rare") }, file: file, line: line)
+        page.scroll(byDeltaX: 0, deltaY: 2000)
+    }
+
+    /// What a static text shows, or a word for one that is not there (a failure message must not fail on its own).
+    private func shown(_ element: XCUIElement) -> String {
+        element.exists ? text(element) : "(not there)"
+    }
+
+    /// Every file of `folder` by name with its bytes.
+    private static func files(in folder: URL) throws -> [String: Data] {
+        var result: [String: Data] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: folder.path) {
+            result[name] = try Data(contentsOf: folder.appending(path: name))
+        }
+        return result
+    }
+}

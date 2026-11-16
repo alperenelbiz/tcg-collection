@@ -257,6 +257,81 @@ class UITestCase: XCTestCase {
         }
     }
 
+    // MARK: Price history (phase 5A)
+
+    /// The archive day the app's history window ends on (`PriceDay.wanted(now:)`): yesterday (UTC) until 20:30 UTC, then
+    /// today. The UI test target cannot import the app module, so the rule is written here again.
+    static func wantedDay(now: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let parts = calendar.dateComponents([.hour, .minute], from: now)
+        let afterPublish = parts.hour! * 60 + parts.minute! >= 20 * 60 + 30
+        return day(of: afterPublish ? now : now.addingTimeInterval(-86_400))
+    }
+
+    /// `day` (`yyyy-MM-dd`, UTC) moved by `days` days.
+    static func day(_ day: String, movedBy days: Int) -> String {
+        Self.day(of: noon(day).addingTimeInterval(Double(days) * 86_400))
+    }
+
+    /// `2026-10-03` → `Oct 3`, as the chart writes a day.
+    static func dayLabel(_ day: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: noon(day))
+    }
+
+    private static func day(of date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func noon(_ day: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "yyyy-MM-dd HH"
+        return formatter.date(from: day + " 12")!
+    }
+
+    /// Writes `<root>/user/<game>.prices.json` of the running test's root before the launch, in the app's form
+    /// (`PriceHistory.data()`): one finish of one product, one price per day, the last on `wantedDay()` and the others on
+    /// the days before it.
+    func writeHistory(game: String, productID: Int, finish: String, prices: [Double]) throws {
+        try writeHistory(game: game, productID: productID, finishes: [finish: prices])
+    }
+
+    /// As `writeHistory(game:productID:finish:prices:)`, with several finishes of one product; every list is as long as
+    /// the longest (shorter ones are padded with no price at the start). `low` names, per finish, the indexes (in that
+    /// finish's own list) whose price is the low price.
+    func writeHistory(game: String, productID: Int, finishes: [String: [Double]], low: [String: [Int]] = [:]) throws {
+        let count = finishes.values.map(\.count).max() ?? 0
+        let last = Self.wantedDay()
+        let days = (0..<count).map { Self.day(last, movedBy: $0 - (count - 1)) }
+        var raw: [String: Any] = [:]
+        for (finish, prices) in finishes {
+            let padded: [Any] = Array(repeating: NSNull(), count: count - prices.count) + prices.map { $0 as Any }
+            var entry: [String: Any] = ["prices": padded]
+            if let indexes = low[finish], !indexes.isEmpty { entry["low"] = indexes.map { $0 + count - prices.count } }
+            raw[finish] = entry
+        }
+        let object: [String: Any] = ["days": days, "products": [String(productID): raw], "version": 1]
+        try writeHistoryFile(game: game, data: JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+    }
+
+    /// Writes `data` as `<root>/user/<game>.prices.json` of the running test's root, as it is.
+    func writeHistoryFile(game: String, data: Data) throws {
+        let folder = try XCTUnwrap(root).appending(path: "user", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try data.write(to: folder.appending(path: "\(game).prices.json"))
+    }
+
     /// Replaces `<root>/user/<game>.json` while the app runs, as another device does: a coordinated write, which the app's
     /// folder presenter reports, so the app reads the file again.
     func changeUserFile(game: String, json: String) throws {

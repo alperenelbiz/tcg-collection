@@ -119,6 +119,11 @@ struct CardPageView: View {
                           deckCard: DeckCardToAdd(cardKey: cardKey, name: shown.cardName,
                                                   kind: model.deckKind(game: game, printings: printings),
                                                   productID: shown.productID))
+            // A39: the price history after the Decks block, before the rules text. One state per printing (`id`): the
+            // finish picked on one printing is not carried to another.
+            RuleLine()
+            historyBlock(shown: shown, game: game, offered: finishes.map(\.finish))
+                .id("\(game.id)|\(shown.productID)")
             if !shown.rulesText.isEmpty {
                 RuleLine()
                 // Selection is set on single texts only: on a container it takes the taps of the printing rows.
@@ -126,6 +131,7 @@ struct CardPageView: View {
                     .font(Theme.bodyFont)
                     .foregroundStyle(Theme.text)
                     .textSelection(.enabled)
+                    .accessibilityIdentifier("card-rules-text")
             }
             if printings.count > 1 {
                 RuleLine()
@@ -133,6 +139,17 @@ struct CardPageView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The price history of the shown printing over the page's finish lines (the same lines as `OwnedFinishes`: the price
+    /// table's finishes, then every owned or for-sale finish it does not list), with the copies owned per finish.
+    private func historyBlock(shown: ProductRecord, game: GameDefinition, offered: [String]) -> some View {
+        let library = model.library
+        let rows = library.rows(game: game.id).filter { $0.productID == shown.productID }
+        let sale = library.forSale(game: game.id).filter { $0.productID == shown.productID }
+        let lines = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish) + sale.map(\.finish))
+        let owned = Dictionary(rows.map { ($0.finish, $0.count) }, uniquingKeysWith: +)
+        return PriceHistoryView(gameID: game.id, productID: shown.productID, finishes: lines, owned: owned, cardKey: cardKey)
     }
 
     /// Each printing of the card as the pin line names it: set, number, rarity, and its first finish line (the price
