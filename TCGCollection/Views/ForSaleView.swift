@@ -91,6 +91,9 @@ struct ForSaleView: View {
                     Button(choice.label) { sell(choice) }
                 }
                 Button("Cancel", role: .cancel) { sold.cancel() }
+            } message: { dialog in
+                // E9: the decks the sale leaves short; made at each opening (the dialog does not redraw while open).
+                if let message = dialog.message { Text(message) }
             }
             .onChange(of: live) { _, live in follow(live) }
             .task(id: join) { await state.join.run(join, model: model) }
@@ -137,7 +140,10 @@ struct ForSaleView: View {
                 CountControl(count: entry.row.count, label: "\(entry.name), \(entry.row.finish), for sale", maximum: owned,
                              prefix: "for-sale", key: suffix) { step(by: $0 - entry.row.count, entry: entry) }
                 Spacer(minLength: 0)
-                Button("Sold") { sold.ask(key: entry.id, name: entry.name, forSale: entry.row.count) }
+                Button("Sold") {
+                    sold.ask(key: entry.id, name: entry.name, forSale: entry.row.count,
+                             message: soldMessage(entry, forSale: entry.row.count))
+                }
                     .buttonStyle(FieldButtonStyle())
                     .disabled(sold.isOpen)
                     .accessibilityLabel("Sold \(entry.name), \(entry.row.finish)")
@@ -174,8 +180,21 @@ struct ForSaleView: View {
         Task { @MainActor in
             try? await Task.sleep(for: Self.reopenPause)
             let sheetOpen = model.showsSheet || state.export.made != nil
-            _ = sold.reopen(token, sheetOpen: sheetOpen) { model.library.forSaleCount(game: state.gameID, key: $0) }
+            let entries = state.content(sale: model.library.forSale(game: state.gameID))?.entries ?? []
+            _ = sold.reopen(token, sheetOpen: sheetOpen, live: { model.library.forSaleCount(game: state.gameID, key: $0) },
+                            message: { key, count in
+                                entries.first { $0.id == key }.flatMap { soldMessage($0, forSale: count) }
+                            })
         }
+    }
+
+    /// E9: the Sold dialog's message for `entry` with `count` copies for sale: the active decks of the game that the sale
+    /// leaves short (`SaleList.soldMessage`, with the library's decks and sharing answers), nil for none.
+    private func soldMessage(_ entry: CollectionEntry, forSale count: Int) -> String? {
+        guard let game = Games.game(state.gameID) else { return nil }
+        let library = model.library
+        return SaleList.soldMessage(for: entry, forSale: count, game: game, decks: library.decks(game: state.gameID),
+                                    sharing: library.sharing(game: state.gameID))
     }
 
     /// C7, a choice of the dialog: its copies of its printing leave the collection and the list, and one sold record is

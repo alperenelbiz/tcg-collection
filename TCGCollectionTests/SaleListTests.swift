@@ -195,4 +195,83 @@ struct SaleListTests {
         #expect(SaleList.follow(shown: 2, live: 0) == .close)
         #expect(SaleList.follow(shown: 2, live: -1) == .close)
     }
+
+    // MARK: - E9: the Sold dialog names the decks a sale leaves short
+
+    private let riftbound = Games.game("riftbound")!
+
+    /// A for-sale printing of Dockside Lock-Up (721334, Normal): `forSale` copies for sale, `owned` copies of the card
+    /// over all its printings (the Collection join's `copiesOfCard`).
+    private func saleEntry(forSale: Int, owned: Int, name: String = "Dockside Lock-Up", id: Int = 721334) -> CollectionEntry {
+        CollectionEntry(row: CollectionRow(productID: id, finish: "Normal", count: forSale, condition: "", name: name),
+                        product: product(id: id, name: name), setName: "", price: nil, copiesOfCard: owned)
+    }
+
+    private func deck(_ name: String, use: Int, card: String = "dockside lock up", active: Bool = true) -> Deck {
+        Deck(id: "id-\(name)", name: name, format: "standard", active: active,
+             cards: [DeckCard(cardKey: card, name: "Dockside Lock-Up", section: "main", count: use)])
+    }
+
+    /// E9: an active deck that uses every owned copy (owned 3, use 3): selling one leaves it short, and the message names
+    /// it. Owned 5, use 3, 1 for sale: nothing. 2 for sale of owned 4, use 3: "Sold 1" leaves Wind whole, "Sold all 2"
+    /// does not: the message is the one of all. A deck that is not active: nothing (A14).
+    @Test func theSoldMessageNamesTheDecksASaleLeavesShort() {
+        let wind = [deck("Wind", use: 3)]
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 1, owned: 3), forSale: 1, game: riftbound, decks: wind, sharing: [:])
+                == "You use this card in Wind. If you sell it the deck will miss a copy.")
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 1, owned: 5), forSale: 1, game: riftbound, decks: wind, sharing: [:])
+                == nil)
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 2, owned: 4), forSale: 2, game: riftbound, decks: wind, sharing: [:])
+                == "You use this card in Wind. If you sell it the deck will miss a copy.")
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 1, owned: 3), forSale: 1, game: riftbound,
+                                     decks: [deck("Wind", use: 3, active: false)], sharing: [:]) == nil)
+        // No deck uses the card: nothing.
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 1, owned: 3), forSale: 1, game: riftbound, decks: [], sharing: [:])
+                == nil)
+    }
+
+    /// "Sold 1" leaves Wind short; "Sold all 3" leaves Wind and Cheap short (served in deck order): the message of all.
+    /// When one copy already leaves both short, it names both.
+    @Test func theSoldMessageOfAllWhenAllLeavesMoreDecksShort() {
+        let decks = [deck("Wind", use: 2), deck("Cheap", use: 2)]
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 3, owned: 4), forSale: 3, game: riftbound, decks: decks,
+                                     sharing: ["dockside lock up": false])
+                == "You use this card in Wind and Cheap. If you sell it a deck will miss a copy.")
+        // Shared: each deck sees all 4; selling 1 leaves 3, still over each use of 2; selling 3 leaves 1: both short.
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 3, owned: 4), forSale: 3, game: riftbound, decks: decks,
+                                     sharing: ["dockside lock up": true])
+                == "You use this card in Wind and Cheap. If you sell it a deck will miss a copy.")
+        #expect(SaleList.soldMessage(for: saleEntry(forSale: 1, owned: 4), forSale: 1, game: riftbound, decks: decks,
+                                     sharing: ["dockside lock up": true]) == nil)
+    }
+
+    /// Review Focus 4: a basic card (a Riftbound rune) is never in the message. A printing that left the catalog (no
+    /// product, so no card key): nothing.
+    @Test func noSoldMessageForABasicCardOrAPrintingThatLeftTheCatalog() {
+        let rune = saleEntry(forSale: 1, owned: 1, name: "Calm Rune (R02a)", id: 722282)
+        #expect(SaleList.soldMessage(for: rune, forSale: 1, game: riftbound,
+                                     decks: [deck("Wind", use: 12, card: "calm rune")], sharing: [:]) == nil)
+        let gone = CollectionEntry(row: CollectionRow(productID: 9, finish: "Normal", count: 1, condition: "", name: "Dockside Lock-Up"),
+                                   product: nil, setName: "", price: nil, copiesOfCard: 1)
+        #expect(SaleList.soldMessage(for: gone, forSale: 1, game: riftbound, decks: [deck("Wind", use: 3)], sharing: [:]) == nil)
+    }
+
+    /// The dialog carries its message (`SoldDialog.message`); "Sold" opens it with one; the reopen on a changed count makes
+    /// it again for the live count.
+    @Test func theDialogCarriesItsMessageAndTheReopenMakesItAgain() throws {
+        let text = "You use this card in Wind. If you sell it the deck will miss a copy."
+        #expect(SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: 2, generation: 1, message: text)?.message == text)
+        #expect(SaleList.soldDialog(key: dockside, name: "Dockside Lock-Up", forSale: 2, generation: 1)?.message == nil)
+        var state = SoldDialogState()
+        state.ask(key: dockside, name: "Dockside Lock-Up", forSale: 2, message: nil)
+        #expect(state.dialog?.message == nil)
+        let tokenStep = state.follow(live: 1)
+        let token = try #require(tokenStep)
+        let dockside = self.dockside
+        let opened = state.reopen(token, sheetOpen: false, live: { _ in 1 }, message: { key, count in
+            key == dockside && count == 1 ? text : nil
+        })
+        #expect(opened)
+        #expect(state.dialog?.message == text && state.dialog?.count == 1)
+    }
 }

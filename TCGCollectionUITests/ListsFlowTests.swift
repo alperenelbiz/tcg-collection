@@ -139,6 +139,47 @@ final class ListsFlowTests: UITestCase {
         shot("lists-09-collection-without-the-sold-printing")
     }
 
+    /// Phase 3B task 7 (E9, spec 5.6): an active deck "Wind" uses 3 Dockside Lock-Up, all 3 owned, 1 for sale. "Sold" opens
+    /// the dialog with the message "You use this card in Wind. If you sell it the deck will miss a copy." under its title
+    /// (a static text of the sheet); it adds no step: "Sold 1" sells at once. Wanted then lists the card `×1 · 1 for decks`.
+    func testSoldWarnsAboutADeck() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "for-sale"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "collection": [{"productID": 721334, "finish": "Normal", "count": 3, "condition": "", "name": "Dockside Lock-Up"}],
+             "forSale": [{"productID": 721334, "finish": "Normal", "count": 1, "name": "Dockside Lock-Up"}],
+             "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 3}]}]}
+            """)
+        }
+        let sold = element(app, "for-sale-sold-721334-Normal")
+        XCTAssertTrue(sold.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        // The join has read the printing (its set and price are in the label): the card key and owned copies are known.
+        XCTAssertTrue(waitUntil { self.element(app, "for-sale-cell-721334-Normal").label == "Dockside Lock-Up, ×1, Normal, Radiance, $5.12" },
+                      element(app, "for-sale-cell-721334-Normal").label)
+        sold.click()
+        let one = app.sheets.buttons["Sold 1"].firstMatch
+        XCTAssertTrue(one.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        let message = "You use this card in Wind. If you sell it the deck will miss a copy."
+        XCTAssertTrue(app.sheets.staticTexts.matching(Self.showing(message)).firstMatch.exists, app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.staticTexts.matching(Self.showing("Sold 1 of Dockside Lock-Up?")).firstMatch.exists)
+        shot("lists-05c-sold-dialog-names-a-deck", of: app.sheets.firstMatch)
+        one.click()
+        XCTAssertTrue(waitUntil { !app.sheets.firstMatch.exists }, "Sold 1 did not close the dialog")
+        XCTAssertTrue(waitUntil { (try? self.storedSold(game: "riftbound"))?.map(\.count) == [1] },
+                      "\(String(describing: try? storedSold(game: "riftbound")))")
+        XCTAssertTrue(waitUntil { (try? self.storedCollection(game: "riftbound"))
+                == [StoredRow(productID: 721334, finish: "Normal", count: 2, name: "Dockside Lock-Up")] },
+                      "\(String(describing: try? storedCollection(game: "riftbound")))")
+
+        element(app, "sidebar-wanted").click()
+        let cell = app.buttons["wanted-cell-dockside lock up"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 10), "the deck's card is not on Wanted")
+        XCTAssertTrue(waitUntil { cell.label == "Dockside Lock-Up, ×1, 1 for decks, $5.12" }, cell.label)
+        shot("lists-05d-wanted-after-sold-for-a-deck")
+    }
+
     /// Fix round 1, D4: a double click on "Sold 1" sells one copy once: one record, one copy less owned and for sale.
     /// Final fix C2: Return on the dialog is "Sold 1" (the default button), not "Sold all": it sells exactly one copy.
     func testADoubleClickOnSoldOneSellsOne() throws {

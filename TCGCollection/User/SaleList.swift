@@ -39,10 +39,32 @@ nonisolated enum SaleList {
 
     /// C7: the Sold dialog of a printing for its live for-sale count (`SoldDialog`: "Sold 1", and "Sold all <n>" when
     /// more than one copy is for sale). Nil when none is (the dialog closes). `generation` is the dialog's
-    /// (`SoldDialogState`); every choice carries it with the printing and its copies (A1).
-    static func soldDialog(key: PrintingKey, name: String, forSale count: Int, generation: Int) -> SoldDialog? {
+    /// (`SoldDialogState`); every choice carries it with the printing and its copies (A1). `message` is the line under
+    /// the title (E9, `soldMessage`), nil for none.
+    static func soldDialog(key: PrintingKey, name: String, forSale count: Int, generation: Int,
+                           message: String? = nil) -> SoldDialog? {
         guard count > 0 else { return nil }
-        return SoldDialog(key: key, name: name, count: count, generation: generation)
+        return SoldDialog(key: key, name: name, count: count, generation: generation, message: message)
+    }
+
+    /// E9 (spec 5.6): the Sold dialog's message for the for-sale printing `entry` with `count` copies for sale: the active
+    /// decks (`DeckNeeds.decksLeftShort`) that selling 1 copy leaves short; when "Sold all <count>" leaves more decks
+    /// short, those. Nil when no deck is left short, for a basic card (A8, Review Focus 4), and for a printing without a
+    /// product (it left the catalog, or the join has not read it: no card key). It never blocks a sale.
+    /// - The card key is the product's (`searchKey`, the deck cards' key); the copies owned of the card are the entry's
+    ///   `copiesOfCard` (every row of the card's printings over the Collection's last join).
+    /// - Basic: the deck rule (`DeckMaths.isBasic`, the deciding printing) on the one printing an entry has: the game's
+    ///   basic rule is by name, or (Magic) by the type line or a land's name, the same over a card's printings.
+    static func soldMessage(for entry: CollectionEntry, forSale count: Int, game: GameDefinition, decks: [Deck],
+                            sharing: [String: Bool]) -> String? {
+        guard count > 0, let product = entry.product else { return nil }
+        let key = product.searchKey
+        let isBasic = DeckMaths.isBasic(game: game, printings: [key: [product]])(key)
+        guard let need = WantedList.need(key, decks: decks, sharing: sharing, owned: entry.copiesOfCard,
+                                         isBasic: isBasic) else { return nil }
+        let one = DeckNeeds.decksLeftShort(need, selling: 1)
+        let all = count > 1 ? DeckNeeds.decksLeftShort(need, selling: count) : one
+        return DeckNeeds.soldMessage(decks: all.count > one.count ? all : one)
     }
 
     /// The system's dialog does not redraw while it is open (an alert sheet on the Mac). An open Sold dialog made for the
@@ -69,6 +91,9 @@ nonisolated struct SoldDialog: Equatable, Sendable {
     let count: Int
     /// The generation of `SoldDialogState` it was opened with.
     let generation: Int
+    /// E9: the line under the title naming the decks the sale leaves short (`SaleList.soldMessage`); nil for none. Made
+    /// at each opening: the system's dialog does not redraw while open.
+    let message: String?
 
     var title: String { "Sold \(count) of \(name)?" }
 
@@ -110,10 +135,10 @@ nonisolated struct SoldDialogState: Equatable, Sendable {
 
     var isOpen: Bool { dialog != nil }
 
-    /// "Sold" on a cell: the dialog of `key` for its for-sale count (none at 0).
-    mutating func ask(key: PrintingKey, name: String, forSale count: Int) {
+    /// "Sold" on a cell: the dialog of `key` for its for-sale count (none at 0), with its message (E9).
+    mutating func ask(key: PrintingKey, name: String, forSale count: Int, message: String? = nil) {
         close()
-        dialog = SaleList.soldDialog(key: key, name: name, forSale: count, generation: generation)
+        dialog = SaleList.soldDialog(key: key, name: name, forSale: count, generation: generation, message: message)
     }
 
     /// The live for-sale count of the open dialog's printing is now `live` (a reload, another window): the dialog stays
@@ -135,15 +160,18 @@ nonisolated struct SoldDialogState: Equatable, Sendable {
     }
 
     /// After the pause: the dialog closed by `follow` opens again with its printing's live count, when the generation is
-    /// still `token` (no cancel, choice or other dialog since), something is for sale, and no sheet is open. True when it
-    /// opened; either way no other reopen is to come for `token`.
-    mutating func reopen(_ token: Int, sheetOpen: Bool, live: (PrintingKey) -> Int) -> Bool {
+    /// still `token` (no cancel, choice or other dialog since), something is for sale, and no sheet is open. Its message
+    /// is made again for the live count (`message(key, live count)`, E9). True when it opened; either way no other reopen
+    /// is to come for `token`.
+    mutating func reopen(_ token: Int, sheetOpen: Bool, live: (PrintingKey) -> Int,
+                         message: (PrintingKey, Int) -> String? = { _, _ in nil }) -> Bool {
         guard generation == token, let closed = closedToReopen else { return false }
         guard !sheetOpen else {
             close()
             return false
         }
-        ask(key: closed.key, name: closed.name, forSale: live(closed.key))
+        let count = live(closed.key)
+        ask(key: closed.key, name: closed.name, forSale: count, message: message(closed.key, count))
         return dialog != nil
     }
 
