@@ -138,7 +138,7 @@ final class DecksFlowTests: UITestCase {
         let status = app.staticTexts["status-line"], list = app.outlines.firstMatch
         XCTAssertTrue(status.exists && list.exists, "no status line or sidebar list")
         XCTAssertLessThanOrEqual(list.frame.maxY, status.frame.minY + 0.5, "the list reaches under the status line: \(list.frame) \(status.frame)")
-        let rows = ["sidebar-collection", "sidebar-wanted", "sidebar-for-sale", "sidebar-deck-rb1", "sidebar-deck-rb9",
+        let rows = ["sidebar-collection", "sidebar-wanted", "sidebar-for-sale", "sidebar-sets", "sidebar-deck-rb1", "sidebar-deck-rb9",
                     "sidebar-decks-unreadable", "sidebar-new-deck", "sidebar-all-cards"].map { element(app, $0) }
             .filter { $0.exists && $0.frame.minY < list.frame.maxY }
         let last = try XCTUnwrap(rows.max { $0.frame.maxY < $1.frame.maxY }, "no sidebar row in the list's visible part")
@@ -595,7 +595,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(element(app, "deck-screen").exists)
     }
 
-    /// C2: the arrow keys in the sidebar go from the Collection down over Wanted, For Sale, each deck row and All cards; the
+    /// C2: the arrow keys in the sidebar go from the Collection down over Wanted, For Sale, Sets, each deck row and All cards; the
     /// unreadable-decks line and "New Deck…" are not selectable, so they are passed over.
     func testTheArrowKeysCrossTheDeckRows() throws {
         let app = try launch(game: "riftbound", extra: ["-screen", "collection"]) { _ in
@@ -605,7 +605,7 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(element(app, "sidebar-decks-unreadable").waitForExistence(timeout: 10))
         element(app, "sidebar-collection").click()
         let steps: [(row: String, title: String)] = [("sidebar-wanted", "Wanted"), ("sidebar-for-sale", "For Sale"),
-                                                     ("sidebar-deck-rb1", "Kai'Sa"), ("sidebar-deck-rb9", "Second"),
+                                                     ("sidebar-sets", "Sets"), ("sidebar-deck-rb1", "Kai'Sa"), ("sidebar-deck-rb9", "Second"),
                                                      ("sidebar-all-cards", "Riftbound")]
         for step in steps {
             app.typeKey(.downArrow, modifierFlags: [])

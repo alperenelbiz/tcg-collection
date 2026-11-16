@@ -65,12 +65,12 @@ final class CollectionFlowTests: UITestCase {
     }
 
     /// Task 4 fix 1: the drawn accent fill sits on the list's own selection, so the arrow keys still move it and the
-    /// screen follows. The rows are Collection, Wanted, For Sale (phase 2C), All cards.
+    /// screen follows. The rows are Collection, Wanted, For Sale (phase 2C), Sets (phase 4A), All cards.
     func testTheArrowKeysMoveTheSidebarSelection() {
         let app = launch(game: "riftbound", extra: ["-screen", "collection"])
         XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 20))
         element(app, "sidebar-collection").click()
-        // Lists: Collection, Wanted, For Sale; then Catalog: All cards.
+        // Lists: Collection, Wanted, For Sale, Sets; then Catalog: All cards.
         app.typeKey(.downArrow, modifierFlags: [])
         XCTAssertTrue(element(app, "wanted-screen").waitForExistence(timeout: 10))
         assertAccentFill(app, row: "sidebar-wanted")
@@ -78,11 +78,15 @@ final class CollectionFlowTests: UITestCase {
         XCTAssertTrue(element(app, "for-sale-screen").waitForExistence(timeout: 10))
         assertAccentFill(app, row: "sidebar-for-sale")
         app.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(element(app, "sets-screen").waitForExistence(timeout: 10))
+        assertAccentFill(app, row: "sidebar-sets")
+        app.typeKey(.downArrow, modifierFlags: [])
         XCTAssertTrue(element(app, "card-cell-dockside lock up").waitForExistence(timeout: 10))
         assertAccentFill(app, row: "sidebar-all-cards")
         // VoiceOver reads the selection from the row (the static text inside it is never "selected").
         let row = app.outlineRows.containing(.any, identifier: "sidebar-all-cards").firstMatch
         XCTAssertTrue(row.exists && row.isSelected, "the All cards row is not the list's selection")
+        app.typeKey(.upArrow, modifierFlags: [])
         app.typeKey(.upArrow, modifierFlags: [])
         app.typeKey(.upArrow, modifierFlags: [])
         app.typeKey(.upArrow, modifierFlags: [])

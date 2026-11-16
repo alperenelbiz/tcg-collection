@@ -48,6 +48,24 @@ struct RootViewTests {
         #expect(path.wrappedValue.count == 1)
     }
 
+    /// Phase 4A task 3: the Sets list keeps its pages (a set's page) across a sidebar switch, as the other lists do, and a
+    /// switch made by code shows its root.
+    @Test func theSetsListKeepsItsPages() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "sets"])
+        #expect(model.screen == .sets)
+        let stored = Stored()
+        let path = Binding(get: { stored.path }, set: { stored.path = $0 }).kept(on: .sets, in: model)
+        path.wrappedValue.append(SetPageTarget(groupID: 24819))  // a set opened on the list
+        model.screen = .collection                               // the sidebar
+        path.wrappedValue = NavigationPath()                     // the stack leaving: not taken
+        #expect(stored.path.count == 1)
+        model.screen = .sets                                     // the sidebar back: the kept page
+        #expect(path.wrappedValue.count == 1)
+        model.screen = .collection
+        model.showRoot(of: .sets)                                // a switch made by code
+        #expect(path.wrappedValue.isEmpty)
+    }
+
     /// The import shows the imported game's Collection at its root (fix round 2), not a page kept on it: a page opened on
     /// the Collection and kept across a sidebar switch is not what the import shows.
     @Test func anImportShowsTheCollectionsRoot() async {

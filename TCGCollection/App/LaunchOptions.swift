@@ -22,7 +22,7 @@ nonisolated struct LaunchOptions: Sendable {
     /// and "Use iCloud Drive" uses `<root>/icloud/TCG Collection`. For the UI test of the sheet; `UserFolder.setup` ignores
     /// it in a Release build and without `-store`.
     var askUserFolder = false
-    /// `-screen collection|wanted|for-sale|all-cards|deck:<id>`: the sidebar selection of this launch, for tests and
+    /// `-screen collection|wanted|for-sale|sets|all-cards|deck:<id>`: the sidebar selection of this launch, for tests and
     /// snapshots. Any other value is ignored (the stored selection is used); a deck the game's file lacks opens the
     /// Collection once the folder is read.
     var screen: Screen?

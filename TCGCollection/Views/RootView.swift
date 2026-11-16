@@ -12,6 +12,8 @@ struct RootView: View {
     @State private var wanted = WantedMemory()
     /// For Sale's search, sort, scroll position and pages, for the life of this window.
     @State private var forSale = ForSaleMemory()
+    /// The Sets list's scope, sort, search, rows and pages, for the life of this window.
+    @State private var sets = SetsMemory()
     /// Each deck page's search, pages and last join, for the life of this window.
     @State private var decks = DeckMemory()
 
@@ -41,6 +43,10 @@ struct RootView: View {
                 ListStack(path: Bindable(state).path.kept(on: .forSale, in: model)) { ForSaleView(state: state) }
                     .pdfSaving(state.export, model: model)
                     .id(model.gameID)
+            case .sets:
+                let state = sets.state(game: model.gameID)
+                ListStack(path: Bindable(state).path.kept(on: .sets, in: model)) { SetsView(state: state) }
+                    .id(model.gameID)
             case .allCards:
                 CatalogStack(gameID: model.gameID, state: catalog.state(game: model.gameID, search: model.options.search),
                              confirmRebuild: $confirmRebuild)
@@ -59,6 +65,7 @@ struct RootView: View {
             collection.keep(game: game)
             wanted.keep(game: game)
             forSale.keep(game: game)
+            sets.keep(game: game)
             decks.keep(game: game)
         }
         // A deck deleted (here, or on another device) drops its kept state at once. A view of its own reads the decks, so a
@@ -225,7 +232,7 @@ private struct Sidebar: View {
             // A control, not a selection: it does not take the accent.
             .tint(Theme.text)
             .accessibilityIdentifier("game-picker")
-            // Collection, Wanted, For Sale, in this order.
+            // Collection, Wanted, For Sale, Sets, in this order.
             Section("Lists") {
                 row(.collection, title: "Collection", icon: "rectangle.portrait.on.rectangle.portrait")
                     .accessibilityIdentifier("sidebar-collection")
@@ -233,6 +240,8 @@ private struct Sidebar: View {
                     .accessibilityIdentifier("sidebar-wanted")
                 row(.forSale, title: "For Sale", icon: "tag")
                     .accessibilityIdentifier("sidebar-for-sale")
+                row(.sets, title: "Sets", icon: "square.stack.3d.up")
+                    .accessibilityIdentifier("sidebar-sets")
             }
             SidebarDecks(selection: selection, activeDecks: activeDecks)
             Section("Catalog") {

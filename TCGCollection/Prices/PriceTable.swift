@@ -8,6 +8,22 @@ nonisolated struct GamePrices: Codable, Sendable {
     var rows: [Int: [Int: Price]]
 }
 
+nonisolated extension GamePrices {
+    /// The product's prices per finish, in the table's finish order.
+    func prices(productID: Int) -> [FinishPrice] {
+        guard let byFinish = rows[productID] else { return [] }
+        return byFinish.keys.sorted().compactMap { index in
+            guard finishes.indices.contains(index) else { return nil }
+            return FinishPrice(finish: finishes[index], price: byFinish[index]!)
+        }
+    }
+
+    /// A printing's own price: its product's price for its finish, the finish as written; nil when there is none.
+    func shown(key: PrintingKey) -> ShownPrice? {
+        prices(productID: key.productID).first { $0.finish == key.finish }?.price.shown
+    }
+}
+
 nonisolated struct FinishPrice: Sendable, Equatable {
     let finish: String
     let price: Price
@@ -34,17 +50,17 @@ final class PriceTable {
     }
 
     func prices(game: String, productID: Int) -> [FinishPrice] {
-        guard let table = games[game], let byFinish = table.rows[productID] else { return [] }
-        return byFinish.keys.sorted().compactMap { index in
-            guard table.finishes.indices.contains(index) else { return nil }
-            return FinishPrice(finish: table.finishes[index], price: byFinish[index]!)
-        }
+        games[game]?.prices(productID: productID) ?? []
     }
 
     /// A printing's own price: its product's price for its finish, the finish as written; nil when there is none.
     func shown(game: String, key: PrintingKey) -> ShownPrice? {
-        prices(game: game, productID: key.productID).first { $0.finish == key.finish }?.price.shown
+        games[game]?.shown(key: key)
     }
+
+    /// The game's whole table as a value, to read off the main thread (the Sets list's rows). A copy costs nothing: the
+    /// dictionaries are shared until one side changes.
+    func table(game: String) -> GamePrices? { games[game] }
 
     /// The lowest market price over the printings. A low price counts only when no printing has a market price.
     func cheapest(game: String, productIDs: [Int]) -> ShownPrice? {

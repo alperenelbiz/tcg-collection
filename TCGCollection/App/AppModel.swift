@@ -22,6 +22,8 @@ nonisolated enum Screen: Hashable, Sendable {
     case collection
     case wanted
     case forSale
+    /// The game's sets, how much of each master set is owned (phase 4A).
+    case sets
     case allCards
     /// One deck of the game on screen, by its id.
     case deck(String)
@@ -33,6 +35,7 @@ nonisolated enum Screen: Hashable, Sendable {
         case "collection": self = .collection
         case "wanted": self = .wanted
         case "for-sale": self = .forSale
+        case "sets": self = .sets
         case "all-cards": self = .allCards
         case _ where storedValue.hasPrefix(Self.deckPrefix) && storedValue.count > Self.deckPrefix.count:
             self = .deck(String(storedValue.dropFirst(Self.deckPrefix.count)))
@@ -45,12 +48,13 @@ nonisolated enum Screen: Hashable, Sendable {
         case .collection: "collection"
         case .wanted: "wanted"
         case .forSale: "for-sale"
+        case .sets: "sets"
         case .allCards: "all-cards"
         case .deck(let id): Self.deckPrefix + id
         }
     }
 
-    /// A list of the user's (the Collection, Wanted, For Sale, a deck): it shows the library's lines (a problem, a settled
+    /// A list of the user's (the Collection, Wanted, For Sale, Sets, a deck): it shows the library's lines (a problem, a settled
     /// conflict) itself, on the screen and its pages. On any other screen the sidebar shows them.
     var isList: Bool { self != .allCards }
 
@@ -191,6 +195,9 @@ final class AppModel {
     /// catalog step that changed the game and at launch for a game with products and no file (`requestSetIndex`). A game
     /// with no entry has no index yet. Observed: the Sets screen reads it.
     private(set) var setIndexes: [String: SetIndex] = [:]
+    /// Goes up for a game each time this run stores a new index of it (`scanSetIndex`), so the Sets list makes its rows
+    /// again (`SetsKey`) without comparing two indexes of a whole game. 0 for the index read at launch.
+    private(set) var setIndexVersions: [String: Int] = [:]
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
@@ -910,6 +917,7 @@ final class AppModel {
             let index = try await scan.setIndex(game: request.game)
             guard !Task.isCancelled else { return }
             setIndexes[request.game] = index
+            setIndexVersions[request.game, default: 0] += 1
             try? index.write(to: paths.sets(request.game))
         } catch {
             return

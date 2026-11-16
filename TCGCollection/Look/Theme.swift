@@ -55,6 +55,10 @@ nonisolated enum Theme {
     static let tableFinishWidth: CGFloat = 120
     static let tableNumberWidth: CGFloat = 72
     static let tableChoiceWidth: CGFloat = 88
+    /// The Sets list's columns, right-aligned and fixed, so the numbers of every row stand in one column: the count
+    /// (`1000 / 1000` at 13 pt) and the price of the missing targets (`$12,345.67 + 123 without a price` at 12 pt).
+    static let setCountWidth: CGFloat = 96
+    static let setCostWidth: CGFloat = 220
     /// Between two rows of a table.
     static let tableRowSpacing: CGFloat = 6
     /// Between a heading and the line under it (a sheet's title and its summary, a game and why it is not imported).
