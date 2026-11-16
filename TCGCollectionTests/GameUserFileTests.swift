@@ -1012,6 +1012,42 @@ struct GameUserFileTests {
         #expect(try GameUserFile(data: Data(#"{"profile":null}"#.utf8)).profile == .all)
     }
 
+    /// Task 1's gaps (final fix C): `[]` and `7` are profiles this build cannot read (on, the raw value kept until a
+    /// `setProfile`); a `null` member is on and is no unreadable member.
+    @Test func moreProfilesThatAreNotObjects() throws {
+        for (text, raw) in [("[]", [Any]() as Any), ("7", 7 as Any)] {
+            var file = try GameUserFile(data: Data(#"{"version":1,"collection":[],"profile":\#(text)}"#.utf8))
+            #expect(file.profile == .all, "\(text)")
+            file.collection = [CollectionRow(productID: 1, finish: "Normal", count: 1, condition: "", name: "A")]
+            #expect((try #require(try profileValue(file)) as AnyObject).isEqual(raw), "\(text)")
+            var replaced = file
+            replaced.setProfile(GameProfile(followed: false))
+            #expect(try GameUserFile(data: try replaced.data()).profile == GameProfile(followed: false), "\(text)")
+        }
+        let nullMember = try GameUserFile(data: Data(#"{"version":1,"collection":[],"profile":{"collector":null}}"#.utf8))
+        #expect(nullMember.profile == .all)
+        #expect(try GameUserFile(data: try nullMember.data()).profile == .all)
+    }
+
+    /// Task 1's gaps (final fix C): the mixed case (an unreadable member beside a readable one and an unknown key). A
+    /// collection change writes the raw `profile` back as it was; `setProfile` writes the three members (the readable
+    /// one as read unless changed) and keeps the unknown key.
+    @Test func theMixedProfileIsKeptThroughAChangeAndASetProfile() throws {
+        let json = #"{"version":1,"collection":[],"profile":{"followed":"no","collector":false,"note":"x"}}"#
+        var file = try GameUserFile(data: Data(json.utf8))
+        #expect(file.profile == GameProfile(followed: true, player: true, collector: false))
+        file.collection = [CollectionRow(productID: 1, finish: "Normal", count: 1, condition: "", name: "A")]
+        let kept = try #require(try profileValue(file) as? [String: Any])
+        #expect(kept["followed"] as? String == "no"); #expect(kept["collector"] as? Bool == false)
+        #expect(kept["note"] as? String == "x"); #expect(kept.count == 3)
+        var set = file
+        set.setProfile(GameProfile(followed: true, player: false, collector: false))
+        let written = try #require(try profileValue(set) as? [String: Any])
+        #expect(written["followed"] as? Bool == true); #expect(written["player"] as? Bool == false)
+        #expect(written["collector"] as? Bool == false); #expect(written["note"] as? String == "x")
+        #expect(try GameUserFile(data: try set.data()).profile == GameProfile(followed: true, player: false, collector: false))
+    }
+
     /// G1: a member that is not there is on.
     @Test func aMissingMemberIsOn() throws {
         let file = try GameUserFile(data: Data(#"{"version":1,"profile":{"player":false}}"#.utf8))
