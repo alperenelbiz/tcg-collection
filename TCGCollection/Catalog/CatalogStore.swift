@@ -537,6 +537,29 @@ actor CatalogStore: ModelActor {
         return FacetLists(rarities: rarities.sorted(), types: types)
     }
 
+    /// The set index of a game (F3, F4): one scan of its products in pages of `pageSize` rows by product id (each page
+    /// starts after the last id read), keeping only the set, number, name and id of each row; then each set's products
+    /// in card-number order (`SetOrder`). A set without a product is not in it. A long scan: run it on a throwaway store
+    /// on the container, never on `reader` or the writer. Cancellation stops it between pages.
+    func setIndex(game: String, pageSize: Int = 2_000) throws -> SetIndex {
+        typealias Entry = (number: String, name: String, id: Int)
+        var bySet: [Int: [Entry]] = [:]
+        var last = Int.min
+        while true {
+            try Task.checkCancellation()
+            let after = last
+            var descriptor = FetchDescriptor<CatalogProduct>(predicate: #Predicate { $0.gameID == game && $0.productID > after },
+                                                             sortBy: [SortDescriptor(\.productID)])
+            descriptor.fetchLimit = max(pageSize, 1)
+            descriptor.propertiesToFetch = [\.productID, \.groupID, \.number, \.name]
+            let page = try modelContext.fetch(descriptor)
+            for row in page { bySet[row.groupID, default: []].append((row.number, row.name, row.productID)) }
+            guard page.count == descriptor.fetchLimit, let end = page.last else { break }
+            last = end.productID
+        }
+        return SetIndex(sets: bySet.mapValues { $0.sorted(by: SetOrder.precedes).map(\.id) })
+    }
+
     /// One scan each: kept for the catalog report; the views read `facetLists`.
     func rarities(game: String) throws -> [String] {
         try distinct(game: game) { [$0.rarity] }

@@ -694,6 +694,52 @@ struct AppModelTests {
         #expect(second.facets(game: "riftbound") == lists)                          // before any store read
     }
 
+    /// F3: a launch on a root with products and no sets file makes the file and the index, also offline; a game without
+    /// products gets none.
+    @MainActor @Test func aMissingSetIndexIsMadeFromTheStoreAtLaunch() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore,
+                                   products: [product(id: 2, number: "10"), product(id: 1, number: "2"), product(id: 3, number: "")])
+        let model = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(model.setIndexes["riftbound"] == nil)
+        await model.start()
+        #expect(model.setIndexes["riftbound"] == SetIndex(sets: [1: [1, 2, 3]]))
+        #expect(SetIndex.read(paths.sets("riftbound")) == model.setIndexes["riftbound"])
+        #expect(model.setIndexes["yu-gi-oh"] == nil)
+        #expect(!FileManager.default.fileExists(atPath: paths.sets("yu-gi-oh").path))
+    }
+
+    /// F3: a launch with the sets file reads it before any store read and does not scan: a made-up file that differs
+    /// from the store is kept as it is.
+    @MainActor @Test func aSetIndexFileIsReadAtLaunchWithoutAScan() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try await writeClosedStore(at: paths.catalogStore, products: [product(id: 1, number: "1")])
+        let first = model(["app", "-store", root.path, "-offline", "YES"])
+        await first.start()                                                         // makes the facets and sets files
+        #expect(first.setIndexes["riftbound"] == SetIndex(sets: [1: [1]]))
+        let madeUp = SetIndex(sets: [77: [5, 6]])
+        try madeUp.write(to: paths.sets("riftbound"))
+        let second = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(second.setIndexes["riftbound"] == madeUp)                            // before any store read
+        await second.start()
+        #expect(second.setIndexes["riftbound"] == madeUp)                            // no scan replaced it
+        #expect(SetIndex.read(paths.sets("riftbound")) == madeUp)
+    }
+
+    /// F3: a catalog step that changed a game writes its set index, as it writes the facets file.
+    @MainActor @Test func theSetIndexIsWrittenAfterASync() async throws {
+        let root = tempRoot()
+        let first = model(["app", "-store", root.path])
+        await first.start()
+        let index = try #require(first.setIndexes["riftbound"])
+        #expect(!index.sets.isEmpty)
+        #expect(SetIndex.read(AppPaths(root: root).sets("riftbound")) == index)
+        let second = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(second.setIndexes["riftbound"] == index)
+    }
+
     /// The owner's migrated store has no facets files: the lists are computed once at launch, also offline.
     @MainActor @Test func aMissingFilterFileIsMadeFromTheStoreAtLaunch() async throws {
         let root = tempRoot()

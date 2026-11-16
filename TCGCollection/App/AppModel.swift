@@ -187,6 +187,9 @@ final class AppModel {
     /// The Rarity and Type menu values per game: read from `facets-<game>.json` at launch, rewritten after a catalog
     /// step that changed the game. A game with no entry shows empty menus.
     @ObservationIgnored private var facetLists: [String: FacetLists] = [:]
+    /// Each game's set index (F3): read from `sets-<game>.json` at launch, made again where the filter lists are
+    /// (`storeFacetLists(of:)`). A game with no entry has no index yet. Observed: the Sets screen reads it.
+    private(set) var setIndexes: [String: SetIndex] = [:]
 
     /// Set by `-card`: the card page the window opens once. `RootView` takes it and clears it.
     var pendingCard: CardTarget?
@@ -350,10 +353,13 @@ final class AppModel {
         priceSync = PriceSync(paths: paths, client: archiveClient)
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
+        var indexes: [String: SetIndex] = [:]
         for game in Games.all {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
+            if let index = SetIndex.read(paths.sets(game.id)) { indexes[game.id] = index }
         }
         gameID = [options.game, saved].compactMap { $0 }.first { Games.game($0) != nil } ?? Games.all[0].id
+        setIndexes = indexes
         screen = options.screen ?? defaults.string(forKey: Self.screenKey).flatMap(Screen.init(storedValue:)) ?? .collection
         #if DEBUG
         launchPDF = options.launchPDF(isDebugBuild: Self.isDebugBuild)
@@ -797,26 +803,45 @@ final class AppModel {
     }
 
     /// A game with products and no facets file (a store migrated from phase 1 has none) gets its lists computed once
-    /// (`storeFacetLists`), so the menus do not wait for a sync.
+    /// (`storeFacetLists`), so the menus do not wait for a sync. A game with products and no set index file (a store from
+    /// before phase 4A) gets its index made the same way (F3); a game that lacks only the index is not scanned for its
+    /// lists again.
     private func writeMissingFacetLists() async {
         let chosen = gameID
         var wrote = false
-        for game in Games.all.sorted(by: { $0.id == chosen && $1.id != chosen }) where facetLists[game.id] == nil {
+        for game in Games.all.sorted(by: { $0.id == chosen && $1.id != chosen })
+        where facetLists[game.id] == nil || setIndexes[game.id] == nil {
             guard (try? await reader.progress(game: game.id))?.fetched ?? 0 > 0 else { continue }
-            wrote = await storeFacetLists(of: game) || wrote
+            if facetLists[game.id] == nil {
+                wrote = await storeFacetLists(of: game) || wrote
+            } else {
+                await storeSetIndex(of: game, on: CatalogStore(modelContainer: store.modelContainer))
+            }
         }
         if wrote { filtersVersion += 1 }
     }
 
-    /// Reads a game's lists from the store, keeps them in memory and writes the file. False when the store read failed.
-    /// The scan (2.6 s for Magic) runs on a store of its own on the same container, released after it, so a search or a
-    /// card page on `reader` does not wait behind it (M1).
+    /// Reads a game's lists from the store, keeps them in memory and writes the file, then does the same for its set
+    /// index (F3), on the same scan store. False when the lists' store read failed (the index's result does not change
+    /// it). The scans (2.6 s for Magic's lists) run on a store of their own on the same container, released after them,
+    /// so a search or a card page on `reader` does not wait behind them (M1).
     private func storeFacetLists(of game: GameDefinition) async -> Bool {
         let scan = CatalogStore(modelContainer: store.modelContainer)
-        guard let lists = try? await scan.facetLists(game: game.id) else { return false }
-        facetLists[game.id] = lists
-        try? lists.write(to: paths.facets(game.id))
-        return true
+        let lists = try? await scan.facetLists(game: game.id)
+        if let lists {
+            facetLists[game.id] = lists
+            try? lists.write(to: paths.facets(game.id))
+        }
+        await storeSetIndex(of: game, on: scan)
+        return lists != nil
+    }
+
+    /// Makes a game's set index on `scan` (a throwaway store), keeps it and writes `sets-<game>.json`, as the lists are
+    /// kept. A failed scan keeps the old index and the old file.
+    private func storeSetIndex(of game: GameDefinition, on scan: CatalogStore) async {
+        guard let index = try? await scan.setIndex(game: game.id) else { return }
+        setIndexes[game.id] = index
+        try? index.write(to: paths.sets(game.id))
     }
 
     /// `-card <productId>`: switches to the product's game and to All cards (card pages live there), and asks the window

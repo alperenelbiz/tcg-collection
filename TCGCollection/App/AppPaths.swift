@@ -47,6 +47,8 @@ nonisolated struct AppPaths: Sendable {
     }
     func prices(_ gameID: String) -> URL { support.appending(path: "prices-\(gameID).json") }
     func facets(_ gameID: String) -> URL { support.appending(path: "facets-\(gameID).json") }
+    /// The set index of a game (F3): `support/sets-<game>.json`.
+    func sets(_ gameID: String) -> URL { support.appending(path: "sets-\(gameID).json") }
     var ygoIndex: URL { support.appending(path: "ygo-index.json") }
     var archives: URL { caches.appending(path: "archives", directoryHint: .isDirectory) }
     var pictures: URL { caches.appending(path: "pictures", directoryHint: .isDirectory) }

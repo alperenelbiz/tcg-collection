@@ -334,6 +334,29 @@ struct CatalogStoreTests {
         let reader = CatalogStore(modelContainer: writer.modelContainer)
         #expect(await writer.runsOnMainThread() == false)
         #expect(await reader.runsOnMainThread() == false)
+        // The set index's scan runs on a throwaway store, called from the main actor as `AppModel` does.
+        let scan = CatalogStore(modelContainer: writer.modelContainer)
+        #expect(try await scan.setIndex(game: "riftbound") == SetIndex(sets: [:]))
+        #expect(await scan.runsOnMainThread() == false)
+    }
+
+    /// Two sets (3 and 2 products, numbers out of order, one without a number): each in card-number order, small pages
+    /// so the scan crosses page ends; another game's products are not in it; a set whose products went is not in it.
+    @Test func theSetIndexListsEachSetInCardNumberOrder() async throws {
+        let s = try CatalogStore.inMemory()
+        try await s.replaceProducts(of: 1, with: [product(id: 30, groupID: 1, name: "C", number: "10"),
+                                                  product(id: 31, groupID: 1, name: "A", number: ""),
+                                                  product(id: 32, groupID: 1, name: "B", number: "2")], at: .now)
+        try await s.replaceProducts(of: 2, with: [product(id: 40, groupID: 2, name: "E", number: "OGN-002"),
+                                                  product(id: 41, groupID: 2, name: "D", number: "OGN-001")], at: .now)
+        try await s.replaceProducts(of: 3, with: [product(id: 50, groupID: 3, name: "F", number: "1")], at: .now)
+        try await s.replaceProducts(of: 9, with: [product(id: 60, game: "cyberpunk", groupID: 9, name: "G", number: "1")], at: .now)
+        #expect(try await s.setIndex(game: "riftbound", pageSize: 2) == SetIndex(sets: [1: [32, 30, 31], 2: [41, 40], 3: [50]]))
+        try await s.replaceProducts(of: 3, with: [], at: .now)                       // every product of set 3 removed
+        let index = try await s.setIndex(game: "riftbound", pageSize: 2)
+        #expect(index == SetIndex(sets: [1: [32, 30, 31], 2: [41, 40]]))
+        #expect(index.groupOf[50] == nil)
+        #expect(try await s.setIndex(game: "cyberpunk") == SetIndex(sets: [9: [60]]))
     }
 
     /// The writer is busy with one long set; a read through the reader ends before that write does.
