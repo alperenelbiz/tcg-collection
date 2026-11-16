@@ -90,9 +90,10 @@ struct PriceChartTests {
         #expect(PriceChart(points: [], window: window).xDomain == chart.xDomain)
     }
 
-    @Test func theLabelsDoNotDependOnTheDevicesTimeZone() {
-        // Dates are UTC noon: in every zone from UTC−11 to UTC+11 the day is the same, and the labels are not formatted
-        // with the device's locale or zone.
+    @Test func theLabelsAndDatesComeFromTheUTCDay() {
+        // The labels are built from the `yyyy-MM-dd` strings (no formatter of the device's locale or zone), and every
+        // date is UTC noon of its day.
+        #expect(chart([]).xTicks.map(\.date) == ["2026-08-19", "2026-09-18", "2026-10-18", "2026-11-16"].map(noon))
         let chart = chart([point("2026-10-03", 11.9), point("2026-10-04", 12)])
         #expect(chart.xTicks.map(\.label) == ["Aug 19", "Sep 18", "Oct 18", "Nov 16"])
         #expect(chart.nearest(to: noon("2026-10-03"))?.text == "$11.90 · Oct 3")
@@ -103,9 +104,20 @@ struct PriceChartTests {
     @Test func yTicksAreThreeRoundSteps() {
         #expect(yLabels([10.20, 13.90]) == ["$10", "$12", "$14"])
         #expect(yLabels([0.11, 0.24]) == ["$0.10", "$0.20", "$0.30"])
-        #expect(yLabels([5.00, 5.00, 5.00]) == ["$4", "$5", "$6"])
+        #expect(yLabels([5.00, 5.00, 5.00]) == ["$4.50", "$5.00", "$5.50"])
+        #expect(yLabels([12.34, 12.34]) == ["$10", "$12", "$14"])
+        #expect(yLabels([7.5, 7.5]) == ["$6", "$8", "$10"])
         #expect(yLabels([0.01]) == ["$0.00", "$0.01", "$0.02"])
-        #expect(yLabels([3950, 4010]) == ["$3,950", "$4,000", "$4,050"])
+        #expect(yLabels([3950, 4010]) == ["$3,500", "$4,000", "$4,500"])
+        #expect(yLabels([0.01, 4000]) == ["$0", "$2,000", "$4,000"])
+    }
+
+    @Test func aRangeUnderTwentyPercentOfThePriceIsWidened() {
+        // 10.20…10.25 is 0.05 wide, under 20 % of 10.25 (2.05): the ticks cover 9.20…11.25 around 10.225.
+        let ticks = chart([point("2026-11-01", 10.20), point("2026-11-02", 10.25)]).yTicks
+        #expect(ticks.map(\.label) == ["$8", "$10", "$12"])
+        #expect(ticks[0].value <= 9.2 + 1e-9)
+        #expect(ticks[2].value >= 11.25 - 1e-9)
     }
 
     @Test func yTickValuesCoverTheRange() {
@@ -143,6 +155,41 @@ struct PriceChartTests {
         #expect(low.summary == ChartSummary(price: "~$3.00", change: "−$0.40 in 12 days"))
         let flat = chart([point("2026-10-01", 5), point("2026-10-15", 5.2), point("2026-10-30", 5)])
         #expect(flat.summary == ChartSummary(price: "$5.00", change: "no change in 30 days"))
+    }
+
+    @Test func aLowDayAloneBetweenMarketDaysIsDashedOnBothSides() {
+        let chart = chart([point("2026-11-01", 1), point("2026-11-02", 2, low: true), point("2026-11-03", 3)])
+        #expect(chart.runs == [PriceChart.Run(points: [chartPoint("2026-11-01", 1), chartPoint("2026-11-02", 2),
+                                                       chartPoint("2026-11-03", 3)], isLow: true)])
+        #expect(chart.dots.isEmpty)
+    }
+
+    @Test func twoLowDaysAtTheWindowsStartAreOneLowRun() {
+        let chart = chart([point("2026-08-19", 1, low: true), point("2026-08-20", 2, low: true), point("2026-08-21", 3),
+                           point("2026-08-22", 4)])
+        #expect(chart.runs == [
+            PriceChart.Run(points: [chartPoint("2026-08-19", 1), chartPoint("2026-08-20", 2), chartPoint("2026-08-21", 3)],
+                           isLow: true),
+            PriceChart.Run(points: [chartPoint("2026-08-21", 3), chartPoint("2026-08-22", 4)], isLow: false),
+        ])
+    }
+
+    @Test func aLowDayAloneIsADotWithALowReadout() {
+        let chart = chart([point("2026-11-01", 1), point("2026-11-02", 2), point("2026-11-05", 3.5, low: true)])
+        #expect(chart.dots == [chartPoint("2026-11-05", 3.5)])
+        #expect(chart.nearest(to: noon("2026-11-05"))?.text == "~$3.50 · Nov 5")
+        #expect(chart.summary?.price == "~$3.50")
+    }
+
+    @Test func aPointThatIsNotAPriceIsLeftOut() {
+        let chart = chart([point("2026-11-01", .nan), point("2026-11-02", .infinity), point("2026-11-03", -1),
+                           point("2026-11-04", 2), point("2026-11-05", 3), point("2026-11-06", -.infinity)])
+        #expect(chart.runs == [PriceChart.Run(points: [chartPoint("2026-11-04", 2), chartPoint("2026-11-05", 3)],
+                                              isLow: false)])
+        #expect(chart.dots.isEmpty)
+        #expect(chart.yTicks.count == 3)
+        #expect(chart.summary == ChartSummary(price: "$3.00", change: "+$1.00 in 2 days"))
+        #expect(PriceChart(points: [point("2026-11-01", .nan)], window: window).note == "No price in the last 90 days.")
     }
 
     @Test func aChangeUnderACentIsNoChange() {

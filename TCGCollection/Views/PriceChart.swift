@@ -65,7 +65,7 @@ nonisolated struct PriceChart: Equatable, Sendable {
 
     init(points: [HistoryPoint], window: ClosedRange<String>) {
         var byDay: [String: HistoryPoint] = [:]
-        for point in points where window.contains(point.day) { byDay[point.day] = byDay[point.day] ?? point }
+        for point in points where window.contains(point.day) && point.amount.isFinite && point.amount >= 0 { byDay[point.day] = byDay[point.day] ?? point }
         let entries = byDay.values.sorted { $0.day < $1.day }.compactMap { point -> Entry? in
             guard let date = Self.noon(point.day) else { return nil }
             return Entry(day: point.day, date: date, amount: point.amount, isLow: point.isLow)
@@ -179,21 +179,24 @@ nonisolated struct PriceChart: Equatable, Sendable {
 
     private static func yTicks(_ amounts: [Double]) -> [ChartYTick] {
         guard let low = amounts.min(), let high = amounts.max() else { return [] }
-        let lowCents = max(0, Int((low * 100 + 1e-6).rounded(.down)))
-        let highCents = max(0, Int((high * 100 - 1e-6).rounded(.up)))
-        let bottom: Int
-        let step: Int
-        if highCents <= lowCents {
-            // Equal prices: one step under and one above, the step the price's power of ten.
-            var power = 1
-            while power * 10 <= lowCents { power *= 10 }
-            step = power
-            bottom = max(0, Int((Double(lowCents) / Double(power)).rounded()) * power - power)
-        } else {
-            let found = steps().first { step in (lowCents / step) * step + 2 * step >= highCents } ?? 1_000_000_000
-            step = found
-            bottom = (lowCents / found) * found
+        var lowCents = max(0, Int((low * 100 + 1e-6).rounded(.down)))
+        var highCents = max(lowCents, Int((high * 100 - 1e-6).rounded(.up)))
+        // A range narrower than 20 % of the highest price is widened to that width around its middle, so a flat price
+        // reads flat (controller ruling of review 1); its lower end is never under 0, and a cut at 0 keeps the width.
+        let width = 0.2 * Double(highCents)
+        if Double(highCents - lowCents) < width {
+            let middle = Double(lowCents + highCents) / 2
+            var lower = middle - width / 2
+            var upper = middle + width / 2
+            if lower < 0 {
+                upper -= lower
+                lower = 0
+            }
+            lowCents = Int((lower + 1e-6).rounded(.down))
+            highCents = Int((upper - 1e-6).rounded(.up))
         }
+        let step = steps().first { step in (lowCents / step) * step + 2 * step >= highCents } ?? 1_000_000_000
+        let bottom = (lowCents / step) * step
         let cents = [bottom, bottom + step, bottom + 2 * step]
         let whole = cents.allSatisfy { $0 % 100 == 0 }
         return cents.map { value in
@@ -213,7 +216,7 @@ nonisolated struct PriceChart: Equatable, Sendable {
     /// from the first point's day to the last point's day, both included (a full window is 90 days).
     private static func changeText(from first: Entry, to last: Entry) -> String {
         let days = Int((last.date.timeIntervalSince(first.date) / 86_400).rounded()) + 1
-        let span = days == 1 ? "1 day" : "\(days) days"
+        let span = "\(days) days" // two points or more: always 2 days or more
         let cents = Int((last.amount * 100).rounded()) - Int((first.amount * 100).rounded())
         guard cents != 0 else { return "no change in \(span)" }
         let amount = CardFacts.priceText(ShownPrice(amount: Double(abs(cents)) / 100, isLow: false))
