@@ -3,7 +3,8 @@ import Foundation
 nonisolated enum UserFilesError: Error, Equatable {
     /// iCloud keeps the file as `.<name>.icloud`: it exists, but is not on this device yet. A download was asked for.
     case notDownloaded
-    /// The game file on disk is one this app must not replace: written by a newer version, or not readable as a game file.
+    /// The file on disk (a game file, or another file of the folder with its own rule) is one this app must not replace:
+    /// for a game file, written by a newer version or not readable as a game file; for a history file, a newer version.
     case notRewritable(newerVersion: Bool)
     /// A write that would create the game's file (this app had read none) found a file or an iCloud placeholder of that
     /// name on disk: it arrived after the read. Nothing was written (task 5 fix round 1 (c)).

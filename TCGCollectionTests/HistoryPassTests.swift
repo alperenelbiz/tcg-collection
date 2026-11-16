@@ -187,4 +187,37 @@ struct HistoryPassTests {
         #expect(result.histories["cyberpunk"]?.days == ["2026-01-02"])
         #expect(result.histories["cyberpunk"]?.has(productID: 1) == true)
     }
+
+    /// A new product (the input history lacks it) stays in the result only when every day planned for it was attempted:
+    /// a pass cancelled part-way leaves it out, so the next pass plans it again from every archive. A product the history
+    /// had keeps its old days and gains only the days read.
+    @Test func aCancelledPassLeavesOutANewProductItDidNotFinish() async throws {
+        let dir = try archives(["2026-01-03", "2026-01-04", "2026-01-05"])
+        let old = PriceHistory(days: ["2026-01-02"], products: [Self.card: ["Normal": [ShownPrice(amount: 1, isLow: false)]]])
+        let reads = Reads()
+        let cancelling: @Sendable (URL, Set<Int>, (Int, Int, [PriceRow]) -> Void) throws -> Void = { url, categories, each in
+            withUnsafeCurrentTask { $0?.cancel() }
+            try reads.read(url, categories, each)
+        }
+        let result = await Task {
+            await HistoryPass.run(games: [game(old, tracked: [Self.card, 711362])], archives: dir, window: Self.window,
+                                  failedDays: [], read: cancelling)
+        }.value
+        #expect(reads.names == ["prices-2026-01-03.ppmd.7z"])
+        let history = try #require(result.histories["riftbound"])
+        #expect(!history.has(productID: 711362))
+        #expect(history.days == ["2026-01-02", "2026-01-03"])
+        #expect(history.points(productID: Self.card, finish: "Normal").map(\.amount) == [1, 5.12])
+    }
+
+    /// A day whose archive failed counts as attempted: a new product is kept with the readable days (else an archive
+    /// that is corrupt for good would make every pass read every archive again).
+    @Test func aFailedDayDoesNotDropANewProduct() async throws {
+        let dir = try archives(["2026-01-02", "2026-01-04"], broken: ["2026-01-03"])
+        let result = await HistoryPass.run(games: [game(tracked: [711362])], archives: dir, window: Self.window, failedDays: [])
+        let history = try #require(result.histories["riftbound"])
+        #expect(history.has(productID: 711362))
+        #expect(history.days == ["2026-01-02", "2026-01-04"])
+        #expect(result.failedDays == ["2026-01-03"])
+    }
 }

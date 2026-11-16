@@ -45,7 +45,8 @@ nonisolated enum HistoryPass {
     }
 
     /// Reads the planned archives (`HistoryPlan.make`) one after another, ascending; checks for cancellation between
-    /// archives (a cancelled pass returns what it has read). Per planned day each game takes its planned products from
+    /// archives (a cancelled pass returns what it has read, without a product new to the history whose planned days were not
+    /// all attempted). Per planned day each game takes its planned products from
     /// that day's rows (`Price.shown`: market, else low marked; 0 is no price); a planned product with no row still counts
     /// as read. An archive that cannot be read adds its day to `failedDays` and nothing else. The day is the file name's.
     @concurrent
@@ -63,8 +64,10 @@ nonisolated enum HistoryPass {
         var failed = failedDays
         let planned = Set(plan.reads.values.flatMap(\.keys))
 
+        var attempted = Set<String>()
         for day in plan.days {
             if Task.isCancelled { break }
+            attempted.insert(day)
             let reads = plan.reads[day]!
             var rows: [String: [Int: [String: ShownPrice]]] = [:]
             do {
@@ -87,7 +90,16 @@ nonisolated enum HistoryPass {
             }
         }
 
+        // A product the input history lacked stays only when every day planned for it was attempted (read or failed):
+        // else (a cancelled pass) every later pass would see it as known and never read the days it missed.
         for game in games where planned.contains(game.id) {
+            var unfinished = Set<Int>()
+            for (day, reads) in plan.reads where !attempted.contains(day) {
+                for productID in reads[game.id] ?? [] where game.history?.has(productID: productID) != true {
+                    unfinished.insert(productID)
+                }
+            }
+            for productID in unfinished { histories[game.id]?.products[productID] = nil }
             histories[game.id] = histories[game.id]?.trimmed(window: window, keeping: game.tracked)
         }
         return Result(histories: histories, failedDays: failed)

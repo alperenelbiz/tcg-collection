@@ -77,7 +77,8 @@ nonisolated enum HistoryFiles {
     }
 
     /// The conflict decision (H4), pure. `versions[0]` is the current file: when it is of a newer version, everything is
-    /// left. Else the newest by date wins, whatever it holds (a tie keeps the current one).
+    /// left. Else the newest by date wins, whatever it holds (a tie keeps the current one). Only a CURRENT file of a newer
+    /// version is protected: an older-dated conflict version written by a newer build loses and is removed.
     static func conflictPlan(_ versions: [(date: Date, data: Data)]) -> ConflictPlan {
         guard let current = versions.first, refusal(current.data) == nil else { return .leave }
         return .settle(winner: UserFiles.newest(of: versions))
