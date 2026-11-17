@@ -80,12 +80,29 @@ nonisolated enum PriceDay {
     }
 }
 
+/// The days this device has downloaded with a 200, ever (phase 5B review round 1, A47: an archive is never downloaded
+/// twice, so a cache day that is lost does not come back). Kept in the app's preferences (with `-store`, the root's own),
+/// key `priceDaysDownloaded`, a list of `yyyy-MM-dd`; days before the window are pruned at the launch's clean-up. A
+/// reinstall loses it (stated limit). UserDefaults is thread-safe; it is only touched from `ArchiveDownloads`.
+nonisolated struct PriceDaysRecord: @unchecked Sendable {
+    let defaults: UserDefaults
+    init(_ defaults: UserDefaults) { self.defaults = defaults }
+
+    func load() -> Set<String> { Set(defaults.stringArray(forKey: ArchiveDownloads.recordKey) ?? []) }
+    func save(_ days: Set<String>) { defaults.set(days.sorted(), forKey: ArchiveDownloads.recordKey) }
+}
+
 /// Every archive request of the app goes through this one lane (phase 5B task 5, A32): the price step's daily file and
 /// the 90-day download alike.
 /// - One request at a time: a second caller waits until the first one's request has ended.
 /// - Checked again inside the lane, right before the request: a day that has a day file or an archive on disk is never
 ///   asked for (another path may have made one since the caller looked).
-/// - A day this lane downloaded, or that was a 404, is not asked for again in this run.
+/// - A day downloaded with a 200 is never asked for again, in any run (`PriceDaysRecord`); without a record (tests), in
+///   this run.
+/// - A day that was a 404, or whose request threw (a network error, an HTTP error, a failed move; not a cancel), is not
+///   asked for again in this run, by either caller (review round 1, finding 1).
+/// - After a request that threw, background callers get `.stopped` for the rest of the run: the 90-day download stops; the
+///   price step may still try another day once on a later Refresh.
 /// - `background` callers (the 90-day download) also wait while the lane is paused (`pause()`: a catalog step runs, so
 ///   tcgcsv never gets more than its 4 requests at a time); the price step is not a background caller.
 /// The client writes the archive's name only once the whole file is there (`ArchiveClient` moves a finished temporary
@@ -98,22 +115,36 @@ actor ArchiveDownloads {
         case onDisk
         /// No archive for that day (a 404, now or earlier in this run).
         case notFound
-        /// This lane downloaded the day earlier in this run and it is gone from disk: not asked for again.
+        /// The day was downloaded before (this run, or an earlier one: the record) and is gone from disk: not asked again.
         case downloadedBefore
+        /// The day's request threw earlier in this run: not asked again.
+        case failedBefore
+        /// A background caller after a request that threw in this run: nothing is asked for.
+        case stopped
     }
+
+    nonisolated static let recordKey = "priceDaysDownloaded"
 
     private let paths: AppPaths
     private let client: any ArchiveFetching
+    private let record: PriceDaysRecord?
     private var inFlight = false
     private var pauses = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var downloaded: Set<String> = []
+    /// Every day downloaded with a 200: this run's and the record's.
+    private(set) var downloaded: Set<String>
     /// The days that were a 404 in this run.
     private(set) var notFound: Set<String> = []
+    /// The days whose request threw in this run.
+    private(set) var failed: Set<String> = []
+    /// True after a request threw in this run: background callers get `.stopped`.
+    private(set) var backgroundStopped = false
 
-    init(paths: AppPaths, client: any ArchiveFetching) {
+    init(paths: AppPaths, client: any ArchiveFetching, record: PriceDaysRecord? = nil) {
         self.paths = paths
         self.client = client
+        self.record = record
+        downloaded = record?.load() ?? []
     }
 
     func download(day: String, background: Bool) async throws -> Outcome {
@@ -124,21 +155,48 @@ actor ArchiveDownloads {
         let fm = FileManager.default
         let archive = paths.archives.appending(path: ArchiveGate.archiveName(day: day))
         if fm.fileExists(atPath: paths.priceDay(day).path) || fm.fileExists(atPath: archive.path) { return .onDisk }
-        if notFound.contains(day) { return .notFound }
         if downloaded.contains(day) { return .downloadedBefore }
+        if notFound.contains(day) { return .notFound }
+        if failed.contains(day) { return .failedBefore }
+        if background, backgroundStopped { return .stopped }
         try Task.checkCancellation()
         inFlight = true
         defer {
             inFlight = false
             wakeAll()
         }
-        try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
-        if try await client.download(day: day, to: archive) {
+        let found: Bool
+        do {
+            try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+            found = try await client.download(day: day, to: archive)
+        } catch {
+            if !Self.isCancel(error) {
+                failed.insert(day)
+                backgroundStopped = true
+            }
+            throw error
+        }
+        if found {
             downloaded.insert(day)
+            record?.save(downloaded)
             return .downloaded
         }
         notFound.insert(day)
         return .notFound
+    }
+
+    /// K10: the record's days before `day` are dropped (once per launch, with the clean-up).
+    func pruneRecord(before day: String) {
+        let kept = downloaded.filter { $0 >= day }
+        guard kept != downloaded else { return }
+        downloaded = kept
+        record?.save(kept)
+    }
+
+    private static func isCancel(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let url = error as? URLError, url.code == .cancelled { return true }
+        return Task.isCancelled
     }
 
     /// Background requests wait from now until `resume()`; returns once no request is in flight.
@@ -166,10 +224,10 @@ actor PriceSync {
     /// Every archive request goes through this lane (one at a time, each day once).
     nonisolated let downloads: ArchiveDownloads
 
-    init(paths: AppPaths, client: any ArchiveFetching, gate: ArchiveGate? = nil) {
+    init(paths: AppPaths, client: any ArchiveFetching, gate: ArchiveGate? = nil, record: PriceDaysRecord? = nil) {
         self.paths = paths
         self.gate = gate ?? ArchiveGate(paths: paths)
-        downloads = ArchiveDownloads(paths: paths, client: client)
+        downloads = ArchiveDownloads(paths: paths, client: client, record: record)
     }
 
     /// Prices of every game in `games` from the wanted day, else the day before. Returns nil when `haveDay` is already
@@ -192,7 +250,7 @@ actor PriceSync {
                 guard download else { continue }
                 switch try await downloads.download(day: day, background: false) {
                 case .downloaded, .onDisk: break
-                case .notFound, .downloadedBefore: continue
+                case .notFound, .downloadedBefore, .failedBefore, .stopped: continue
                 }
             }
             return try await gate.decode(day: day, games: games)

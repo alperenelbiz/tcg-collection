@@ -424,9 +424,16 @@ final class AppModel {
     var missingDays: [String] = []
     /// True when the dialog of the download is asked for (the line's button, the Catalog menu's item).
     var asksBackfill = false
+    /// The missing days' count when the dialog opened (review round 1, finding 6): its text does not change while open.
+    var backfillAskCount: Int?
     /// A46: the iPhone's network is neither expensive nor constrained (`MissingDays.allowsBackfill`); always true on the
     /// Mac. Observed: the line says "Price history downloads on Wi-Fi." while it is false.
+    #if os(iOS)
+    /// iOS fails closed (review round 1, finding 3): false until the first `NWPathMonitor` path says otherwise.
+    var backfillNetworkAllowed = false
+    #else
     var backfillNetworkAllowed = true
+    #endif
     /// The queue's task; nil while it does not run.
     @ObservationIgnored var backfillTask: Task<Void, Never>?
     /// True once the launch's price step, its migration (K11) and its first history pass request are done: no download
@@ -518,7 +525,8 @@ final class AppModel {
         reader = CatalogStore(modelContainer: store.modelContainer)
         pictures = PictureStore(directory: paths.pictures, fetcher: options.offline ? NoNetwork() : fetcher)
         ygoLoader = YGOIndexLoader(paths: paths, fetcher: fetcher)
-        priceSync = PriceSync(paths: paths, client: archiveClient)
+        // A47 (review round 1, finding 2): the days downloaded with a 200, ever, are kept in the preferences.
+        priceSync = PriceSync(paths: paths, client: archiveClient, record: PriceDaysRecord(defaults))
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
         knownFollowed = defaults.stringArray(forKey: Self.followedGamesKey)
@@ -731,6 +739,8 @@ final class AppModel {
     private func fillPricesFromDisk(of games: [GameDefinition]) async {
         let days = games.map { prices.day(game: $0.id) }
         let haveDay = days.contains(nil) ? nil : days.compactMap { $0 }.min()
+        let end = backfillActivity(Self.activityReason)
+        defer { end() }
         guard !games.isEmpty,
               let fresh = try? await priceSync.run(games: games, now: now(), haveDay: haveDay, download: false) else {
             await notePriceDays()
@@ -765,6 +775,9 @@ final class AppModel {
     private func migratePriceDays() async {
         guard !priceDaysMigrated else { return }
         priceDaysMigrated = true
+        // K9 (review round 1, finding 7): App Nap does not slow the decodes.
+        let end = backfillActivity(Self.activityReason)
+        defer { end() }
         #if DEBUG
         await priceDaysMigrationHook?()
         #endif
@@ -1449,7 +1462,12 @@ final class AppModel {
         // K10: once per launch, on the gate (off the main actor). A file of the archives folder counts as cut short only
         // when it was last changed before this launch (the real clock: file dates are real).
         let gate = archiveGate, window = PriceDay.window(endingOn: PriceDay.wanted(now: now())), launchedAt = Date()
-        priceDaysCleaning = Task.detached(priority: .utility) { await gate.cleanUp(window: window, olderThan: launchedAt) }
+        let lane = priceSync.downloads
+        priceDaysCleaning = Task.detached(priority: .utility) {
+            await gate.cleanUp(window: window, olderThan: launchedAt)
+            // The record of downloaded days loses the days before the window (review round 1, finding 2).
+            await lane.pruneRecord(before: window.lowerBound)
+        }
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
         // `-onboarding YES` it waits for the onboarding decision instead, and opens no sheet under the question.
@@ -1929,6 +1947,9 @@ final class AppModel {
     /// The outcome shows at once; the final status line repeats a failure.
     private func syncPrices(now: Date) async -> String? {
         status = .syncing(StatusText.prices)
+        // K9 (review round 1, finding 7): App Nap does not slow the price step's download and decode.
+        let end = backfillActivity(Self.activityReason)
+        defer { end() }
         // G5: the followed games only; the archive is downloaded once for them.
         let games = syncedGames
         let days = games.map { prices.day(game: $0.id) }

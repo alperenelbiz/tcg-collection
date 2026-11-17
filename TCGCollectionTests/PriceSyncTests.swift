@@ -52,6 +52,46 @@ struct PriceSyncTests {
     }
 }
 
+/// Phase 5B task 5, review round 1: the download lane remembers a request that threw (findings 1) and every day it
+/// downloaded, in the preferences (finding 2, A47).
+struct ArchiveDownloadsTests {
+    let paths = AppPaths(root: tempRoot())
+
+    @Test func aRequestThatThrewIsNotRepeatedInTheRun() async throws {
+        let network = BackfillNetwork(serveAll: true, failing: ["2026-01-02"])
+        let sync = PriceSync(paths: paths, client: network)
+        let now = TCGDate.date("2026-01-03T10:00:00")!
+        await #expect(throws: URLError.self) { try await sync.run(games: Games.all, now: now, haveDay: nil) }
+        // A later Refresh tries a different day once, never the one that threw.
+        let out = try await sync.run(games: Games.all, now: now, haveDay: nil)
+        #expect(out?["riftbound"]?.day == "2026-01-01")
+        #expect(await network.calls == ["2026-01-02", "2026-01-01"])
+    }
+
+    @Test func aBackgroundFailureStopsTheBackgroundButNotThePriceStep() async throws {
+        let network = BackfillNetwork(serveAll: true, statuses: ["2026-01-01": 429])
+        let sync = PriceSync(paths: paths, client: network)
+        await #expect(throws: TCGCSVClientError.self) { try await sync.downloads.download(day: "2026-01-01", background: true) }
+        #expect(try await sync.downloads.download(day: "2025-12-31", background: true) == .stopped)
+        // The price step whose wanted day is the one that got the 429: it asks the day before instead.
+        let out = try await sync.run(games: Games.all, now: TCGDate.date("2026-01-02T10:00:00")!, haveDay: nil)
+        #expect(out?["riftbound"]?.day == "2025-12-31")
+        #expect(await network.calls == ["2026-01-01", "2025-12-31"])
+    }
+
+    @Test func theRecordRefusesADayDownloadedInAnEarlierRun() async throws {
+        let record = try #require(UserDefaults(suiteName: paths.support.appending(path: "record").path))
+        let first = BackfillNetwork(serveAll: true)
+        let now = TCGDate.date("2026-01-03T10:00:00")!
+        _ = try await PriceSync(paths: paths, client: first, record: PriceDaysRecord(record)).run(games: Games.all, now: now, haveDay: nil)
+        #expect(record.stringArray(forKey: ArchiveDownloads.recordKey) == ["2026-01-02"])
+        try FileManager.default.removeItem(at: paths.priceDay("2026-01-02"))
+        let second = BackfillNetwork(serveAll: true)
+        _ = try await PriceSync(paths: paths, client: second, record: PriceDaysRecord(record)).run(games: Games.all, now: now, haveDay: nil)
+        #expect(await second.calls == ["2026-01-01"])
+    }
+}
+
 /// Phase 5B task 2 (K3, A47): the price step's tables come from the archive gate.
 struct PriceSyncGateTests {
     let fake: FakeArchive

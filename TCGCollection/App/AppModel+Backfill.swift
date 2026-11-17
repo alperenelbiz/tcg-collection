@@ -33,16 +33,21 @@ extension AppModel {
             return (MissingDays.progressText(done: progress.done, total: progress.total), false)
         }
         guard !missingDays.isEmpty, canSync, !catalogResetRequested else { return nil }
-        if !backfillOptedIn { return (MissingDays.lineText(missing: missingDays.count), true) }
+        // The button only while the download can run in this run (review round 1, finding 5).
+        if !backfillOptedIn { return (MissingDays.lineText(missing: missingDays.count), backfillCanRunNow) }
         if !backfillNetworkAllowed { return (MissingDays.waitsForWiFi, false) }
         return nil
     }
 
-    /// The Catalog menu's "Download Price History…": off while nothing is missing, while offline (or with a store in
-    /// memory), and while the queue runs.
+    /// The Catalog menu's "Download Price History…" and the line's button: off while nothing is missing, while the queue
+    /// runs, and while the download cannot run in this run (offline, a store in memory, a gate closed, a reset asked for,
+    /// a request that threw: review round 1, finding 5). The dialog never opens to do nothing.
     var canAskBackfill: Bool {
-        !missingDays.isEmpty && canSync && !catalogResetRequested && backfillProgress == nil && backfillTask == nil
+        !missingDays.isEmpty && backfillCanRunNow && backfillProgress == nil && backfillTask == nil
     }
+
+    /// The gates are open and no request that threw stopped the download for this run.
+    private var backfillCanRunNow: Bool { backfillMayRun && !backfillStopped }
 
     /// The status line: a notice, else the sync's own line while it runs, else the download's progress, else the status.
     var statusLineText: String {
@@ -55,8 +60,27 @@ extension AppModel {
 
     // MARK: The yes
 
+    /// The record of the days downloaded with a 200, ever (A47; `PriceDaysRecord`).
+    nonisolated static let priceDaysDownloadedKey = ArchiveDownloads.recordKey
+    /// K9's reason, for the queue, the migration and the price step.
+    nonisolated static let activityReason = "Reading price history"
+
+    /// The line's button and the Catalog menu's item: opens the dialog with the count of this moment (finding 6).
+    func askBackfill() {
+        guard canAskBackfill else { return }
+        backfillAskCount = missingDays.count
+        asksBackfill = true
+    }
+
+    /// The dialog's title and message, from the count taken when it opened; nil before.
+    var backfillDialog: (title: String, message: String)? {
+        backfillAskCount.map { MissingDays.confirmation(missing: $0) }
+    }
+
     /// The dialog's "Download": remembers the yes in the preferences (A48) and starts the queue when its gates are open.
+    /// With nothing missing by then it does nothing (finding 6).
     func startBackfill() {
+        guard !missingDays.isEmpty else { return }
         if !backfillOptedIn {
             defaults.set(true, forKey: Self.priceDaysDownloadKey)
             backfillOptedIn = true
@@ -64,8 +88,10 @@ extension AppModel {
         runBackfill()
     }
 
-    /// Stops the queue (a catalog reset; a quit in the tests): the request in flight is cancelled, nothing more is asked.
+    /// Stops the queue for the run (a catalog reset; a quit in the tests): the request in flight is cancelled, nothing more
+    /// is asked in this run.
     func stopBackfill() {
+        backfillStopped = true
         backfillTask?.cancel()
     }
 
@@ -85,10 +111,13 @@ extension AppModel {
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
         let paths = paths
         let (dayFiles, archives) = await Self.listDays(paths: paths)
-        let failed = await archiveGate.failedDays
-        let notFound = await priceSync.downloads.notFound
+        let lane = priceSync.downloads
+        let failed = await archiveGate.failedDays.union(lane.failed)
+        let notFound = await lane.notFound, downloaded = await lane.downloaded
+        // A request that threw (the price step's too) stops the download for the run (finding 1).
+        if await lane.backgroundStopped { backfillStopped = true }
         let days = MissingDays.days(window: window, dayFiles: dayFiles, archives: archives, failed: failed,
-                                    notFound: notFound, now: now())
+                                    notFound: notFound, downloaded: downloaded, now: now())
         missingDaysVersion = version
         if days != missingDays { missingDays = days }
     }
@@ -104,8 +133,12 @@ extension AppModel {
     func runBackfill() {
         guard backfillTask == nil, backfillOptedIn, backfillLaunchReady, !backfillStopped, backfillMayRun else { return }
         backfillTask = Task { [weak self] in
-            await self?.backfillQueue()
-            self?.backfillTask = nil
+            let completed = await self?.backfillQueue() ?? true
+            guard let self else { return }
+            self.backfillTask = nil
+            // Finding 4: a run cut short by a gate that has opened again since (the watcher saw it while this task still
+            // ran) runs again, once per such cut; a finished run, a reset or a stop for the run does not.
+            if !completed { self.runBackfill() }
         }
     }
 
@@ -118,7 +151,12 @@ extension AppModel {
         Task { [weak self] in
             for await may in changes {
                 guard let self else { return }
-                if may { self.runBackfill() } else if !self.backfillNetworkAllowed { self.stopBackfill() }
+                if may {
+                    self.runBackfill()
+                } else if !self.backfillNetworkAllowed {
+                    // Off Wi-Fi (iOS): the day in flight is cancelled; back on Wi-Fi the queue runs again.
+                    self.backfillTask?.cancel()
+                }
             }
         }
         #if os(iOS)
@@ -149,18 +187,24 @@ extension AppModel {
     /// decoded at the next launch, never downloaded again); a network error stops the queue for the run and is said once
     /// (every day done is kept; the next launch goes on). A cancel (a reset; going off Wi-Fi on the iPhone) stops it
     /// without a word.
-    private func backfillQueue() async {
-        let end = backfillActivity("Reading price history")
+    /// Returns false when the run was cut short (a cancel or a closed gate) before its plan was done.
+    private func backfillQueue() async -> Bool {
+        let end = backfillActivity(Self.activityReason)
         defer { end() }
         await refreshMissingDays()
         let plan = missingDays
-        guard !plan.isEmpty, !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
+        guard !plan.isEmpty, !backfillStopped else { return true }
+        var completed = true
         backfillProgress = BackfillProgress(done: 0, total: plan.count)
         defer { backfillProgress = nil }
         let lane = priceSync.downloads, gate = archiveGate
         var sincePass = 0
         for day in plan {
-            guard !Task.isCancelled, backfillMayRun else { break }
+            guard !Task.isCancelled, backfillMayRun else {
+                completed = false
+                break
+            }
             // The window moved since the plan (the wanted day changes at 20:30 UTC): a day that left it is not fetched.
             guard PriceDay.window(endingOn: PriceDay.wanted(now: now())).contains(day) else {
                 backfillProgress?.done += 1
@@ -175,16 +219,26 @@ extension AppModel {
                         takeNewerTables(decoded.tables.filter { isSynced($0.key) })
                     }
                     await notePriceDays()
-                case .notFound, .downloadedBefore:
+                case .notFound, .downloadedBefore, .failedBefore:
                     break
+                case .stopped:
+                    // The price step's request threw meanwhile: stopped for the run (said by the price step).
+                    backfillStopped = true
                 }
             } catch {
-                if Task.isCancelled { break }
+                if Task.isCancelled {
+                    completed = false
+                    break
+                }
                 backfillStopped = true
                 say(MissingDays.failureText(day: day))
                 break
             }
-            if Task.isCancelled { break }
+            if backfillStopped { break }
+            if Task.isCancelled {
+                completed = false
+                break
+            }
             backfillProgress?.done += 1
             sincePass += 1
             if sincePass >= 10 {
@@ -194,6 +248,7 @@ extension AppModel {
         }
         requestHistory()
         await refreshMissingDays()
+        return completed
     }
 
     #if DEBUG

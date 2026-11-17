@@ -163,7 +163,7 @@ struct PriceHistoryView: View {
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("price-history-download-note")
         if button {
-            let download = Button(MissingDays.buttonTitle) { model.asksBackfill = true }
+            let download = Button(MissingDays.buttonTitle) { model.askBackfill() }
                 .buttonStyle(FieldButtonStyle())
                 .fixedSize()
                 .accessibilityIdentifier("price-history-download")

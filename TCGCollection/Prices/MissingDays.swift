@@ -8,14 +8,15 @@ nonisolated enum MissingDays {
 
     /// K7: the days of `window`, not after the wanted day of `now` and not before `firstArchiveDay`, that have no day
     /// file, no archive on disk (an archive on disk is decoded, not downloaded), did not fail in this run (the gate's
-    /// failed days) and were not a 404 in this run. Newest first: the chart fills from the right.
+    /// failed days, and the days whose request threw), were not a 404 in this run, and were never downloaded on this device
+    /// (`downloaded`: the record, A47). Newest first: the chart fills from the right.
     static func days(window: ClosedRange<String>, dayFiles: Set<String>, archives: Set<String>, failed: Set<String>,
-                     notFound: Set<String>, now: Date) -> [String] {
+                     notFound: Set<String>, downloaded: Set<String> = [], now: Date) -> [String] {
         let wanted = PriceDay.wanted(now: now)
         return PriceDay.days(in: window)
             .filter { day in
                 day <= wanted && day >= firstArchiveDay && !dayFiles.contains(day) && !archives.contains(day)
-                    && !failed.contains(day) && !notFound.contains(day)
+                    && !failed.contains(day) && !notFound.contains(day) && !downloaded.contains(day)
             }
             .sorted(by: >)
     }

@@ -18,6 +18,14 @@ struct MissingDaysTests {
         #expect(days.last == "2025-10-05")
     }
 
+    /// Review round 1, finding 2 (A47): a day this device downloaded before is never missing again.
+    @Test func missingDaysSkipDaysDownloadedBefore() {
+        let days = MissingDays.days(window: Self.window, dayFiles: [], archives: [], failed: [], notFound: [],
+                                    downloaded: ["2026-01-02", "2025-11-01"], now: Self.now)
+        #expect(days.count == 88)
+        #expect(!days.contains("2025-11-01"))
+    }
+
     @Test func missingDaysStopAtTheFirstArchiveDay() {
         // The window 2023-12-21…2024-03-19: only 2024-02-08 and later.
         let window = PriceDay.window(endingOn: "2024-03-19")

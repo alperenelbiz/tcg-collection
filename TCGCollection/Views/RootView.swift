@@ -72,13 +72,14 @@ struct RootView: View {
         // change of the library does not compute this body again.
         .background { DeckMemoryKeeper(memory: decks) }
         // Phase 5B task 5 (A33, K12): the 90-day download's confirmation, from the chart's line and the Catalog menu.
-        .confirmationDialog(MissingDays.confirmation(missing: model.missingDays.count).title,
+        // Its text is the count when it opened (`backfillDialog`); "Download" with nothing missing by then does nothing.
+        .confirmationDialog(model.backfillDialog?.title ?? "",
                             isPresented: $model.asksBackfill, titleVisibility: .visible) {
             Button(MissingDays.confirmTitle) { model.startBackfill() }
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(MissingDays.confirmation(missing: model.missingDays.count).message)
+            Text(model.backfillDialog?.message ?? "")
         }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
@@ -162,7 +163,7 @@ private struct CatalogStack: View {
                         Menu("Catalog") {
                             Button("Refresh") { Task { await model.refresh(rebuild: false) } }
                             Button("Rebuild catalog…") { confirmRebuild = true }
-                            Button(MissingDays.menuTitle) { model.asksBackfill = true }
+                            Button(MissingDays.menuTitle) { model.askBackfill() }
                                 .disabled(!model.canAskBackfill)
                                 .accessibilityIdentifier("catalog-download-history")
                         }
