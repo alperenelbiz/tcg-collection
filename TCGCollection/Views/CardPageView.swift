@@ -149,7 +149,7 @@ struct CardPageView: View {
         let sale = library.forSale(game: game.id).filter { $0.productID == shown.productID }
         let lines = CollectionRules.finishes(priced: offered, owned: rows.map(\.finish) + sale.map(\.finish))
         let owned = Dictionary(rows.map { ($0.finish, $0.count) }, uniquingKeysWith: +)
-        return PriceHistoryView(gameID: game.id, productID: shown.productID, finishes: lines, owned: owned, cardKey: cardKey)
+        return PriceHistoryView(gameID: game.id, productID: shown.productID, finishes: lines, owned: owned)
     }
 
     /// Each printing of the card as the pin line names it: set, number, rarity, and its first finish line (the price

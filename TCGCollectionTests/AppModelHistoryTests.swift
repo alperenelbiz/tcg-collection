@@ -13,6 +13,8 @@ struct AppModelHistoryTests {
     static let day2 = TCGDate.date("2026-01-04T10:00:00")!
     static let archiveDays = ["2025-12-30", "2025-12-31", "2026-01-02"]
     static let dockside = 721334, kaisa = 721337, pack = 711362, rune = 722282
+    /// A product id no day file has a row of (and no catalog knows).
+    static let unpriced = 999_999
     static let docksideKey = "dockside lock up"
 
     /// Counts the day files the passes open (phase 5B task 3: a pass reads day files only; the launch turns the archives
@@ -151,6 +153,12 @@ struct AppModelHistoryTests {
 
     struct Timeout: Error {}
 
+    /// The block's state once the printing's points are read (phase 5B task 4: `.reading` until then).
+    private func state(_ model: AppModel, _ productID: Int, game: String = "riftbound") async -> HistoryState {
+        _ = await model.points(game: game, productID: productID)
+        return model.historyState(game: game, productID: productID)
+    }
+
     // MARK: The first pass (Review Focus 1)
 
     /// A game with a tracked printing gets its file with every archive day of the window; the game files and
@@ -168,7 +176,7 @@ struct AppModelHistoryTests {
         #expect(history.points(productID: Self.dockside, finish: "Normal").map(\.amount) == [5.12, 5.12, 5.12])
         #expect(model.history(game: "riftbound") == history)
         #expect(model.historyVersions["riftbound", default: 0] > 0)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(await state(model, Self.dockside) == .ready)
         let after = snapshot(root)
         for (name, data) in before { #expect(after[name] == data, "\(name)") }
         #expect(Set(after.keys).subtracting(before.keys) == ["riftbound.prices.json"])
@@ -186,7 +194,7 @@ struct AppModelHistoryTests {
         #expect(!exists(historyURL(root, "cyberpunk")))
         #expect(!exists(historyURL(root, "magic-the-gathering")))
         #expect(model.history(game: "cyberpunk") == nil)
-        #expect(model.historyState(game: "cyberpunk", productID: 719684) == .notTracked)
+        #expect(await state(model, 719684, game: "cyberpunk") == .ready)  // phase 5B: every printing has its block
         let after = snapshot(root)
         for (name, data) in before { #expect(after[name] == data, "\(name)") }
     }
@@ -208,26 +216,22 @@ struct AppModelHistoryTests {
         #expect(reads.count == 0)
         #expect(try Data(contentsOf: historyURL(root)) == bytes)
         #expect(try sizeAndDate(historyURL(root)).date == written.date)
-        #expect(second.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(await state(second, Self.dockside) == .ready)
     }
 
     // MARK: Tracking (A41, A42, H6, H9)
 
-    /// A41: a card put on Wanted is filled from every archive on disk: `.reading` once the pass knows it is tracked, then
-    /// `.ready` with one point per archive day.
+    /// A41: a card put on Wanted is filled into the history file from every day on disk, one point per day.
     @Test(.timeLimit(.minutes(1))) func aCardAddedToWantedIsFilledFromTheArchivesOnDisk() async throws {
         let root = tempRoot()
         try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
         let model = try await offlineModel(root)
         await model.start()
         await model.waitForHistory()
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
-        var seen: [HistoryState] = []
-        model.historyPassHook = { _ in seen.append(model.historyState(game: "riftbound", productID: Self.dockside)) }
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) == false)
         model.library.setWanted(1, game: "riftbound", cardKey: Self.docksideKey, name: "Dockside Lock-Up")
         await model.waitForHistory()
-        #expect(seen.first == .reading)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) == true)
         #expect(model.history(game: "riftbound")?.points(productID: Self.dockside, finish: "Normal").count == 3)
         #expect(try stored(root).has(productID: Self.dockside))
     }
@@ -245,7 +249,7 @@ struct AppModelHistoryTests {
         model.library.setCount(0, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "")
         await model.waitForHistory()
         #expect(try Data(contentsOf: historyURL(root)) == bytes)
-        #expect(model.historyState(game: "riftbound", productID: Self.kaisa) == .ready)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.kaisa) == true)
         model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.pack, finish: "Normal"), name: "Pack")
         await model.waitForHistory()
         var history = try stored(root)
@@ -258,7 +262,7 @@ struct AppModelHistoryTests {
         history = try stored(root)
         #expect(history.days.last == "2026-01-03")
         #expect(history.products.keys.sorted() == [Self.pack, Self.dockside])
-        #expect(model.historyState(game: "riftbound", productID: Self.kaisa) == .notTracked)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.kaisa) == false)
         #expect(model.history(game: "riftbound") == history)
     }
 
@@ -301,6 +305,83 @@ struct AppModelHistoryTests {
         #expect(reads.count == Self.archiveDays.count)
         #expect(model.historyPassCount == passes + 1)
         #expect(try stored(root).products.count == 501)
+    }
+
+    // MARK: Every printing's chart (phase 5B task 4: A45, K6)
+
+    /// A printing in no list has its points from the day files on disk (one per day), `.ready`; the history file does not
+    /// get it.
+    @Test(.timeLimit(.minutes(1))) func aPrintingNobodyTracksHasItsDays() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .reading)    // not read yet
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal") == nil)
+        let points = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(points["Normal"]?.map(\.day) == Self.archiveDays)
+        #expect(points["Normal"]?.map(\.amount) == [5.12, 5.12, 5.12])
+        #expect(points["Foil"]?.count == 3 && points["Foil"]?.allSatisfy(\.isLow) == true)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal") == points["Normal"])
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) == false)
+        // A product no day file has a row of: ready with no point ("No price in the last 90 days.").
+        #expect(await state(model, Self.unpriced) == .ready)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.unpriced, finish: "Normal") == [])
+    }
+
+    /// Review Focus 5: a day in both the day files and the iCloud history file is shown once, with the day file's price;
+    /// a day only in the history file (another device read it) is kept.
+    @Test(.timeLimit(.minutes(1))) func aDayInBothTheDayFilesAndTheHistoryFileIsShownOnce() async throws {
+        let root = tempRoot()
+        let other = PriceHistory(days: ["2025-12-01", "2026-01-02"],
+                                 products: [Self.dockside: ["Normal": [ShownPrice(amount: 4, isLow: false),
+                                                                       ShownPrice(amount: 9, isLow: false)]]])
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        try other.data().write(to: historyURL(root))
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        let points = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(points["Normal"]?.map(\.day) == ["2025-12-01"] + Self.archiveDays)
+        #expect(points["Normal"]?.map(\.amount) == [4, 5.12, 5.12, 5.12])
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aGameNotFollowedShowsNothing() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside], extra: #","profile":{"followed":false}"#),
+                         "cyberpunk": Self.gameFile()])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        #expect(await model.points(game: "riftbound", productID: Self.dockside).isEmpty)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .unknown)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal") == nil)
+    }
+
+    /// One lookup per day file of the window for one product, then none until a day file is added (the gate writes one):
+    /// a Magic basic land's page costs the same, since the block reads the shown printing's days, not the card's printings.
+    @Test(.timeLimit(.minutes(1))) func theLookupIsCachedUntilADayFileIsAdded() async throws {
+        let root = tempRoot()
+        let reads = Reads()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
+        let model = try await offlineModel(root, reads: reads)
+        await model.start()
+        await model.waitForHistory()
+        let before = reads.count
+        _ = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(reads.count == before + Self.archiveDays.count)
+        _ = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(reads.count == before + Self.archiveDays.count)
+        try placeArchives(model, ["2025-12-29"])
+        _ = try await model.archiveGate.decode(day: "2025-12-29", games: Games.all)
+        await model.notePriceDays()
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .reading)
+        let points = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(reads.count == before + 2 * Self.archiveDays.count + 1)
+        #expect(points["Normal"]?.first?.day == "2025-12-29")
     }
 
     // MARK: Gates (Global Constraints, H7)
@@ -390,12 +471,12 @@ struct AppModelHistoryTests {
         await model.waitForHistory()
         #expect(model.historyPassCount > passes)
         #expect(!exists(historyURL(root)))
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .reading)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) != true)
         await network.release()
         await run.value
         await model.waitForHistory()
         #expect(try stored(root).has(productID: Self.dockside))
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) == true)
     }
 
     /// A game whose game file is refused (a newer version) is not passed: its history file is untouched, the state unknown.
@@ -456,7 +537,7 @@ struct AppModelHistoryTests {
         await model.waitForHistory()
         #expect(try stored(root).days.last == "2026-01-03")
         #expect(try stored(root).products.keys.sorted() == [Self.kaisa])
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
+        #expect(model.history(game: "riftbound")?.has(productID: Self.dockside) == false)
     }
 
     // MARK: Files that must not be replaced (H3, Review Focus 2)
@@ -472,8 +553,9 @@ struct AppModelHistoryTests {
         model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
         await model.waitForHistory()
         #expect(try Data(contentsOf: historyURL(root)) == newer)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .newerVersion)
-        #expect(model.historyState(game: "riftbound", productID: Self.rune) == .newerVersion)
+        // Phase 5B (K6): the blocked file's sentence only for a printing the day files give no point of.
+        #expect(await state(model, Self.dockside) == .ready)
+        #expect(await state(model, Self.unpriced) == .newerVersion)
         #expect(model.history(game: "riftbound") == nil)
     }
 
@@ -485,7 +567,8 @@ struct AppModelHistoryTests {
         await model.waitForHistory()
         #expect(!exists(historyURL(root)))
         #expect(exists(user(root).appending(path: ".riftbound.prices.json.icloud")))
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notDownloaded)
+        #expect(await state(model, Self.dockside) == .ready)
+        #expect(await state(model, Self.unpriced) == .notDownloaded)
     }
 
     @Test(.timeLimit(.minutes(1))) func aMalformedHistoryFileIsReplacedByTheNextWrite() async throws {
@@ -497,7 +580,7 @@ struct AppModelHistoryTests {
         let history = try stored(root)
         #expect(history.days == Self.archiveDays)
         #expect(history.has(productID: Self.dockside))
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(await state(model, Self.dockside) == .ready)
     }
 
     /// The create rule: a file that appears between the read (none) and the creating write is read, not replaced; the
@@ -562,7 +645,6 @@ struct AppModelHistoryTests {
         #expect(model.history(game: "riftbound") == nil)
         await model.waitForHistory()
         #expect(model.history(game: "riftbound") == nil)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
         #expect(!exists(second.appending(path: "riftbound.prices.json")))
     }
 
@@ -674,22 +756,8 @@ struct AppModelHistoryTests {
         #expect(model.history(game: "riftbound") == history)
     }
 
-    /// Finding 5: a card just put on Wanted is `.reading` at once (before the quiet time ends) when the page passes its
-    /// card key, then `.ready`.
-    @Test(.timeLimit(.minutes(1))) func aCardAddedToWantedIsReadingAtOnce() async throws {
-        let root = tempRoot()
-        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
-        let model = try await offlineModel(root)
-        await model.start()
-        await model.waitForHistory()
-        model.historyQuietTime = .seconds(1)
-        model.library.setWanted(1, game: "riftbound", cardKey: Self.docksideKey, name: "Dockside Lock-Up")
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .reading)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
-        #expect(model.historyState(game: "riftbound", productID: Self.rune, cardKey: "calm rune") == .notTracked)
-        await model.waitForHistory()
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .ready)
-    }
+    // Phase 5B task 4: 5A's "Finding 5" test (a card just put on Wanted read `.reading` at once) is gone with
+    // `.notTracked`: every printing reads its points from the day files, tracked or not.
 
     // MARK: Review round 2
 
@@ -721,23 +789,7 @@ struct AppModelHistoryTests {
         #expect(model.history(game: "riftbound") == history)
     }
 
-    /// D: with its card key, a printing of a card in a deck in play is `.reading` at once; without the player role (no
-    /// deck in play) it is not.
-    @Test(.timeLimit(.minutes(1))) func aCardInADeckInPlayIsReadingAtOnce() async throws {
-        let root = tempRoot()
-        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
-        let model = try await offlineModel(root)
-        await model.start()
-        await model.waitForHistory()
-        model.historyQuietTime = .seconds(1)
-        let card = DeckCard(cardKey: Self.docksideKey, name: "Dockside Lock-Up", section: "main", count: 1)
-        _ = model.library.addDeck(game: "riftbound", name: "Wind", format: "standard", cards: [card])
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .reading)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .notTracked)
-        model.library.setProfile(GameProfile(player: false), game: "riftbound")
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside, cardKey: Self.docksideKey) == .notTracked)
-        await model.waitForHistory()
-    }
+    // Phase 5B task 4: 5A's test "D" (a deck card's printing read `.reading` at once) is gone with `.notTracked`.
 
     // MARK: Review round 3: a read or a write counts only when no report followed it
 
@@ -848,7 +900,7 @@ struct AppModelHistoryTests {
         #expect(reads.count <= before + 1)
         #expect(model.historyPassCount == passes)
         #expect(try sizeAndDate(historyURL(root)).date == written.date)
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(await state(model, Self.dockside) == .ready)
     }
 
     /// C: a game unfollowed while another game's file is read is not read by that pass.

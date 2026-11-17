@@ -226,11 +226,23 @@ struct PriceChartTests {
 
     @Test func theNoteOfEachState() {
         #expect(PriceChart.note(for: .unknown) == nil)
-        #expect(PriceChart.note(for: .notTracked) == "Price history is kept for cards you own, want, sell or use in a deck.")
         #expect(PriceChart.note(for: .reading) == "Reading price history…")
         #expect(PriceChart.note(for: .ready) == nil)
         #expect(PriceChart.note(for: .newerVersion) == "The price history was written by a newer version of the app.")
         #expect(PriceChart.note(for: .notDownloaded) == "The price history is not downloaded from iCloud yet.")
+    }
+
+    /// Phase 5B task 4 (A45, K6): every printing has its chart, so no state says it is not kept. The switch is exhaustive:
+    /// it stops compiling when a state is added.
+    @Test func noteForNotTrackedIsGone() {
+        let states: [HistoryState] = [.unknown, .reading, .ready, .newerVersion, .notDownloaded]
+        for state in states {
+            switch state {
+            case .unknown, .reading, .ready, .newerVersion, .notDownloaded: break
+            }
+        }
+        let notes = states.compactMap { PriceChart.note(for: $0) }
+        #expect(!notes.contains { $0.contains("kept for cards") })
     }
 
     // MARK: Hover

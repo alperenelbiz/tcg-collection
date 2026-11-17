@@ -32,26 +32,96 @@ extension AppModel {
         historyShows(game) ? histories[game] : nil
     }
 
-    /// What the card page's block can say about one printing (A41, H3). `.unknown` before the folder is read, with no or a
-    /// missing folder, while the first-run question is due, and for a game that is not followed or whose game file is
-    /// refused. "Tracked now" is the last prepared pass's set, or a collection row, for-sale entry or Wanted pin of the
-    /// printing with a count of 1 or more, or (with `cardKey`, the printing's card) the card on Wanted or in a deck in
-    /// play: so a click on `+` or "Add to deck" shows `.reading` at once, before the quiet time ends.
-    func historyState(game: String, productID: Int, cardKey: String? = nil) -> HistoryState {
+    /// What the card page's block can say about one printing (phase 5B task 4: A45, K6; H3). `.unknown` before the folder
+    /// is read, with no or a missing folder, while the first-run question is due, and for a game that is not followed or
+    /// whose game file is refused (5A's rules: nothing shows before the folder is read, although the day files are not
+    /// folder data). Else `.reading` until the printing's day-file prices are read for the current day files and window
+    /// (`points`), and while the day files give it no price and the game's history file is not read yet; the history
+    /// file's blocked state (a newer version, an iCloud placeholder) only when the day files give no price; else `.ready`
+    /// (the points decide: none, one day, a chart). Every printing has its block, tracked or not.
+    func historyState(game: String, productID: Int) -> HistoryState {
         guard historyShows(game) else { return .unknown }
+        guard let read = currentDayPrices(game: game, productID: productID) else { return .reading }
+        if read.hasPrice { return .ready }
         if let blocked = historyBlocked[game] { return blocked }
-        if histories[game]?.has(productID: productID) == true { return .ready }
-        if historyTracked[game]?.contains(productID) == true
-            || library.rows(game: game).contains(where: { $0.productID == productID && $0.count >= 1 })
-            || library.forSale(game: game).contains(where: { $0.productID == productID && $0.count >= 1 })
-            || library.wanted(game: game).contains(where: { $0.pin?.productID == productID }) {
-            return .reading
+        if !historyReadGames.contains(game) { return .reading }
+        return .ready
+    }
+
+    /// The points of one finish of a printing (the day files merged with the history file, `PriceDayPoints.merged`); nil
+    /// while `historyState` would not say `.ready` from the day files' side: before they are read for the current key,
+    /// and while the state is `.unknown`. A view reads this on the main actor; it never reads a disk.
+    func dayPoints(game: String, productID: Int, finish: String) -> [HistoryPoint]? {
+        guard historyShows(game), let read = currentDayPrices(game: game, productID: productID) else { return nil }
+        return PriceDayPoints.merged(dayFiles: read.prices,
+                                     history: history(game: game)?.points(productID: productID, finish: finish),
+                                     finish: finish, window: read.window)
+    }
+
+    /// Every finish's points of a printing, reading its day-file prices off the main actor first when they are not read
+    /// for the current day files and window (one lookup per day file of the window; cached per product until
+    /// `priceDaysVersion` or the window changes; the history file's days are merged at each call, so a new history in
+    /// memory needs no read). `[:]` while `historyState` says `.unknown`.
+    func points(game: String, productID: Int) async -> [String: [HistoryPoint]] {
+        await readDayPrices(game: game, productID: productID)
+        guard historyShows(game), let read = currentDayPrices(game: game, productID: productID) else { return [:] }
+        let history = history(game: game)
+        var out: [String: [HistoryPoint]] = [:]
+        for finish in PriceDayPoints.finishes(dayFiles: read.prices, history: history, productID: productID) {
+            out[finish] = PriceDayPoints.merged(dayFiles: read.prices,
+                                                history: history?.points(productID: productID, finish: finish),
+                                                finish: finish, window: read.window)
         }
-        if let cardKey, library.wanted(game: game).contains(where: { $0.cardKey == cardKey })
-            || decksInPlay(game: game).contains(where: { deck in deck.cards.contains { $0.cardKey == cardKey } }) {
-            return .reading
+        return out
+    }
+
+    /// Reads the printing's day-file prices for the current day files and window, unless they are in `dayPrices` already
+    /// or being read (one read per key). The card page's block calls it from its task; the read itself runs off the main
+    /// actor.
+    func readDayPrices(game: String, productID: Int) async {
+        guard currentDayPrices(game: game, productID: productID) == nil,
+              let category = Games.game(game)?.categoryID else { return }
+        let version = priceDaysVersion
+        let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
+        let key = "\(game)|\(productID)|\(version)|\(window.upperBound)"
+        let task: Task<DayPrices, Never>
+        if let running = dayPricesReads[key] {
+            task = running
+        } else {
+            let gate = archiveGate, open = historyDayReader(paths.priceDays)
+            task = Task {
+                let days = await gate.dayFiles()
+                let prices = await Self.readDayFiles(days: days, window: window, categoryID: category,
+                                                     productID: productID, open: open)
+                return DayPrices(version: version, window: window, prices: prices)
+            }
+            dayPricesReads[key] = task
         }
-        return .notTracked
+        let read = await task.value
+        dayPricesReads[key] = nil
+        // A read made under an older key is not kept (a day file was added, or the window moved, meanwhile).
+        guard read.version == priceDaysVersion,
+              read.window == PriceDay.window(endingOn: PriceDay.wanted(now: now())) else { return }
+        let entry = "\(game)|\(productID)"
+        guard dayPrices[entry] != read else { return }
+        // A small cache: entries of an older key go first; past 256 products it starts again.
+        if dayPrices.count >= 256 {
+            dayPrices = dayPrices.filter { $0.value.version == read.version && $0.value.window == read.window }
+            if dayPrices.count >= 256 { dayPrices = [:] }
+        }
+        dayPrices[entry] = read
+    }
+
+    /// The printing's day-file prices when read for the current day files and window; else nil.
+    private func currentDayPrices(game: String, productID: Int) -> DayPrices? {
+        guard let read = dayPrices["\(game)|\(productID)"], read.version == priceDaysVersion,
+              read.window == PriceDay.window(endingOn: PriceDay.wanted(now: now())) else { return nil }
+        return read
+    }
+
+    @concurrent private nonisolated static func readDayFiles(days: Set<String>, window: ClosedRange<String>, categoryID: Int,
+                                                            productID: Int, open: HistoryPass.Reader) async -> DayFilePrices {
+        PriceDayPoints.read(days: days, window: window, categoryID: categoryID, productID: productID, open: open)
     }
 
     /// The folder is read and there, the first-run question is not due, the game is followed and its game file readable.
@@ -151,6 +221,7 @@ extension AppModel {
         histories = [:]
         historyBlocked = [:]
         historyTracked = [:]
+        historyReadGames = []
         historyOnDisk = [:]
         historyReports = [:]
         historyUnwritten = []
@@ -388,6 +459,7 @@ extension AppModel {
             blocked = .notDownloaded
         }
         historyUnwritten.remove(game)
+        if !historyReadGames.contains(game) { historyReadGames.insert(game) }
         var changed = false
         if histories[game] != history {
             histories[game] = history

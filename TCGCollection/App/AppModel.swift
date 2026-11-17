@@ -215,7 +215,11 @@ final class AppModel {
     /// The games whose history file must not be rewritten in this run (H3): `.newerVersion` or `.notDownloaded`, from the
     /// last read of the file. Observed (`historyState`).
     var historyBlocked: [String: HistoryState] = [:]
-    /// Each game's tracked product ids as the last prepared pass computed them (H6). Observed (`historyState`).
+    /// Phase 5B task 4: the games whose history file was read into memory at least once in `historyFolder` (a read taken
+    /// under the rule; dropped with the folder's memory). Observed: until then a printing the day files give no price
+    /// reads "Reading price history…" (`historyState`), not "No price in the last 90 days.".
+    var historyReadGames: Set<String> = []
+    /// Each game's tracked product ids as the last prepared pass computed them (H6).
     var historyTracked: [String: Set<Int>] = [:]
     /// What the last read of each game's history file found in `historyFolder`; no entry: not read yet (or forgotten).
     /// Invariant: a game is written only from a read that no report has followed. Every report of the game's file
@@ -396,6 +400,12 @@ final class AppModel {
     @ObservationIgnored var archiveGate: ArchiveGate { priceSync.gate }
     /// Phase 5B: +1 per day file written in this run (set on the main actor after each call to the gate).
     private(set) var priceDaysVersion = 0
+    /// Phase 5B task 4 (K6): each printing's day-file prices read for its card page, by `<game>|<product id>`; an entry is
+    /// valid while `priceDaysVersion` and the window are the ones it was read under (`AppModel+History.swift`). Observed:
+    /// the card page's block follows it.
+    var dayPrices: [String: DayPrices] = [:]
+    /// The reads of `dayPrices` running now, by `<game>|<product id>|<version>|<window end>` (one read per key).
+    @ObservationIgnored var dayPricesReads: [String: Task<DayPrices, Never>] = [:]
     /// K10: the launch's one clean-up of old day files, old archives and cut-short downloads; nil before the launch.
     @ObservationIgnored private(set) var priceDaysCleaning: Task<Void, Never>?
     /// K11: the archives on disk were migrated into day files in this run (once, after the launch's price step).
@@ -706,7 +716,7 @@ final class AppModel {
     }
 
     /// `priceDaysVersion` follows the gate's count of day files written in this run.
-    private func notePriceDays() async {
+    func notePriceDays() async {
         let written = await archiveGate.writtenCount
         if written > priceDaysVersion { priceDaysVersion = written }
     }

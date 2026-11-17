@@ -118,7 +118,6 @@ nonisolated struct PriceChart: Equatable, Sendable {
     static func note(for state: HistoryState) -> String? {
         switch state {
         case .unknown, .ready: nil
-        case .notTracked: "Price history is kept for cards you own, want, sell or use in a deck."
         case .reading: "Reading price history…"
         case .newerVersion: "The price history was written by a newer version of the app."
         case .notDownloaded: "The price history is not downloaded from iCloud yet."

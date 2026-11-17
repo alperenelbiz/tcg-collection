@@ -3,7 +3,9 @@ import SwiftUI
 
 /// The card page's "Price history" block (phase 5A: A38–A41, A44): the heading with the finish control, the summary line,
 /// and the plot of one finish over the last 90 days, or, in the plot's frame, the sentence of its state. A thin view: the
-/// model says the state (`AppModel.historyState`) and holds the history; `PriceChart` makes every value drawn.
+/// model says the state (`AppModel.historyState`) and gives the points (`AppModel.dayPoints`: the day files on this device
+/// merged with the iCloud history file, phase 5B task 4); `PriceChart` makes every value drawn. The block's task asks the
+/// model to read the printing's day files (off the main actor) whenever a day file is added or the window moves.
 ///
 /// Identifiers: `price-history` (the block), `price-history-finish` (the control; its segments are radio buttons named by
 /// the finish), `price-history-summary`, `price-history-chart`, `price-history-note` (a state's sentence).
@@ -14,8 +16,6 @@ struct PriceHistoryView: View {
     let finishes: [String]
     /// The copies owned of this product per finish.
     let owned: [String: Int]
-    /// The page's card: a card just put on Wanted or in a deck reads "Reading price history…" at once.
-    var cardKey: String? = nil
 
     @Environment(AppModel.self) private var model
     /// The finish the user picked; nil until a click (then the first choice of A38 applies).
@@ -23,12 +23,11 @@ struct PriceHistoryView: View {
     /// The nearest day with a price to the pointer, while it is over the plot (iOS: the selected day).
     @State private var pointer: Date?
 
-    init(gameID: String, productID: Int, finishes: [String], owned: [String: Int], cardKey: String? = nil) {
+    init(gameID: String, productID: Int, finishes: [String], owned: [String: Int]) {
         self.gameID = gameID
         self.productID = productID
         self.finishes = finishes
         self.owned = owned
-        self.cardKey = cardKey
     }
 
     /// The finish shown: the one picked while the page offers it, else the first choice (A38).
@@ -38,7 +37,7 @@ struct PriceHistoryView: View {
     }
 
     var body: some View {
-        let state = model.historyState(game: gameID, productID: productID, cardKey: cardKey)
+        let state = model.historyState(game: gameID, productID: productID)
         // Read so the block follows every change of the history in memory.
         let _ = model.historyVersions[gameID]
         let chart = chart(state: state)
@@ -65,6 +64,13 @@ struct PriceHistoryView: View {
         .onChange(of: state != .unknown, initial: true) { _, known in
             if known, picked == nil { picked = PriceChart.firstFinish(offered: finishes, owned: owned) }
         }
+        // The read of the day files (off the main actor; nothing when they are read for this key already).
+        .task(id: readKey) { await model.readDayPrices(game: gameID, productID: productID) }
+    }
+
+    /// What the printing's day-file prices are read under: a day file added, or the window moved, reads them again.
+    private var readKey: String {
+        "\(gameID)|\(productID)|\(model.priceDaysVersion)|\(PriceDay.wanted(now: model.now()))"
     }
 
     // MARK: Parts
@@ -260,10 +266,11 @@ struct PriceHistoryView: View {
         ["Price history", finish].compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// The chart of the shown finish, for a ready history; nil in every other state.
+    /// The chart of the shown finish, for ready points; nil in every other state.
     private func chart(state: HistoryState) -> PriceChart? {
-        guard state == .ready, let finish, let history = model.history(game: gameID) else { return nil }
+        guard state == .ready, let finish,
+              let points = model.dayPoints(game: gameID, productID: productID, finish: finish) else { return nil }
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: model.now()))
-        return PriceChart(points: history.points(productID: productID, finish: finish), window: window)
+        return PriceChart(points: points, window: window)
     }
 }

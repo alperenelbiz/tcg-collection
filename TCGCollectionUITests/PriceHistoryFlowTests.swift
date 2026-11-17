@@ -4,11 +4,12 @@ import XCTest
 /// before the launch (`writeHistory`), its days counted back from the day the app's window ends on (`wantedDay()`, taken
 /// once per test and passed to the writer and the assertions).
 /// Tests that must not depend on the fixture archive write their own price files (`writePinPrices`, a price day far ahead:
-/// no archive is downloaded, so a pass adds no day and writes nothing). Yu-Gi-Oh!'s 719834 (Swiftwind Panther Warrior,
+/// no archive is downloaded, so no day file is written: their chart is the history file's alone). Without them the price
+/// step's fixture archive becomes the wanted day's day file (phase 5B), and every printing's block reads it. Yu-Gi-Oh!'s 719834 (Swiftwind Panther Warrior,
 /// Super Rare) has two finish lines there, 1st Edition and Unlimited; 719835 (Starlight Rare) has one.
 final class PriceHistoryFlowTests: UITestCase {
     private static let panther = 719834, starlight = 719835, dockside = 721334
-    private static let notTracked = "Price history is kept for cards you own, want, sell or use in a deck."
+    private static let noPrice = "No price in the last 90 days."
 
     func testTheChartOfAnOwnedPrinting() throws {
         let prices = (0..<30).map { Double(1000 + 10 * $0) / 100 }    // $10.00 … $12.90
@@ -76,50 +77,43 @@ final class PriceHistoryFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.text(summary) == "$14.50  +$0.50 in 2 days" }, shown(summary))
         shot("history-04-first-edition")
 
-        // A printing with one finish line has no control (and, not tracked, its sentence).
+        // A printing with one finish line has no control; no day file and nothing in the history file: its sentence.
         let row = element(app, "printing-row-\(Self.starlight)")
         page.scroll(byDeltaX: 0, deltaY: -2000)
         XCTAssertTrue(waitUntil { row.isHittable }, "the printing row is not on screen")
         settled(row).coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
         XCTAssertTrue(waitUntil { self.text(self.element(app, "card-facts-line")).contains("Starlight Rare") })
         let note = element(app, "price-history-note")
-        XCTAssertTrue(waitUntil { note.exists && self.text(note) == Self.notTracked }, shown(note))
+        XCTAssertTrue(waitUntil { note.exists && self.text(note) == Self.noPrice }, shown(note))
         XCTAssertFalse(element(app, "price-history-finish").exists, "a control for one finish")
         XCTAssertFalse(summary.exists)
     }
 
-    func testACardThatIsNotTrackedSaysSo() throws {
+    /// Phase 5B (A45, K6): a card in no list has its block from the day file the price step wrote (the fixture archive
+    /// under the wanted day's name: one day, Normal $5.12, Foil low $9.50), with no history file.
+    func testACardNotInTheCollectionHasItsChart() throws {
         let day = Self.wantedDay()
         let app = launch(game: "riftbound")
         let note = element(app, "price-history-note")
         openCard(app, "dockside lock up")
-        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == Self.notTracked }, shown(note))
+        let starts = "Price history starts on \(Self.dayLabel(day))."
+        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == starts }, shown(note))
         XCTAssertFalse(element(app, "price-history-chart").exists)
-        // Two finish lines, but no chart depends on the finish yet: no control.
-        XCTAssertFalse(element(app, "price-history-finish").exists, "a control above a state's sentence")
+        XCTAssertEqual(text(element(app, "card-owned")), "In your collection: 0")
+        // The sentence is the shown finish's: two finish lines, so the control is there.
+        XCTAssertTrue(element(app, "price-history-finish").exists, "no control above a per-finish sentence")
         let page = element(app, "card-page")
         page.scroll(byDeltaX: 0, deltaY: -260)
         XCTAssertTrue(waitUntil { note.isHittable }, "the note is not on screen")
-        shot("history-05-not-tracked")
-
-        // A41: owning it fills the block from the archive on disk (the fixture archive: one day, Normal $5.12).
-        page.scroll(byDeltaX: 0, deltaY: 2000)
-        let plus = element(app, "count-plus-Normal")
-        XCTAssertTrue(waitUntil { plus.isHittable }, "the owned control is not on screen")
-        settled(plus).click()
-        let starts = "Price history starts on \(Self.dayLabel(day))."
-        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == starts }, shown(note))
-        // The sentence is the shown finish's: the control is there now.
-        XCTAssertTrue(element(app, "price-history-finish").exists, "no control above a per-finish sentence")
-        page.scroll(byDeltaX: 0, deltaY: -260)
-        XCTAssertTrue(waitUntil { note.isHittable })
-        shot("history-06-one-day")
+        shot("history-05-not-owned-one-day")
     }
 
     func testANewerHistoryFileSaysSo() throws {
         let newer = Data(#"{"days": [], "products": {}, "version": 2}"#.utf8)
         var file: URL?
         let app = try launch(game: "riftbound") { root in
+            // No archive is downloaded, so no day file gives the printing a price: the history file's state shows (K6).
+            try self.writePinPrices(in: root)
             try self.writeCollection([StoredRow(productID: Self.dockside, finish: "Normal", count: 1, name: "Dockside Lock-Up")],
                                      game: "riftbound", in: root)
             try self.writeHistoryFile(game: "riftbound", data: newer)

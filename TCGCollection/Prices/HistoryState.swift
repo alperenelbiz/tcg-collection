@@ -1,19 +1,18 @@
 import Foundation
 
-/// What the model can say about one printing's price history (A41, H3), for the card page's block
-/// (`AppModel.historyState(game:productID:cardKey:)`).
+/// What the model can say about one printing's price history (A45, K6, H3), for the card page's block
+/// (`AppModel.historyState(game:productID:)`). Every printing has its block (phase 5B task 4: 5A's `notTracked` is gone).
 nonisolated enum HistoryState: Equatable, Sendable {
     /// Nothing to say yet: before the folder is read, with no or a missing folder, while the first-run question is due,
     /// for a game that is not followed or whose game file is refused.
     case unknown
-    /// The printing is not tracked (A41): no collection row, for-sale entry, Wanted card or deck card holds it.
-    case notTracked
-    /// Tracked now, and not in the history in memory yet: a pass will read it from the archives on disk.
+    /// The printing's day-file prices are being read (off the main actor), or the day files give it no price and the
+    /// game's history file is not read yet.
     case reading
-    /// The history in memory has the printing (also with no price: it was read).
+    /// The points are there (`AppModel.dayPoints`): none, one day or more (5A's sentences, `PriceChart.note`).
     case ready
-    /// The game's history file was written by a newer version of the app: never rewritten, no history this run (H3).
+    /// The game's history file was written by a newer version of the app (H3), and the day files give no price.
     case newerVersion
-    /// The game's history file is in iCloud and not downloaded yet: never rewritten (H3).
+    /// The game's history file is in iCloud and not downloaded yet (H3), and the day files give no price.
     case notDownloaded
 }
