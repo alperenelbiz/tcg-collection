@@ -32,6 +32,15 @@ nonisolated enum PhoneTabs {
         return root(of: tab)
     }
 
+    /// `last` without a deck the game no longer has (final fix wave item 3): a deck deleted elsewhere is not the Decks
+    /// tab's last screen, so a tap on Decks shows the deck list.
+    static func keeping(_ last: [PhoneTab: Screen], deckIDs: Set<String>) -> [PhoneTab: Screen] {
+        last.filter { _, screen in
+            if case .deck(let id) = screen { return deckIDs.contains(id) }
+            return true
+        }
+    }
+
     /// The screen a tab opens on first.
     static func root(of tab: PhoneTab) -> Screen {
         switch tab {

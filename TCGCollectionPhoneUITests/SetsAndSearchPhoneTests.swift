@@ -11,8 +11,9 @@ import XCTest
 final class SetsAndSearchPhoneTests: PhoneUITestCase {
     private static let radiance = 24819, origins = 24344
     private static let kaisa = 721337, calmRune = 722282
-    /// A set name of exactly 40 characters.
-    private static let longName = "Origins of the Long Riftbound Expansions"
+    /// A set name of 68 characters: wider than the iPhone 17's row, so it must be cut (final fix wave item 9; 40
+    /// characters fit and proved nothing).
+    private static let longName = "Origins of the Very Long Riftbound Expansions and Their Many Friends"
 
     private func tab(_ app: XCUIApplication, _ title: String) -> XCUIElement {
         app.tabBars.buttons[title].firstMatch
@@ -208,17 +209,23 @@ final class SetsAndSearchPhoneTests: PhoneUITestCase {
         XCTAssertFalse(element(app, "catalog-clear-filters").exists, "Clear stays")
     }
 
-    /// A 40-character set name: the row, its count and its cost stay inside the screen (the name truncates).
+    /// A 68-character set name: the name is cut before the count (its frame ends left of `sets-count-<id>`), and the row,
+    /// its count and its cost stay inside the screen.
     func testALongSetNameTruncates() {
         let app = launchSets(owning: [], originsName: Self.longName)
-        XCTAssertEqual(Self.longName.count, 40)
+        XCTAssertGreaterThanOrEqual(Self.longName.count, 60)
         tab(app, "Sets").tap()
         let row = app.buttons["sets-row-\(Self.origins)"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 30), "no long-named row")
         XCTAssertTrue(row.label.hasPrefix(Self.longName), row.label)
         let count = element(app, "sets-count-\(Self.origins)"), cost = element(app, "sets-cost-\(Self.origins)")
         XCTAssertTrue(waitUntil(timeout: 20) { count.exists && self.text(count) == "0 / 1" }, text(count))
+        let name = element(app, "sets-name-\(Self.origins)")
+        XCTAssertTrue(name.exists, "no set name")
         let screen = app.windows.firstMatch.frame
+        XCTAssertLessThanOrEqual(name.frame.maxX, count.frame.minX,
+                                 "the name \(name.frame) runs into the count \(count.frame)")
+        XCTAssertTrue(screen.contains(name.frame), "the name leaves the screen: \(name.frame) in \(screen)")
         XCTAssertTrue(screen.contains(row.frame), "the row leaves the screen: \(row.frame) in \(screen)")
         XCTAssertTrue(screen.contains(count.frame), "the count leaves the screen: \(count.frame)")
         XCTAssertTrue(cost.exists && screen.contains(cost.frame), "the cost leaves the screen: \(cost.frame)")

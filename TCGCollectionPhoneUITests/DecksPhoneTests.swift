@@ -4,7 +4,8 @@ import XCTest
 /// unreadable line, "New Deck…"), a deck page's "…" menu, the deck sheets (New Deck and Rename medium, Paste and Sharing
 /// large). The fixture catalog's Riftbound cards: Kai'Sa, Rebel; Dockside Lock-Up; Calm Rune (a basic rune).
 final class DecksPhoneTests: PhoneUITestCase {
-    /// A deck name of 40 characters: its row must truncate inside the screen.
+    /// A deck name of 40 characters: it fits the iPhone 17's row, so the test checks only that the row stays inside the
+    /// screen (no truncation is seen).
     private static let longName = "The Very Long Deck Name Of Forty Letters"
 
     /// Kai'Sa ×2 in an active deck, none owned: the deck misses 2. A second deck with a long name, not active; and one deck

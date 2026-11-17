@@ -940,6 +940,12 @@ final class AppModel {
         self.screen = screen
     }
 
+    /// The iPhone's deck list after Delete Deck (final fix wave item 4). The deck list has no kept path, so it is not
+    /// marked as showing its root: nothing would ever clear the mark.
+    func showDeckList() {
+        screen = .decks
+    }
+
     /// True while `screen` shows its root after a switch made by code (`showRoot(of:)`).
     func showsRoot(_ screen: Screen) -> Bool { rootShown.contains(screen) }
 

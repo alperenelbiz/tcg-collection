@@ -76,6 +76,11 @@ struct PhoneRootView: View {
             last = [PhoneTabs.tab(of: model.screen): model.screen]
         }
         .background { DeckMemoryKeeper(memory: decks) }
+        // Final fix wave item 3: a deck deleted elsewhere leaves the Decks tab's last screen, so a tap on Decks shows the
+        // deck list, not "This deck was removed.".
+        .onChange(of: model.library.decks(game: model.gameID).map(\.id)) { _, ids in
+            last = PhoneTabs.keeping(last, deckIDs: Set(ids))
+        }
         // E8: the count of pending cards of the game on screen, from the root's join (the Mac's sidebar does the same).
         .background { PendingWatcher(activeDecks: activeDecks) }
         .activeDecksJoin(activeDecks, model: model)

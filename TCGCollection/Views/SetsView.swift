@@ -307,7 +307,11 @@ private struct SetListRow: View {
     private func texts(numbers: SetNumbers, cost: String?, date: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
-                name.frame(maxWidth: .infinity, alignment: .leading)
+                // The name's own frame (the identifier before the frame) ends where its text is cut: the tests compare
+                // it with the count's.
+                name
+                    .accessibilityIdentifier("sets-name-\(row.id)")
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 count(numbers).fixedSize()
                     .accessibilityIdentifier("sets-count-\(row.id)")
             }

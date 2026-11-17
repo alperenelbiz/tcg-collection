@@ -535,8 +535,8 @@ struct DeckView: View {
                     // B2: nothing while the game is not followed or its player role is off.
                     guard model.decksWritable(game: gameID) else { return }
                     #if os(iOS)
-                    // The iPhone's Decks tab: back to its deck list.
-                    model.showRoot(of: .decks)
+                    // The iPhone's Decks tab: back to its deck list (no root mark: the list has no kept path).
+                    model.showDeckList()
                     #else
                     model.showRoot(of: .collection)
                     #endif

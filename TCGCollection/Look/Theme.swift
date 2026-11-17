@@ -92,7 +92,8 @@ nonisolated enum Theme {
 
     // MARK: Type (the system face only; the window title is the system's)
     // The iPhone (phase 6A, "The look on the iPhone") reads at arm's length: `sectionFont`, `bodyFont`, `lineFont` and
-    // `labelFont` are 2 pt larger there (1 pt for `labelFont`); nothing is under 12 pt. The other fonts are the same.
+    // `labelFont` are larger there (`sectionFont` and `bodyFont` 2 pt, `lineFont` and `labelFont` 1 pt); nothing is under
+    // 12 pt. The other fonts are the same.
 
     /// The card page's title.
     static let pageTitleFont = Font.system(size: 22, weight: .semibold)
@@ -103,9 +104,13 @@ nonisolated enum Theme {
     /// A section's title on a deck page ("Main Deck").
     static let deckSectionFont = Font.system(size: 15, weight: .semibold)
     #if os(iOS)
+    /// A section of a sheet (a game in the import sheet).
     static let sectionFont = Font.system(size: 15, weight: .semibold)
+    /// A card name in the gallery, values, sentences.
     static let bodyFont = Font.system(size: 15)
+    /// The line under a card name; a screen's totals line.
     static let lineFont = Font.system(size: 13)
+    /// Labels over values, the status line. Nothing is smaller.
     static let labelFont = Font.system(size: 12)
     #else
     /// A section of a sheet (a game in the import sheet).

@@ -327,8 +327,10 @@ extension View {
     #endif
 }
 
+#if os(iOS)
 /// Where the iPhone's share sheet takes a made PDF from: `<temporary>/pdf-share/<file name>`, the folder emptied first
-/// (one shared PDF at a time; the system copies what it sends). Pure but for the file system.
+/// (one shared PDF at a time; the system copies what it sends). Pure but for the file system. iOS only: the Mac saves
+/// through the save panel.
 nonisolated enum PDFShareFile {
     static func write(_ made: PDFMade, in temporary: URL = FileManager.default.temporaryDirectory) throws -> URL {
         let folder = temporary.appending(path: "pdf-share", directoryHint: .isDirectory)
@@ -339,8 +341,6 @@ nonisolated enum PDFShareFile {
         return file
     }
 }
-
-#if os(iOS)
 
 /// The iPhone's save step of a list's PDF (A51): a made PDF is written to `PDFShareFile` and the system's share sheet
 /// (`UIActivityViewController`, the sheet `ShareLink` opens) offers it; the export's progress and cancel are the Mac's.

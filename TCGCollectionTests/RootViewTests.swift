@@ -66,6 +66,15 @@ struct RootViewTests {
         #expect(path.wrappedValue.isEmpty)
     }
 
+    /// Final fix wave item 4: the iPhone's Delete Deck returns to the deck list without marking it as showing its root
+    /// (`rootShown`): the deck list has no kept path, so nothing would clear the mark.
+    @Test func theDeckListAfterADeleteLeavesNoRootMark() {
+        let model = model(["app", "-store", tempRoot().path, "-offline", "YES", "-screen", "collection"])
+        model.showDeckList()
+        #expect(model.screen == .decks)
+        #expect(!model.showsRoot(.decks))
+    }
+
     /// Phase 4B (G7, G8): a stored or launched screen through the game's profile: a deck without the player role and Sets
     /// without the collector role open the Collection; with the role, as before (a deck the file lacks opens the
     /// Collection too).

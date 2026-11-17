@@ -44,6 +44,18 @@ struct PhoneTabsTests {
         #expect(PhoneTabs.screen(for: .wanted, last: [.wanted: .sets]) == .wanted)
     }
 
+    /// Final fix wave item 3: a deck deleted elsewhere is no last screen of the Decks tab any more; a tap on Decks then
+    /// shows the deck list, not "This deck was removed.". Every other last screen stays.
+    @Test func aDeletedDeckIsNoLastScreen() {
+        let last: [PhoneTab: Screen] = [.decks: .deck("a"), .collection: .forSale]
+        let kept = PhoneTabs.keeping(last, deckIDs: ["b"])
+        #expect(kept[.decks] == nil)
+        #expect(kept[.collection] == .forSale)
+        #expect(PhoneTabs.screen(for: .decks, last: kept) == .decks)
+        #expect(PhoneTabs.keeping(last, deckIDs: ["a", "b"]) == last)
+        #expect(PhoneTabs.keeping([.decks: .decks], deckIDs: []) == [.decks: .decks])
+    }
+
     /// Decks with the player role, Sets with the collector role (G7, G8); search always last.
     @Test func theTabsFollowTheRoles() {
         #expect(PhoneTabs.tabs(profile: .all) == [.collection, .wanted, .decks, .sets, .search])
