@@ -247,14 +247,7 @@ private struct Sidebar: View {
             }
         }
         .onChange(of: selection) { _, new in if let new { model.screen = new } }
-        .task(id: DeckJoin.deckKey(game: model.gameID, model: model)) {
-            let key = DeckJoin.deckKey(game: model.gameID, model: model)
-            // G7: no deck in play without the player role: the join does not run.
-            let active = model.decksInPlay(game: key.game).filter(\.active)
-            // Without an active deck no row shows a count: nothing to read.
-            guard !active.isEmpty else { return }
-            await activeDecks.run(key, cardKeys: Set(active.flatMap { $0.cards.map(\.cardKey) }), model: model)
-        }
+        .activeDecksJoin(activeDecks, model: model)
         .onChange(of: model.screen) { _, new in selection = new }
     }
 
@@ -269,11 +262,26 @@ private struct Sidebar: View {
     }
 }
 
+extension View {
+    /// The one join of every active deck of the game on screen (the deck rows' missing counts and E8's pending count):
+    /// run again whenever its key changes. The Mac's sidebar and the iPhone's root each keep one.
+    func activeDecksJoin(_ join: DeckJoin, model: AppModel) -> some View {
+        task(id: DeckJoin.deckKey(game: model.gameID, model: model)) {
+            let key = DeckJoin.deckKey(game: model.gameID, model: model)
+            // G7: no deck in play without the player role: the join does not run.
+            let active = model.decksInPlay(game: key.game).filter(\.active)
+            // Without an active deck no row shows a count: nothing to read.
+            guard !active.isEmpty else { return }
+            await join.run(key, cardKeys: Set(active.flatMap { $0.cards.map(\.cardKey) }), model: model)
+        }
+    }
+}
+
 /// E8: hands the count of pending cards of the game on screen to the model (`AppModel.pendingCountChanged`), which says
 /// once when it goes up. The count is made in memory from the library's decks and answers and the owned copies of the
 /// sidebar's last join of the active decks (`DeckPage.pendingCount`): no catalog read. Unknown (nil) until the folder is
 /// read and, with an active deck, until a join of the game has read its cards; 0 with no active deck.
-private struct PendingWatcher: View {
+struct PendingWatcher: View {
     @Environment(AppModel.self) private var model
     let activeDecks: DeckJoin
 

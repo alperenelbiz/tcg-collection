@@ -21,6 +21,9 @@ struct PhoneRootView: View {
     @State private var sets = SetsMemory()
     /// Each deck page's search, pages and last join.
     @State private var decks = DeckMemory()
+    /// The catalog read of every active deck of the game, for the deck list's missing counts and E8's pending count: one
+    /// join for all rows, as the Mac's sidebar keeps one.
+    @State private var activeDecks = DeckJoin()
     /// Each tab's last screen: For Sale or the Collection in the Collection tab, the deck list or a deck in Decks. One
     /// game's: a game switch forgets them.
     @State private var last: [PhoneTab: Screen] = [:]
@@ -67,6 +70,9 @@ struct PhoneRootView: View {
             last = [PhoneTabs.tab(of: model.screen): model.screen]
         }
         .background { DeckMemoryKeeper(memory: decks) }
+        // E8: the count of pending cards of the game on screen, from the root's join (the Mac's sidebar does the same).
+        .background { PendingWatcher(activeDecks: activeDecks) }
+        .activeDecksJoin(activeDecks, model: model)
         // A54: Settings, a sheet of this window like the others: it opens only while no other sheet is open or due
         // (`openSettings`), and the folder sheet or the first-run question it hands over to opens once it has gone
         // (`settingsClosed`).
@@ -126,7 +132,7 @@ struct PhoneRootView: View {
                 .id(game)
         case .decks:
             NavigationStack {
-                DeckListView().phoneRootToolbar()
+                DeckListView(activeDecks: activeDecks).phoneRootToolbar()
             }
             .id(game)
         case .deck(let id):
@@ -270,38 +276,91 @@ private struct PhoneStatusLine: View {
     }
 }
 
-/// The Decks tab's root: the game's decks and "New Deck…" (Task 5 completes it with the Mac sidebar's missing counts,
-/// the unreadable-decks line and the order by drag). A tap on a deck shows its page in the tab.
+/// The Decks tab's root (D7, as the Mac's sidebar section): one row per deck of the game, in deck order (a drag changes
+/// it, E6), each with its missing count trailing (an active deck that misses copies; the active decks are served in deck
+/// order, E4), the line for decks this build cannot read, then "New Deck…". The counts come from the root's one join of
+/// every active deck (`activeDecks`). A tap on a deck shows its page in the tab. The identifiers are the sidebar's.
 struct DeckListView: View {
     @Environment(AppModel.self) private var model
+    let activeDecks: DeckJoin
 
     var body: some View {
         let library = model.library, game = model.gameID
+        let read = activeDecks.read(game: game), decks = model.decksInPlay(game: game)
+        let needs = DeckPage.needs(decks: decks, sharing: library.sharing(game: game), read: read)
         List {
-            ForEach(model.decksInPlay(game: game)) { deck in
-                Button {
-                    model.screen = .deck(deck.id)
-                } label: {
-                    Label(deck.name, systemImage: "rectangle.stack")
-                        .foregroundStyle(Theme.text)
-                }
-                .accessibilityIdentifier("sidebar-deck-\(deck.id)")
+            ForEach(decks) { deck in
+                row(deck, missing: DeckPage.sidebarCount(deck, read: read,
+                                                         available: DeckPage.available(to: deck, needs: needs, read: read)))
+                    .listRowBackground(Theme.ground)
+            }
+            // E6: a drag changes the deck order. Off while the game cannot change.
+            .onMove(perform: library.canChange(game: game) ? { sources, destination in
+                guard let source = sources.first, decks.indices.contains(source) else { return }
+                library.moveDeck(game: game, id: decks[source].id, to: DeckPage.moveIndex(from: source, to: destination))
+            } : nil)
+            if let text = DeckPage.unreadableText(library.unreadableDecks(game: game)) {
+                Text(text)
+                    .font(Theme.labelFont)
+                    .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("sidebar-decks-unreadable")
+                    .listRowBackground(Theme.ground)
             }
             Button {
                 model.openNewDeck(game: game)
             } label: {
                 Label("New Deck…", systemImage: "plus")
+                    .font(Theme.bodyFont)
                     .foregroundStyle(Theme.muted)
             }
             .disabled(!library.canChange(game: game))
             .accessibilityIdentifier("sidebar-new-deck")
+            .listRowBackground(Theme.ground)
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Theme.ground)
         .navigationTitle("Decks")
         // Review Focus 5: this game's problem, which the Mac's sidebar shows beside the Decks section.
         .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
         // A container, so the identifier does not cover the lines' own identifiers (as `listScreen`).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("decks-screen")
+    }
+
+    /// A deck's row: the icon and the name (one line, cut at the end), the missing count in `muted` with tabular digits,
+    /// and a chevron (the row opens a page). A container, so the count keeps its own identifier.
+    private func row(_ deck: Deck, missing: String?) -> some View {
+        HStack(spacing: Theme.columnGap) {
+            Label {
+                Text(deck.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(Theme.text)
+            } icon: {
+                Image(systemName: "rectangle.stack")
+                    .foregroundStyle(Theme.muted)
+            }
+            .font(Theme.bodyFont)
+            Spacer(minLength: Theme.lineGap)
+            if let missing {
+                Text(missing)
+                    .font(Theme.bodyFont)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("sidebar-deck-missing-\(deck.id)")
+            }
+            Image(systemName: "chevron.forward")
+                .font(Theme.labelFont)
+                .foregroundStyle(Theme.faint)
+                .accessibilityHidden(true)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.screen = .deck(deck.id) }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.screen = .deck(deck.id) }
+        .accessibilityIdentifier("sidebar-deck-\(deck.id)")
     }
 }
 

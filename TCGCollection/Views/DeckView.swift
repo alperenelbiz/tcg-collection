@@ -477,8 +477,31 @@ struct DeckView: View {
             .safeAreaInset(edge: .top, spacing: 0) { CatalogNote(text: unreadable, identifier: "deck-unreadable-cards") }
             .listScreen("deck", note: phase == .list ? listed?.note : nil)
             .navigationTitle(deck?.name ?? "Deck")
+            #if os(macOS)
             .navigationSubtitle(subtitle(phase, listed: listed))
+            #else
+            // R3: no subtitle on the iPhone; the totals are a line above the sections.
+            .listTotals(subtitle(phase, listed: listed), identifier: "deck-totals")
+            #endif
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: a pushed page's actions in one "…" menu: Add cards, Paste…, then the Mac's "Deck" menu.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "deck-more") {
+                        Group {
+                            Button("Add cards", systemImage: "plus") { openSearch() }
+                                .accessibilityIdentifier("deck-add-cards")
+                            Button("Paste…", systemImage: "doc.on.clipboard") { model.pasteDeck(into: state.deckID) }
+                                .accessibilityIdentifier("deck-paste")
+                            Divider()
+                            deckMenuItems(deck, game: game, kinds: state.join.read?.kinds ?? [:])
+                        }
+                        .disabled(deck == nil || !library.canChange(game: gameID))
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     Button("Add cards") { openSearch() }
@@ -492,6 +515,7 @@ struct DeckView: View {
                     deckMenu(deck, game: game, kinds: state.join.read?.kinds ?? [:])
                 }
             }
+            #endif
             .navigationDestination(for: DeckSearch.self) { _ in
                 CatalogSearchView(state: state.search, deckID: state.deckID)
                     .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
@@ -510,7 +534,12 @@ struct DeckView: View {
                     // The Collection first, so the page of the removed deck is never on show.
                     // B2: nothing while the game is not followed or its player role is off.
                     guard model.decksWritable(game: gameID) else { return }
+                    #if os(iOS)
+                    // The iPhone's Decks tab: back to its deck list.
+                    model.showRoot(of: .decks)
+                    #else
                     model.showRoot(of: .collection)
+                    #endif
                     library.removeDeck(game: gameID, id: state.deckID)
                 }
                 Button("Cancel", role: .cancel) {}
@@ -637,48 +666,55 @@ struct DeckView: View {
     /// "Deck": Rename…, Format ▸ (a game with more than one format), Active (a toggle), Move Up, Move Down (off at the ends),
     /// Delete Deck…. Off while the deck is gone or the game cannot change.
     private func deckMenu(_ deck: Deck?, game: GameDefinition, kinds: [String: CardKind]) -> some View {
-        let library = model.library, gameID = state.gameID, deckID = state.deckID
+        let library = model.library, gameID = state.gameID
         return Menu {
-            Button("Rename…") { state.renaming = true }
-                .accessibilityIdentifier("deck-rename")
-            if game.formats.count > 1 {
-                Menu("Format") {
-                    ForEach(game.formats) { format in
-                        Toggle(format.name, isOn: Binding(get: { deck?.format == format.id }, set: { on in
-                            guard on else { return }
-                            library.changeDeck(game: gameID, id: deckID) {
-                                DeckPage.changingFormat($0, to: format, game: game, kinds: kinds)
-                            }
-                        }))
-                        .accessibilityIdentifier("deck-format-\(format.id)")
-                    }
-                }
-                .accessibilityIdentifier("deck-format")
-            }
-            Toggle("Active", isOn: Binding(get: { deck?.active ?? false }, set: { on in
-                library.changeDeck(game: gameID, id: deckID) { deck in
-                    var deck = deck
-                    deck.active = on
-                    return deck
-                }
-            }))
-            .accessibilityIdentifier("deck-active")
-            // E6: one step along the deck order (the sidebar's order, which serves the active decks, E4).
-            let decks = library.decks(game: gameID)
-            Button("Move Up") { move(by: -1) }
-                .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: -1) == nil)
-                .accessibilityIdentifier("deck-move-up")
-            Button("Move Down") { move(by: 1) }
-                .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: 1) == nil)
-                .accessibilityIdentifier("deck-move-down")
-            Divider()
-            Button("Delete Deck…") { state.confirmsDelete = true }
-                .accessibilityIdentifier("deck-delete")
+            deckMenuItems(deck, game: game, kinds: kinds)
         } label: {
             Text("Deck")
         }
         .disabled(deck == nil || !library.canChange(game: gameID))
         .accessibilityIdentifier("deck-menu")
+    }
+
+    /// The "Deck" menu's items (the Mac's "Deck" menu, the iPhone's "…" menu after Add cards and Paste…).
+    @ViewBuilder
+    private func deckMenuItems(_ deck: Deck?, game: GameDefinition, kinds: [String: CardKind]) -> some View {
+        let library = model.library, gameID = state.gameID, deckID = state.deckID
+        Button("Rename…") { state.renaming = true }
+            .accessibilityIdentifier("deck-rename")
+        if game.formats.count > 1 {
+            Menu("Format") {
+                ForEach(game.formats) { format in
+                    Toggle(format.name, isOn: Binding(get: { deck?.format == format.id }, set: { on in
+                        guard on else { return }
+                        library.changeDeck(game: gameID, id: deckID) {
+                            DeckPage.changingFormat($0, to: format, game: game, kinds: kinds)
+                        }
+                    }))
+                    .accessibilityIdentifier("deck-format-\(format.id)")
+                }
+            }
+            .accessibilityIdentifier("deck-format")
+        }
+        Toggle("Active", isOn: Binding(get: { deck?.active ?? false }, set: { on in
+            library.changeDeck(game: gameID, id: deckID) { deck in
+                var deck = deck
+                deck.active = on
+                return deck
+            }
+        }))
+        .accessibilityIdentifier("deck-active")
+        // E6: one step along the deck order (the sidebar's order, which serves the active decks, E4).
+        let decks = library.decks(game: gameID)
+        Button("Move Up") { move(by: -1) }
+            .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: -1) == nil)
+            .accessibilityIdentifier("deck-move-up")
+        Button("Move Down") { move(by: 1) }
+            .disabled(DeckPage.movedIndex(of: deckID, in: decks, by: 1) == nil)
+            .accessibilityIdentifier("deck-move-down")
+        Divider()
+        Button("Delete Deck…") { state.confirmsDelete = true }
+            .accessibilityIdentifier("deck-delete")
     }
 }
 

@@ -115,6 +115,10 @@ struct SharingSheet: View {
         #if os(macOS)
         .frame(minWidth: Theme.importSheetMinWidth, idealWidth: Theme.importSheetIdealWidth,
                minHeight: Theme.sharingSheetMinHeight, idealHeight: Theme.sharingSheetIdealHeight)
+        #else
+        .presentationDetents([.large])
+        // The accent is the default button's only (it draws its own fill): the plain buttons in `text`.
+        .tint(Theme.text)
         #endif
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)

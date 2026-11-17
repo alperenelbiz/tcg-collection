@@ -144,6 +144,12 @@ private struct DeckNameSheet<Extra: View>: View {
         .padding(Theme.sheetPadding)
         #if os(macOS)
         .frame(width: 380)
+        #else
+        // A small sheet on the iPhone, its content from the top.
+        .frame(maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.medium])
+        // The accent is the default button's only (it draws its own fill): Cancel and "Paste a deck…" in `text`.
+        .tint(Theme.text)
         #endif
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
