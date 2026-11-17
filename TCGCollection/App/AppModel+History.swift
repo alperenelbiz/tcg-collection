@@ -35,8 +35,10 @@ extension AppModel {
     /// What the card page's block can say about one printing (phase 5B task 4: A45, K6; H3). `.unknown` before the folder
     /// is read, with no or a missing folder, while the first-run question is due, and for a game that is not followed or
     /// whose game file is refused (5A's rules: nothing shows before the folder is read, although the day files are not
-    /// folder data). Else `.reading` until the printing's day-file prices are read for the current day files and window
-    /// (`points`), and while the day files give it no price and the game's history file is not read yet; the history
+    /// folder data). Else `.reading` until the printing's day-file prices are read once for the current window (`points`;
+    /// final fix wave, item 1: a read made before a newer day file stays shown while the newer read runs, so a day file
+    /// written during the migration or the download never flashes "Reading…"), and while the day files give it no price
+    /// and the game's history file is not read yet; the history
     /// file's blocked state (a newer version, an iCloud placeholder) only when the day files give no price; else `.ready`
     /// (the points decide: none, one day, a chart). Every printing has its block, tracked or not.
     func historyState(game: String, productID: Int) -> HistoryState {
@@ -49,8 +51,8 @@ extension AppModel {
     }
 
     /// The points of one finish of a printing (the day files merged with the history file, `PriceDayPoints.merged`); nil
-    /// while `historyState` would not say `.ready` from the day files' side: before they are read for the current key,
-    /// and while the state is `.unknown`. A view reads this on the main actor; it never reads a disk.
+    /// while `historyState` would not say `.ready` from the day files' side: before they are read once for the current
+    /// window (a read made before a newer day file stays until the newer read lands), and while the state is `.unknown`. A view reads this on the main actor; it never reads a disk.
     func dayPoints(game: String, productID: Int, finish: String) -> [HistoryPoint]? {
         guard historyShows(game), let read = currentDayPrices(game: game, productID: productID) else { return nil }
         return PriceDayPoints.merged(dayFiles: read.prices,
@@ -77,21 +79,22 @@ extension AppModel {
 
     /// Reads the printing's day-file prices for the current day files and window, unless they are in `dayPrices` already
     /// or being read (one read per key). The card page's block calls it from its task; the read itself runs off the main
-    /// actor.
+    /// actor, and lists the day files without the archive gate (final fix wave, item 1: a running decode never holds it
+    /// up; a day file gets its name only once verified). The last read stays in `dayPrices` until a newer one lands.
     func readDayPrices(game: String, productID: Int) async {
-        guard currentDayPrices(game: game, productID: productID) == nil,
-              let category = Games.game(game)?.categoryID else { return }
-        let version = priceDaysVersion
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
+        if let last = currentDayPrices(game: game, productID: productID), last.version == priceDaysVersion,
+           last.window == window { return }
+        guard let category = Games.game(game)?.categoryID else { return }
+        let version = priceDaysVersion
         let key = "\(game)|\(productID)|\(version)|\(window.upperBound)"
         let task: Task<DayPrices, Never>
         if let running = dayPricesReads[key] {
             task = running
         } else {
-            let gate = archiveGate, open = historyDayReader(paths.priceDays)
+            let folder = paths.priceDays, open = historyDayReader(folder)
             task = Task {
-                let days = await gate.dayFiles()
-                let prices = await Self.readDayFiles(days: days, window: window, categoryID: category,
+                let prices = await Self.readDayFiles(in: folder, window: window, categoryID: category,
                                                      productID: productID, open: open)
                 return DayPrices(version: version, window: window, prices: prices)
             }
@@ -99,10 +102,11 @@ extension AppModel {
         }
         let read = await task.value
         dayPricesReads[key] = nil
-        // A read made under an older key is not kept (a day file was added, or the window moved, meanwhile).
-        guard read.version == priceDaysVersion,
-              read.window == PriceDay.window(endingOn: PriceDay.wanted(now: now())) else { return }
+        // A read of another window is not kept (the window moved meanwhile), nor one older than the read kept (a later
+        // read landed first). A read made before a newer day file is kept until the newer read lands (item 1).
+        guard read.window == PriceDay.window(endingOn: PriceDay.wanted(now: now())) else { return }
         let entry = "\(game)|\(productID)"
+        if let kept = dayPrices[entry], kept.window == read.window, kept.version > read.version { return }
         guard dayPrices[entry] != read else { return }
         // A small cache: entries of an older key go first; past 256 products it starts again.
         if dayPrices.count >= 256 {
@@ -112,16 +116,19 @@ extension AppModel {
         dayPrices[entry] = read
     }
 
-    /// The printing's day-file prices when read for the current day files and window; else nil.
+    /// The printing's last day-file prices read for the current window, also when a day file was written since (its
+    /// newer read is then due or running: item 1); else nil.
     private func currentDayPrices(game: String, productID: Int) -> DayPrices? {
-        guard let read = dayPrices["\(game)|\(productID)"], read.version == priceDaysVersion,
+        guard let read = dayPrices["\(game)|\(productID)"],
               read.window == PriceDay.window(endingOn: PriceDay.wanted(now: now())) else { return nil }
         return read
     }
 
-    @concurrent private nonisolated static func readDayFiles(days: Set<String>, window: ClosedRange<String>, categoryID: Int,
+    /// Lists the day files (without the gate) and reads the printing's prices from them, off the main actor.
+    @concurrent private nonisolated static func readDayFiles(in folder: URL, window: ClosedRange<String>, categoryID: Int,
                                                             productID: Int, open: HistoryPass.Reader) async -> DayFilePrices {
-        PriceDayPoints.read(days: days, window: window, categoryID: categoryID, productID: productID, open: open)
+        PriceDayPoints.read(days: PriceDayFile.days(in: folder), window: window, categoryID: categoryID,
+                            productID: productID, open: open)
     }
 
     /// The folder is read and there, the first-run question is not due, the game is followed and its game file readable.

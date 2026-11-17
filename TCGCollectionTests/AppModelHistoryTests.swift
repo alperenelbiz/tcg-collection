@@ -378,10 +378,60 @@ struct AppModelHistoryTests {
         try placeArchives(model, ["2025-12-29"])
         _ = try await model.archiveGate.decode(day: "2025-12-29", games: Games.all)
         await model.notePriceDays()
-        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .reading)
+        // Final fix wave, item 1: the last read stays shown while the new one runs.
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
         let points = await model.points(game: "riftbound", productID: Self.dockside)
         #expect(reads.count == before + 2 * Self.archiveDays.count + 1)
         #expect(points["Normal"]?.first?.day == "2025-12-29")
+    }
+
+    /// Holds the day-file reads it makes while `hold()` is on: the first read waits until `release()`.
+    final class HeldReads: Sendable {
+        private let held = Mutex(false)
+        private let entered = Mutex(false)
+        private let gate = DispatchSemaphore(value: 0)
+        var isWaiting: Bool { entered.withLock { $0 } }
+        func hold() { held.withLock { $0 = true } }
+        func release() {
+            held.withLock { $0 = false }
+            gate.signal()
+        }
+        func reader(_ folder: URL) -> HistoryPass.Reader {
+            { [self] day in
+                if held.withLock({ $0 }) {
+                    entered.withLock { $0 = true }
+                    gate.wait()
+                }
+                return try HistoryPass.dayFileReader(in: folder)(day)
+            }
+        }
+    }
+
+    /// Final fix wave, item 1: a new day file (a `priceDaysVersion` bump) keeps the last read on screen: the block stays
+    /// `.ready` with the old points while the new read runs, then shows the new points. No flash of "Reading…".
+    @Test(.timeLimit(.minutes(1))) func aNewDayFileKeepsTheLastReadUntilTheNewReadLands() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.kaisa])])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        _ = await model.points(game: "riftbound", productID: Self.dockside)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal")?.map(\.day) == Self.archiveDays)
+        try placeArchives(model, ["2025-12-29"])
+        _ = try await model.archiveGate.decode(day: "2025-12-29", games: Games.all)
+        let held = HeldReads()
+        held.hold()
+        model.historyDayReader = held.reader
+        await model.notePriceDays()
+        let reading = Task { await model.readDayPrices(game: "riftbound", productID: Self.dockside) }
+        try await until { held.isWaiting }
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal")?.map(\.day) == Self.archiveDays)
+        held.release()
+        await reading.value
+        #expect(model.historyState(game: "riftbound", productID: Self.dockside) == .ready)
+        #expect(model.dayPoints(game: "riftbound", productID: Self.dockside, finish: "Normal")?.map(\.day)
+                    == ["2025-12-29"] + Self.archiveDays)
     }
 
     // MARK: Gates (Global Constraints, H7)
