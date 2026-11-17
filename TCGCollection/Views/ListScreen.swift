@@ -306,6 +306,13 @@ extension View {
     /// game, the window closing) cancels a running export, which then writes nothing and drops a PDF not yet saved; a card
     /// page pushed on the stack does not. A made PDF dropped that way is said once: "The PDF was not saved: you left the
     /// list." (`PDFExport.leave`).
+    ///
+    /// On the iPhone (A51) the made PDF opens the system's share sheet instead (`PDFSharing`), with the job's file name.
+    #if os(iOS)
+    func pdfSaving(_ export: PDFExport, model: AppModel) -> some View {
+        modifier(PDFSharing(export: export, model: model))
+    }
+    #else
     func pdfSaving(_ export: PDFExport, model: AppModel) -> some View {
         fileExporter(isPresented: Binding(get: { export.made != nil }, set: { if !$0 { export.made = nil } }),
                      document: export.made.map { PDFFile(data: $0.data) }, contentType: .pdf,
@@ -317,7 +324,93 @@ extension View {
             if let notice = export.leave() { model.pdfEnded(notice) }
         }
     }
+    #endif
 }
+
+/// Where the iPhone's share sheet takes a made PDF from: `<temporary>/pdf-share/<file name>`, the folder emptied first
+/// (one shared PDF at a time; the system copies what it sends). Pure but for the file system.
+nonisolated enum PDFShareFile {
+    static func write(_ made: PDFMade, in temporary: URL = FileManager.default.temporaryDirectory) throws -> URL {
+        let folder = temporary.appending(path: "pdf-share", directoryHint: .isDirectory)
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: made.fileName)
+        try made.data.write(to: file, options: .atomic)
+        return file
+    }
+}
+
+#if os(iOS)
+
+/// The iPhone's save step of a list's PDF (A51): a made PDF is written to `PDFShareFile` and the system's share sheet
+/// (`UIActivityViewController`, the sheet `ShareLink` opens) offers it; the export's progress and cancel are the Mac's.
+/// A failure of the write or of the chosen activity is said in the status line, as a failed save on the Mac; a cancel is
+/// not. The stack going away drops a PDF not yet shared (`PDFExport.leave`).
+private struct PDFSharing: ViewModifier {
+    let export: PDFExport
+    let model: AppModel
+    @State private var shared: SharedPDF?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: export.made, initial: true) { _, made in
+                guard let made, shared == nil else { return }
+                do {
+                    shared = SharedPDF(url: try PDFShareFile.write(made))
+                } catch {
+                    export.made = nil
+                    model.pdfSaveEnded(.failure(error))
+                }
+            }
+            .sheet(item: $shared, onDismiss: { export.made = nil }) { file in
+                ActivitySheet(url: file.url) { error in
+                    shared = nil
+                    if let error { model.pdfSaveEnded(.failure(error)) }
+                }
+                .presentationDetents([.medium, .large])
+                .ignoresSafeArea()
+            }
+            .onDisappear {
+                if let notice = export.leave() { model.pdfEnded(notice) }
+            }
+    }
+}
+
+private struct SharedPDF: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+/// The system's share sheet on one file.
+private struct ActivitySheet: UIViewControllerRepresentable {
+    let url: URL
+    /// Called once the sheet ends: with the activity's error, nil for a share done or cancelled.
+    let ended: ((any Error)?) -> Void
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, error in ended(error) }
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// A list screen's "…" menu on the iPhone (A54): the items the screen has in its Mac toolbar, each with its Mac identifier.
+struct MoreMenu<Items: View>: View {
+    let identifier: String
+    @ViewBuilder let items: Items
+
+    var body: some View {
+        Menu {
+            items
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+        }
+        .accessibilityIdentifier(identifier)
+    }
+}
+#endif
 
 /// A list screen's Sort menu: Name, Price high to low, Price low to high, Copies.
 struct SortMenu: View {

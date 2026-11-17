@@ -19,6 +19,13 @@ nonisolated enum PhoneTabs {
         }
     }
 
+    /// The tab bar's selection for `screen` among the tabs of this render (`tabs(profile:)`): the screen's tab, or the
+    /// Collection while that tab is gone (a role turned off by a reload removes the tab before the screen moves).
+    static func selection(of screen: Screen, tabs: [PhoneTab]) -> PhoneTab {
+        let own = tab(of: screen)
+        return tabs.contains(own) ? own : .collection
+    }
+
     /// The screen a tap on `tab` shows: the tab's last screen (`last[tab]`, when it belongs to the tab), else its root.
     static func screen(for tab: PhoneTab, last: [PhoneTab: Screen]) -> Screen {
         if let screen = last[tab], self.tab(of: screen) == tab { return screen }

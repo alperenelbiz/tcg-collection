@@ -76,12 +76,24 @@ struct ForSaleView: View {
             .navigationTitle("For Sale")
             .navigationSubtitle(phase != .list ? "" : state.searching ? SaleList.totals(shown, of: all) : SaleList.totals(all))
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: the toolbar's items in one "…" menu.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "for-sale-more") {
+                        PDFButton(export: state.export, identifier: "for-sale-pdf", enabled: pdfReady) { pdfJob(all) }
+                        SortMenu(sort: $state.sort, identifier: "for-sale-sort")
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     PDFButton(export: state.export, identifier: "for-sale-pdf", enabled: pdfReady) { pdfJob(all) }
                     SortMenu(sort: $state.sort, identifier: "for-sale-sort")
                 }
             }
+            #endif
             .launchPDF(state.export, screen: .forSale, ready: launchReady, model: model) { pdfJob(all) }
             // Plain buttons: selling is what the dialog is for, not a mistake to warn about (the system's destructive red
             // on its dark fill reads badly).

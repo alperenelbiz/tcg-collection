@@ -92,6 +92,23 @@ struct CollectionView: View {
             .navigationTitle("Collection")
             .navigationSubtitle(subtitle(phase, all: all, shown: shown))
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: the toolbar's items in one "…" menu; "Clear" stays a button while a filter is on.
+            .toolbar {
+                if state.filtersOn > 0 {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ClearFiltersButton(identifier: "collection-clear-filters") { state.clearFilters() }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "collection-more") {
+                        importButton
+                        filterMenu
+                        SortMenu(sort: $state.sort, identifier: "collection-sort")
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     importButton
@@ -102,6 +119,7 @@ struct CollectionView: View {
                     SortMenu(sort: $state.sort, identifier: "collection-sort")
                 }
             }
+            #endif
             .task(id: RowsJoin.key(game: state.gameID, model: model)) { await joinRows() }
     }
 

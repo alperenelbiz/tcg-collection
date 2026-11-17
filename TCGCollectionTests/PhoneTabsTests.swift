@@ -12,6 +12,19 @@ struct PhoneTabsTests {
         #expect(PhoneTabs.tab(of: .allCards) == .search)
     }
 
+    /// Task 2 review m1: the selection never names a tab that this render's tab bar lacks; it names the Collection then.
+    @Test func theSelectionIsAlwaysATabOfTheBar() {
+        let noDecks = PhoneTabs.tabs(profile: GameProfile(followed: true, player: false, collector: true))
+        #expect(PhoneTabs.selection(of: .deck("a"), tabs: noDecks) == .collection)
+        #expect(PhoneTabs.selection(of: .decks, tabs: noDecks) == .collection)
+        #expect(PhoneTabs.selection(of: .sets, tabs: noDecks) == .sets)
+        let noSets = PhoneTabs.tabs(profile: GameProfile(followed: true, player: true, collector: false))
+        #expect(PhoneTabs.selection(of: .sets, tabs: noSets) == .collection)
+        #expect(PhoneTabs.selection(of: .forSale, tabs: noSets) == .collection)
+        #expect(PhoneTabs.selection(of: .wanted, tabs: noSets) == .wanted)
+        #expect(PhoneTabs.selection(of: .allCards, tabs: noSets) == .search)
+    }
+
     /// The deck list and every deck are in the Decks tab.
     @Test func aDeckIsInTheDecksTab() {
         #expect(PhoneTabs.tab(of: .deck("a")) == .decks)

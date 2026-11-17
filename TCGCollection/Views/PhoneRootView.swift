@@ -28,9 +28,10 @@ struct PhoneRootView: View {
     var body: some View {
         @Bindable var model = model
         // G7, G8: Decks with the player role, Sets with the collector role. A role turned off sends its screen to the
-        // Collection (`AppModel.applyRoles`), so the selection never names a tab that is gone.
+        // Collection (`AppModel.applyRoles`); until then (a reload removes the tab first) the selection names the
+        // Collection, never a tab that is gone.
         let tabs = PhoneTabs.tabs(profile: model.profile(of: model.gameID))
-        TabView(selection: Binding(get: { PhoneTabs.tab(of: model.screen) },
+        TabView(selection: Binding(get: { PhoneTabs.selection(of: model.screen, tabs: tabs) },
                                    set: { model.screen = PhoneTabs.screen(for: $0, last: last) })) {
             Tab("Collection", systemImage: "rectangle.portrait.on.rectangle.portrait", value: PhoneTab.collection) {
                 tabContent(.collection)
@@ -93,13 +94,13 @@ struct PhoneRootView: View {
         case .collection:
             let state = collection.state(game: game)
             ListStack(path: Bindable(state).path.kept(on: .collection, in: model)) {
-                CollectionView(state: state).phoneRootToolbar()
+                CollectionView(state: state).phoneRootToolbar().collectionSwitch()
             }
             .id(game)
         case .forSale:
             let state = forSale.state(game: game)
             ListStack(path: Bindable(state).path.kept(on: .forSale, in: model)) {
-                ForSaleView(state: state).phoneRootToolbar()
+                ForSaleView(state: state).phoneRootToolbar().collectionSwitch()
             }
             .pdfSaving(state.export, model: model)
             .id(game)
@@ -173,6 +174,35 @@ private struct PhoneRootToolbar: ViewModifier {
                     .accessibilityIdentifier("settings-button")
                 }
             }
+    }
+}
+
+extension View {
+    /// A50: the Collection tab's one control row, the switch "Collection / For Sale", above the screen's content.
+    func collectionSwitch() -> some View {
+        safeAreaInset(edge: .top, spacing: 0) { CollectionSwitch() }
+    }
+}
+
+/// A50: For Sale is inside the Collection tab, behind one segmented switch bound to the model's screen. Each side keeps
+/// its own stack (`PhoneRootView.stacks`), so each keeps its pages.
+private struct CollectionSwitch: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Picker("Collection or For Sale", selection: Binding(get: { model.screen == .forSale ? Screen.forSale : .collection },
+                                                            set: { model.screen = $0 })) {
+            Text("Collection").tag(Screen.collection)
+            Text("For Sale").tag(Screen.forSale)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        // Not the accent (the selected tab and a sheet's default button only), as the other segmented controls.
+        .tint(Theme.faint)
+        .accessibilityIdentifier("collection-switch")
+        .padding(.horizontal, Theme.margin)
+        .padding(.vertical, Theme.lineGap * 2)
+        .background(Theme.ground)
     }
 }
 

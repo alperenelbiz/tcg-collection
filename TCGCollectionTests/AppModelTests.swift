@@ -1950,6 +1950,20 @@ struct AppModelTests {
         }
     }
 
+    /// Phase 6A (G7): a game switch to a game without the player role while the iPhone's deck list (`.decks`) shows opens
+    /// that game's Collection; to a game with the role the deck list stays.
+    @MainActor @Test func aGameSwitchLeavesTheDeckListWithoutThePlayerRole() async throws {
+        let root = tempRoot()
+        try writeUserFile(root, "cyberpunk", #"{"version":1,"collection":[],"profile":{"player":false}}"#)
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-game", "riftbound"])
+        await model.start()
+        model.screen = .decks
+        model.gameID = "yu-gi-oh"                                              // the player role is on
+        #expect(model.screen == .decks)
+        model.gameID = "cyberpunk"
+        #expect(model.screen == .collection)
+    }
+
     /// G8: without the collector role the game's set index is not scanned (its due mark stays, no file is written); the
     /// role turned on asks for the scan, and the index is made.
     @MainActor @Test(.timeLimit(.minutes(1))) func noSetIndexScanWithoutTheCollectorRole() async throws {

@@ -123,6 +123,23 @@ struct WantedView: View {
             .navigationTitle("Wanted")
             .navigationSubtitle(phase != .list ? "" : state.searching ? WantedList.totals(shown, of: all) : WantedList.totals(all))
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: the toolbar's items in one "…" menu.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "wanted-more") {
+                        // E7: only while a card is pending; the sheet's rows are the pending cards of this moment.
+                        if pending > 0 {
+                            Button("Decisions (\(pending))…") { openSharing(Set(all.filter(\.pending).map(\.id))) }
+                                .disabled(!library.canChange(game: game))
+                                .accessibilityIdentifier("wanted-decisions")
+                        }
+                        PDFButton(export: state.export, identifier: "wanted-pdf", enabled: pdfReady) { pdfJob(all) }
+                        SortMenu(sort: $state.sort, identifier: "wanted-sort")
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     // E7: only while a card is pending; the sheet's rows are the pending cards of this moment.
@@ -135,6 +152,7 @@ struct WantedView: View {
                     SortMenu(sort: $state.sort, identifier: "wanted-sort")
                 }
             }
+            #endif
             .launchPDF(state.export, screen: .wanted, ready: launchReady, model: model) { pdfJob(all) }
             .task(id: join) { await state.join.run(join, model: model) }
             .sheet(isPresented: Bindable(model).showsSharing, onDismiss: { state.endSharing(model: model) }) {
