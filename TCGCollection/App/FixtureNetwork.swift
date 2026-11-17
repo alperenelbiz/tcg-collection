@@ -23,18 +23,41 @@ nonisolated struct FileCatalogClient: TCGCSVFetching {
 }
 
 /// The daily price archive from files: the one `prices-*.ppmd.7z` in the folder answers every day.
+/// - `delay` (`-fixtureDelay`): each answer waits this long first, so a UI test can see the 90-day download's progress.
+/// - `requestLog` (`<root>/fixture-archive-requests.txt` with `-store`): one line per request, the day asked for, so a UI
+///   test (another process) can count the requests per day.
+/// The copy goes to a temporary name in the same folder first and gets the archive's name only when whole, as
+/// `ArchiveClient`'s finished download does: a request cut short never leaves a file under an archive's name.
 nonisolated struct FileArchiveClient: ArchiveFetching {
     let directory: URL
+    var delay: Duration = .zero
+    var requestLog: URL?
 
     func download(day: String, to file: URL) async throws -> Bool {
         let fm = FileManager.default
+        if let requestLog { try Self.append(day, to: requestLog) }
+        if delay > .zero { try await Task.sleep(for: delay) }
         let names = try fm.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix("prices-") && $0.hasSuffix(".ppmd.7z") }
         guard names.count == 1 else { throw FixtureNetworkError.notOneArchive(found: names.count, in: directory) }
         try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let temporary = file.deletingLastPathComponent().appending(path: "." + file.lastPathComponent + ".part")
+        try? fm.removeItem(at: temporary)
+        try fm.copyItem(at: directory.appending(path: names[0]), to: temporary)
         try? fm.removeItem(at: file)
-        try fm.copyItem(at: directory.appending(path: names[0]), to: file)
+        try fm.moveItem(at: temporary, to: file)
         return true
+    }
+
+    private static func append(_ day: String, to log: URL) throws {
+        let line = Data((day + "\n").utf8)
+        if let handle = try? FileHandle(forWritingTo: log) {
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } else {
+            try line.write(to: log)
+        }
     }
 }
 

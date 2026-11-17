@@ -71,6 +71,15 @@ struct RootView: View {
         // A deck deleted (here, or on another device) drops its kept state at once. A view of its own reads the decks, so a
         // change of the library does not compute this body again.
         .background { DeckMemoryKeeper(memory: decks) }
+        // Phase 5B task 5 (A33, K12): the 90-day download's confirmation, from the chart's line and the Catalog menu.
+        .confirmationDialog(MissingDays.confirmation(missing: model.missingDays.count).title,
+                            isPresented: $model.asksBackfill, titleVisibility: .visible) {
+            Button(MissingDays.confirmTitle) { model.startBackfill() }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(MissingDays.confirmation(missing: model.missingDays.count).message)
+        }
         .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
                             isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
@@ -153,6 +162,9 @@ private struct CatalogStack: View {
                         Menu("Catalog") {
                             Button("Refresh") { Task { await model.refresh(rebuild: false) } }
                             Button("Rebuild catalog…") { confirmRebuild = true }
+                            Button(MissingDays.menuTitle) { model.asksBackfill = true }
+                                .disabled(!model.canAskBackfill)
+                                .accessibilityIdentifier("catalog-download-history")
                         }
                         // Not with a store in memory (`storeFailure`): a sync would do nothing there.
                         .disabled(model.options.offline || model.status.isSyncing || model.storeFailure != nil)
@@ -330,7 +342,8 @@ private struct SidebarStatus: View {
         VStack(alignment: .leading, spacing: 0) {
             // On a list screen these lines are in the screen itself.
             if !model.screen.isList { LibraryLines(inSidebar: true) }
-            StatusLine(status: model.status, notice: model.statusNotice)
+            StatusLine(text: model.statusLineText,
+                       working: model.statusNotice == nil && (model.status.isSyncing || model.backfillProgress != nil))
         }
     }
 }
@@ -479,13 +492,15 @@ struct LibraryLines: View {
 /// One or two lines, 11 pt `faint`; a long text is cut, it never makes the sidebar wider. An import's summary (`notice`)
 /// stands in for the status until the status changes.
 private struct StatusLine: View {
-    let status: Status
-    let notice: String?
+    /// `AppModel.statusLineText`: a notice, else the sync's line, else the 90-day download's progress, else the status.
+    let text: String
+    /// A sync or the 90-day download runs (and no notice stands in for it): the spinner shows.
+    let working: Bool
 
     var body: some View {
         HStack(spacing: 6) {
-            if notice == nil, status.isSyncing { ProgressView().controlSize(.small) }
-            Text(notice ?? status.text)
+            if working { ProgressView().controlSize(.small) }
+            Text(text)
                 .lineLimit(2)
                 .truncationMode(.tail)
                 .accessibilityIdentifier("status-line")

@@ -33,7 +33,10 @@ struct TCGCollectionApp: App {
             let catalog = FileCatalogClient(directory: fixtures, productsDelay: .milliseconds(options.fixtureDelay ?? 0))
             let fetcher = FileFetcher(directory: fixtures, picturesDelay: .milliseconds(options.pictureDelay ?? 0))
             return AppModel(options: options, catalogClient: catalog,
-                            archiveClient: FileArchiveClient(directory: fixtures), fetcher: fetcher)
+                            archiveClient: FileArchiveClient(
+                                directory: fixtures, delay: .milliseconds(options.fixtureDelay ?? 0),
+                                requestLog: options.storeRoot?.appending(path: "fixture-archive-requests.txt")),
+                            fetcher: fetcher)
         }
         #endif
         // A `-fixtures` that cannot be honoured (and, in a build without the fixture network, any `-fixtures`): offline.

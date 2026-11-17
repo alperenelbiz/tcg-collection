@@ -80,16 +80,96 @@ nonisolated enum PriceDay {
     }
 }
 
-actor PriceSync {
+/// Every archive request of the app goes through this one lane (phase 5B task 5, A32): the price step's daily file and
+/// the 90-day download alike.
+/// - One request at a time: a second caller waits until the first one's request has ended.
+/// - Checked again inside the lane, right before the request: a day that has a day file or an archive on disk is never
+///   asked for (another path may have made one since the caller looked).
+/// - A day this lane downloaded, or that was a 404, is not asked for again in this run.
+/// - `background` callers (the 90-day download) also wait while the lane is paused (`pause()`: a catalog step runs, so
+///   tcgcsv never gets more than its 4 requests at a time); the price step is not a background caller.
+/// The client writes the archive's name only once the whole file is there (`ArchiveClient` moves a finished temporary
+/// file into place), so a request cut short leaves no archive.
+actor ArchiveDownloads {
+    nonisolated enum Outcome: Equatable, Sendable {
+        /// The archive was downloaded to its place.
+        case downloaded
+        /// The day has a day file or an archive on disk already: nothing was asked for.
+        case onDisk
+        /// No archive for that day (a 404, now or earlier in this run).
+        case notFound
+        /// This lane downloaded the day earlier in this run and it is gone from disk: not asked for again.
+        case downloadedBefore
+    }
+
     private let paths: AppPaths
     private let client: any ArchiveFetching
+    private var inFlight = false
+    private var pauses = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var downloaded: Set<String> = []
+    /// The days that were a 404 in this run.
+    private(set) var notFound: Set<String> = []
+
+    init(paths: AppPaths, client: any ArchiveFetching) {
+        self.paths = paths
+        self.client = client
+    }
+
+    func download(day: String, background: Bool) async throws -> Outcome {
+        while inFlight || (background && pauses > 0) {
+            await withCheckedContinuation { waiters.append($0) }
+            try Task.checkCancellation()
+        }
+        let fm = FileManager.default
+        let archive = paths.archives.appending(path: ArchiveGate.archiveName(day: day))
+        if fm.fileExists(atPath: paths.priceDay(day).path) || fm.fileExists(atPath: archive.path) { return .onDisk }
+        if notFound.contains(day) { return .notFound }
+        if downloaded.contains(day) { return .downloadedBefore }
+        try Task.checkCancellation()
+        inFlight = true
+        defer {
+            inFlight = false
+            wakeAll()
+        }
+        try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+        if try await client.download(day: day, to: archive) {
+            downloaded.insert(day)
+            return .downloaded
+        }
+        notFound.insert(day)
+        return .notFound
+    }
+
+    /// Background requests wait from now until `resume()`; returns once no request is in flight.
+    func pause() async {
+        pauses += 1
+        while inFlight { await withCheckedContinuation { waiters.append($0) } }
+    }
+
+    func resume() {
+        pauses = max(0, pauses - 1)
+        wakeAll()
+    }
+
+    private func wakeAll() {
+        let woken = waiters
+        waiters = []
+        for waiter in woken { waiter.resume() }
+    }
+}
+
+actor PriceSync {
+    private let paths: AppPaths
     /// Every archive is decoded through the gate (phase 5B, K3): once, into the tables and the day file.
     nonisolated let gate: ArchiveGate
+    /// Every archive request goes through this lane (one at a time, each day once).
+    nonisolated let downloads: ArchiveDownloads
 
     init(paths: AppPaths, client: any ArchiveFetching, gate: ArchiveGate? = nil) {
         self.paths = paths
-        self.client = client
         self.gate = gate ?? ArchiveGate(paths: paths)
+        downloads = ArchiveDownloads(paths: paths, client: client)
     }
 
     /// Prices of every game in `games` from the wanted day, else the day before. Returns nil when `haveDay` is already
@@ -110,8 +190,10 @@ actor PriceSync {
             let file = paths.archives.appending(path: "prices-\(day).ppmd.7z")
             if !fm.fileExists(atPath: paths.priceDay(day).path), !fm.fileExists(atPath: file.path) {
                 guard download else { continue }
-                try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
-                guard try await client.download(day: day, to: file) else { continue }
+                switch try await downloads.download(day: day, background: false) {
+                case .downloaded, .onDisk: break
+                case .notFound, .downloadedBefore: continue
+                }
             }
             return try await gate.decode(day: day, games: games)
         }

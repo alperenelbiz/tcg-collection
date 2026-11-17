@@ -193,6 +193,110 @@ final class PriceHistoryFlowTests: UITestCase {
         XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 1, "the window grew")
     }
 
+    // MARK: The 90-day download (phase 5B task 5: A32, A33, K7, K12)
+
+    private static let dialogTitle = "Download 90 days of price history?"
+    private static let dialogMessage = "About 370 MB in 89 files, one at a time, in the background. It takes about 3 minutes. "
+        + "Each day is downloaded once."
+
+    /// The archive requests the fixture network answered, one day per line (`<root>/fixture-archive-requests.txt`).
+    private func archiveRequests() -> [String] {
+        guard let root, let text = try? String(contentsOf: root.appending(path: "fixture-archive-requests.txt"), encoding: .utf8)
+        else { return [] }
+        return text.split(separator: "\n").map(String.init)
+    }
+
+    /// A fresh fixture root: the price step wrote the wanted day's day file, so 89 days of the window are missing. The line
+    /// under the chart says so; its button opens the confirmation; Cancel downloads nothing; "Download" shows the progress
+    /// (on the line and in the status line), then the line goes and every day of the window has a price (a chart).
+    func testTheDownloadLineAndTheConfirmation() throws {
+        let started = Date()
+        let day = Self.wantedDay()
+        let app = launch(game: "riftbound", extra: ["-fixtureDelay", "120"])
+        openCard(app, "dockside lock up")
+        XCTAssertEqual(archiveRequests(), [day], "the launch asked for more than the day's own archive")
+        let note = element(app, "price-history-download-note")
+        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note) == "Prices of 89 of the last 90 days are missing." },
+                      shown(note))
+        let button = element(app, "price-history-download")
+        XCTAssertTrue(button.exists, "no button on the line")
+        let page = element(app, "card-page")
+        page.scroll(byDeltaX: 0, deltaY: -400)
+        XCTAssertTrue(waitUntil { button.isHittable }, "the button is not on screen")
+        XCTAssertEqual(app.windows.firstMatch.frame.width, 900, accuracy: 1, "the line widened the window")
+        shot("history-10-download-line")
+
+        // The dialog; Cancel downloads nothing.
+        settled(button).click()
+        let confirm = app.sheets.buttons["Download"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.staticTexts[Self.dialogTitle].firstMatch.exists, app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.staticTexts[Self.dialogMessage].firstMatch.exists, app.sheets.firstMatch.debugDescription)
+        shot("history-11-download-confirmation")
+        app.sheets.buttons["Cancel"].firstMatch.click()
+        XCTAssertTrue(waitUntil { !confirm.exists }, "the dialog stayed")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(archiveRequests(), [day], "Cancel downloaded")
+        XCTAssertEqual(text(note), "Prices of 89 of the last 90 days are missing.")
+
+        // "Download": the progress on the line and in the status line, then the line goes.
+        settled(button).click()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.click()
+        XCTAssertTrue(waitUntil(timeout: 20) { note.exists && self.text(note).hasPrefix("Downloading price history: ") },
+                      shown(note))
+        XCTAssertFalse(button.exists, "a button while the download runs")
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil(timeout: 10) { self.text(status).hasPrefix("Price history: ") }, shown(status))
+        XCTAssertTrue(text(status).hasSuffix(" of 89 days"), shown(status))
+        shot("history-12-download-progress")
+        XCTAssertTrue(waitUntil(timeout: 240) { !note.exists }, "the line stayed: \(shown(note))")
+        XCTAssertTrue(waitUntil(timeout: 10) { self.text(status).hasPrefix("Catalog up to date") }, shown(status))
+        // Every day of the window has a price now: the chart of 90 days.
+        let summary = element(app, "price-history-summary")
+        XCTAssertTrue(waitUntil(timeout: 20) { summary.exists && self.text(summary).hasSuffix("in 90 days") }, shown(summary))
+        XCTAssertTrue(element(app, "price-history-chart").exists)
+        let requests = archiveRequests()
+        XCTAssertEqual(requests.count, 90, "\(requests)")
+        XCTAssertEqual(Set(requests).count, 90, "a day was asked twice")
+        XCTAssertEqual(requests.first, day)
+        page.scroll(byDeltaX: 0, deltaY: -400)
+        XCTAssertTrue(waitUntil { self.element(app, "price-history-chart").isHittable })
+        shot("history-13-download-done")
+        print("testTheDownloadLineAndTheConfirmation took \(Int(Date().timeIntervalSince(started))) s")
+    }
+
+    /// The Catalog menu's "Download Price History…" opens the same dialog; after the download it is off (nothing is
+    /// missing).
+    func testTheCatalogMenuItem() throws {
+        let app = launch(game: "riftbound", extra: ["-fixtureDelay", "10"])
+        let cell = element(app, "card-cell-dockside lock up")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app), "the sync did not end")
+        let menu = element(app, "catalog-menu")
+        let item = app.menuItems["catalog-download-history"].firstMatch
+        XCTAssertTrue(waitUntil { menu.isEnabled })
+        menu.click()
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no menu item")
+        XCTAssertTrue(item.isEnabled, "the item is off while days are missing")
+        shot("history-14-catalog-menu")
+        item.click()
+        let confirm = app.sheets.buttons["Download"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.sheets.firstMatch.debugDescription)
+        XCTAssertTrue(app.sheets.staticTexts[Self.dialogTitle].firstMatch.exists)
+        XCTAssertTrue(app.sheets.staticTexts[Self.dialogMessage].firstMatch.exists)
+        confirm.click()
+        let status = app.staticTexts["status-line"]
+        XCTAssertTrue(waitUntil(timeout: 20) { self.text(status).hasPrefix("Price history: ") }, shown(status))
+        XCTAssertTrue(waitUntil(timeout: 240) { self.text(status).hasPrefix("Catalog up to date") }, shown(status))
+        XCTAssertEqual(Set(archiveRequests()).count, 90)
+        menu.click()
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        XCTAssertFalse(item.isEnabled, "the item is on while nothing is missing")
+        shot("history-15-catalog-menu-off")
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
     /// Waits until `element` stops moving (a scroll's deceleration), so a click lands on it: once its frame was the same
     /// on two reads 0.3 s apart (the helper of DecksFlowTests). Returns the element.
     @discardableResult

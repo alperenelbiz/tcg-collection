@@ -12,8 +12,8 @@ nonisolated struct LaunchOptions: Sendable {
     var catalogReport = false
     /// `-fixtures <dir>` (DEBUG): the network is served from the files in this folder.
     var fixtures: URL?
-    /// `-fixtureDelay <milliseconds>` (DEBUG): every fixture products answer waits this long, so a UI test can act
-    /// during a sync.
+    /// `-fixtureDelay <milliseconds>` (DEBUG): every fixture products answer and every fixture archive answer waits this
+    /// long, so a UI test can act during a sync or see the 90-day download's progress.
     var fixtureDelay: Int?
     /// `-writeDelay <milliseconds>` (DEBUG): every write of a game file waits this long first, so a UI test can quit
     /// while a write is still queued and see that quitting waits for it.

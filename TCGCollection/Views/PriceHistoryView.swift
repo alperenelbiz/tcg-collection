@@ -55,6 +55,11 @@ struct PriceHistoryView: View {
                 frame(note: note)
                     .padding(.top, 4)
             }
+            // Phase 5B task 5 (A33): while days of the window are missing, under the plot or the frame.
+            if state != .unknown, let line = model.backfillLine {
+                downloadLine(line.text, button: line.button)
+                    .padding(.top, 8 - Theme.lineGap)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -147,6 +152,35 @@ struct PriceHistoryView: View {
             .monospacedDigit()
             .lineLimit(1)
             .accessibilityIdentifier("price-history-summary")
+    }
+
+    /// The line of the 90-day download: its sentence in 12 pt `muted` and, before the yes, the button that opens the
+    /// dialog (beside the sentence when the row fits the column, else under it). The model says what it says.
+    @ViewBuilder private func downloadLine(_ text: String, button: Bool) -> some View {
+        let sentence = Text(text)
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("price-history-download-note")
+        if button {
+            let download = Button(MissingDays.buttonTitle) { model.asksBackfill = true }
+                .buttonStyle(FieldButtonStyle())
+                .fixedSize()
+                .accessibilityIdentifier("price-history-download")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    sentence.fixedSize()
+                    Spacer(minLength: 8)
+                    download
+                }
+                VStack(alignment: .leading, spacing: Theme.lineGap) {
+                    sentence
+                    download
+                }
+            }
+        } else {
+            sentence
+        }
     }
 
     /// A state's frame: a flat `surface` block of the plot's size with its sentence, or none.

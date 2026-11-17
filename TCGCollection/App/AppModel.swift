@@ -393,9 +393,9 @@ final class AppModel {
     /// The stored `followedGamesKey`, read once at launch; nil when none is stored.
     @ObservationIgnored private var knownFollowed: [String]?
 
-    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
-    @ObservationIgnored private let priceSync: PriceSync
+    @ObservationIgnored let priceSync: PriceSync
     /// Phase 5B (K3): every archive is decoded through this one gate (the price step, a game turned on, the migration).
     @ObservationIgnored var archiveGate: ArchiveGate { priceSync.gate }
     /// Phase 5B: +1 per day file written in this run (set on the main actor after each call to the gate).
@@ -410,6 +410,42 @@ final class AppModel {
     @ObservationIgnored private(set) var priceDaysCleaning: Task<Void, Never>?
     /// K11: the archives on disk were migrated into day files in this run (once, after the launch's price step).
     @ObservationIgnored private var priceDaysMigrated = false
+    // MARK: The 90-day download (phase 5B task 5; `AppModel+Backfill.swift`)
+
+    /// The preference that says the user said yes to the 90-day download (A32, A48): set only by `startBackfill()` (the
+    /// dialog's "Download"). A device's preference (with `-store`: the root's own), never a user-folder key.
+    nonisolated static let priceDaysDownloadKey = "priceDaysDownload"
+    /// The user said yes, now or at an earlier launch (`priceDaysDownloadKey`). Observed: the line under the chart.
+    var backfillOptedIn = false
+    /// While the queue works: the days done and the days it planned. Observed: the line and the status line.
+    var backfillProgress: BackfillProgress?
+    /// K7: the days of the window the download still has to fetch, newest first (`MissingDays.days`). Observed: the line
+    /// under the chart and the Catalog menu's item. Read again after each day, and after a day file is written elsewhere.
+    var missingDays: [String] = []
+    /// True when the dialog of the download is asked for (the line's button, the Catalog menu's item).
+    var asksBackfill = false
+    /// A46: the iPhone's network is neither expensive nor constrained (`MissingDays.allowsBackfill`); always true on the
+    /// Mac. Observed: the line says "Price history downloads on Wi-Fi." while it is false.
+    var backfillNetworkAllowed = true
+    /// The queue's task; nil while it does not run.
+    @ObservationIgnored var backfillTask: Task<Void, Never>?
+    /// True once the launch's price step, its migration (K11) and its first history pass request are done: no download
+    /// of the queue before that.
+    @ObservationIgnored var backfillLaunchReady = false
+    /// A network error stopped the queue for this run (said once); the next launch goes on.
+    @ObservationIgnored var backfillStopped = false
+    /// The watcher that starts the queue when its gates open (`watchBackfillGates`); one per model.
+    @ObservationIgnored var backfillWatching = false
+    /// The day files written in this run that the queue's last listing has seen, so a day file the price step or a game
+    /// turned on writes makes `missingDays` read again.
+    @ObservationIgnored var missingDaysVersion = -1
+    /// K9: begins an activity that keeps App Nap from slowing the queue; returns the closure that ends it. Tests count.
+    @ObservationIgnored var backfillActivity: @MainActor (String) -> (@MainActor () -> Void) = AppModel.processActivity
+    #if os(iOS)
+    /// A46: watches the iPhone's network path (`watchBackfillNetwork`).
+    @ObservationIgnored var backfillPathMonitor: AnyObject?
+    #endif
+
     #if DEBUG
     /// Test only: called on the main actor when the launch's migration starts.
     @ObservationIgnored var priceDaysMigrationHook: (@MainActor () async -> Void)?
@@ -486,6 +522,7 @@ final class AppModel {
         catalogSync = CatalogSync(store: store, client: catalogClient)
         let saved = defaults.string(forKey: Self.gameKey)
         knownFollowed = defaults.stringArray(forKey: Self.followedGamesKey)
+        backfillOptedIn = defaults.bool(forKey: Self.priceDaysDownloadKey)
         for game in Games.all {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
         }
@@ -704,7 +741,7 @@ final class AppModel {
     }
 
     /// K4: the tables of the followed games whose day is newer than the table's day of that game (or that have none).
-    private func takeNewerTables(_ tables: [String: GamePrices]) {
+    func takeNewerTables(_ tables: [String: GamePrices]) {
         for (game, table) in tables where isSynced(game) && isNewer(table, game: game) {
             try? prices.replace(game, with: table, paths: paths)
         }
@@ -719,6 +756,8 @@ final class AppModel {
     func notePriceDays() async {
         let written = await archiveGate.writtenCount
         if written > priceDaysVersion { priceDaysVersion = written }
+        // A day file written by any path (the price step, a game turned on) is a day less to download (K7).
+        if backfillLaunchReady, missingDaysVersion != priceDaysVersion { await refreshMissingDays() }
     }
 
     /// K11, once per launch: every archive on disk in the window becomes its day file through the gate, newest first,
@@ -845,6 +884,8 @@ final class AppModel {
         // The store is set aside at the next launch: no index scan of it runs on.
         cancelSetIndexes()
         cancelHistoryPass()
+        // K8: the 90-day download stops (and does not start again in this run).
+        stopBackfill()
     }
 
     /// Opens the catalog store (P8). A file that is corrupt or not a database is moved aside into `unreadable-<date>`
@@ -1328,7 +1369,7 @@ final class AppModel {
     }
 
     /// Shows `text` in the status line for `noticeDuration`, unless something else is said or the status changes first.
-    private func say(_ text: String) {
+    func say(_ text: String) {
         noticeTask?.cancel()
         statusNotice = text
         let duration = noticeDuration
@@ -1399,6 +1440,7 @@ final class AppModel {
     private func launch() async {
         watchSaleNotices()
         watchHistoryChanges()
+        watchBackfillGates()
         readSetIndexFiles()
         // Once per launch, with the window on screen: at background priority, off the main thread and off the picture
         // store's actor, so neither the window nor a picture load waits for it. Only the run's own picture folder.
@@ -1462,6 +1504,7 @@ final class AppModel {
         if !canSync {
             await migratePriceDays()
             historyPriceStepEnded(newDay: true)
+            await backfillLaunchStepEnded()
         }
         if let storeFailure {
             status = .failed(storeFailure)
@@ -1780,6 +1823,9 @@ final class AppModel {
         await migratePriceDays()
         // H10: the launch's price step, and any later one that brought a new day, ask for a pass.
         historyPriceStepEnded(newDay: syncedGames.map { prices.day(game: $0.id) } != dayBefore)
+        // Phase 5B task 5: the 90-day download may start now (after the launch's price step, its migration and its first
+        // history pass request), when the user said yes.
+        await backfillLaunchStepEnded()
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 removedSets: first.removedSets + rest.removedSets,
@@ -1819,6 +1865,16 @@ final class AppModel {
     }
 
     private func syncCatalog(of games: [GameDefinition], now: Date, rebuild: Bool) async -> SyncResult {
+        // tcgcsv: at most 4 requests at a time. The 90-day download waits while a catalog step runs (its request in
+        // flight ends first); the step's own 4 requests are then the only ones.
+        let lane = priceSync.downloads
+        await lane.pause()
+        let done = await syncCatalogSteps(of: games, now: now, rebuild: rebuild)
+        await lane.resume()
+        return done
+    }
+
+    private func syncCatalogSteps(of games: [GameDefinition], now: Date, rebuild: Bool) async -> SyncResult {
         status = .syncing(checkingText)
         checkingText = StatusText.checking
         // A stream keeps the progress lines in order and ends before the step's result is used.
