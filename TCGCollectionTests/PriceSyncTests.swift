@@ -51,3 +51,37 @@ struct PriceSyncTests {
         #expect(await fake.calls.isEmpty)
     }
 }
+
+/// Phase 5B task 2 (K3, A47): the price step's tables come from the archive gate.
+struct PriceSyncGateTests {
+    let fake: FakeArchive
+    let paths = AppPaths(root: tempRoot())
+    init() { fake = FakeArchive() }
+
+    @Test func thePriceStepDecodesOnceForTheTableAndTheDay() async throws {
+        let reads = ArchiveGateTests.Reads()
+        let gate = ArchiveGate(paths: paths, read: reads.read)
+        let sync = PriceSync(paths: paths, client: fake, gate: gate)
+        let out = try await sync.run(games: Games.all, now: TCGDate.date("2026-01-03T10:00:00")!, haveDay: nil)
+        #expect(reads.count == 1)
+        #expect(out?["cyberpunk"]?.rows.count == 18)
+        #expect(FileManager.default.fileExists(atPath: paths.priceDay("2026-01-02").path))
+        #expect(!FileManager.default.fileExists(atPath: paths.archives.appending(path: "prices-2026-01-02.ppmd.7z").path))
+        #expect(await gate.writtenCount == 1)
+    }
+
+    /// A day whose day file exists is never downloaded; its tables come from the day file.
+    @Test func aDayWithADayFileIsNotDownloaded() async throws {
+        let gate = ArchiveGate(paths: paths)
+        let sync = PriceSync(paths: paths, client: fake, gate: gate)
+        _ = try await sync.run(games: Games.all, now: TCGDate.date("2026-01-03T10:00:00")!, haveDay: nil)
+        let again = try await sync.run(games: Games.all, now: TCGDate.date("2026-01-03T11:00:00")!, haveDay: nil)
+        #expect(await fake.calls == ["2026-01-02"])
+        #expect(again?["riftbound"]?.day == "2026-01-02")
+        // Not even when asked to download: the day file is the day.
+        let turnedOn = try await sync.run(games: [Games.game("yu-gi-oh")!], now: TCGDate.date("2026-01-03T12:00:00")!,
+                                          haveDay: nil, download: false)
+        #expect(turnedOn?["yu-gi-oh"]?.day == "2026-01-02")
+        #expect(await fake.calls == ["2026-01-02"])
+    }
+}

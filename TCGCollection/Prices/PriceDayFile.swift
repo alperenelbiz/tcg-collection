@@ -111,6 +111,31 @@ nonisolated enum PriceDayFile {
         return out
     }
 
+    /// The file name of a day: `<yyyy-MM-dd>.prices`.
+    static func fileName(day: String) -> String { "\(day).prices" }
+
+    /// The days of the day files in `folder`: every regular file named `yyyy-MM-dd.prices` of a real calendar day. Any
+    /// other name, a hidden file or a folder is ignored; a folder that is not there has none. (Whether a file reads is
+    /// not checked.)
+    static func days(in folder: URL) -> Set<String> {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
+        var days = Set<String>()
+        for url in urls {
+            guard let match = url.lastPathComponent.wholeMatch(of: /(\d{4}-\d{2}-\d{2})\.prices/),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let day = String(match.1)
+            guard PriceDay.after(PriceDay.before(day)) == day, PriceDay.before(day) != day else { continue }
+            days.insert(day)
+        }
+        return days
+    }
+
+    /// A shown price as a `Price` (the market price, or the low price when it is marked low): `Price.shown` gives it back.
+    static func price(_ shown: ShownPrice) -> Price {
+        Price(market: shown.isLow ? nil : shown.amount, low: shown.isLow ? shown.amount : nil, mid: nil, high: nil)
+    }
+
     /// Writes the file atomically; makes its folder when it is missing (`support/price-days`, never the user folder).
     static func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -201,6 +226,31 @@ nonisolated struct PriceDayReader: Sendable {
         }
         guard at == n else { throw PriceDayFileError.notADayFile }
         return (day, sections)
+    }
+
+    /// The categories the file has a section of, in the file's order.
+    var categories: [Int] { sections.map(\.category) }
+
+    /// Every row of one category in the file's order (product id, then finish index); none for a category the file
+    /// lacks. A row whose finish index is out of range is skipped. (Phase 5B task 2: the price table of a day whose
+    /// archive is gone, and the 5A pass's day-file adapter.)
+    func rows(category: Int) -> [PriceDayRow] {
+        guard let section = sections.first(where: { $0.category == category }) else { return [] }
+        return bytes.withUnsafeBytes { raw -> [PriceDayRow] in
+            var out: [PriceDayRow] = []
+            out.reserveCapacity(section.count)
+            for i in 0..<section.count {
+                let offset = section.rows + i * PriceDayFile.rowSize
+                let id = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+                let finish = Int(raw[offset + 4])
+                let value = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: offset + 5, as: UInt32.self))
+                guard finish < section.finishes.count else { continue }
+                out.append(PriceDayRow(productID: Int(id), finish: section.finishes[finish],
+                                       price: ShownPrice(amount: Double(value & ~PriceDayFile.lowBit) / 100,
+                                                         isLow: value & PriceDayFile.lowBit != 0)))
+            }
+            return out
+        }
     }
 
     /// Finish → shown price of one product on this day; `[:]` when the file has no row of it.

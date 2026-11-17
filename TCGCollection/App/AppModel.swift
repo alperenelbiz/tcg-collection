@@ -247,8 +247,8 @@ final class AppModel {
     @ObservationIgnored var historyLaunchReady = false
     /// H10: how long a library change waits for the next one before it asks for a pass. Tests set 0.
     @ObservationIgnored var historyQuietTime: Duration = .seconds(3)
-    /// Reads one archive for a pass. Tests count the reads.
-    @ObservationIgnored var historyArchiveReader: HistoryPass.Reader = PriceArchive.read
+    /// Reads one day for a pass: an archive, or (phase 5B) a day file (`HistoryPass.readDay`). Tests count the reads.
+    @ObservationIgnored var historyArchiveReader: HistoryPass.Reader = HistoryPass.readDay
     /// Reads one history file (every read goes through it: `readHistoryFile`). Tests count the reads.
     @ObservationIgnored var historyFileReader: HistoryFileReader = { game, folder in try HistoryFiles.read(game: game, in: folder) }
     #if DEBUG
@@ -391,6 +391,14 @@ final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let catalogSync: CatalogSync
     @ObservationIgnored private let priceSync: PriceSync
+    /// Phase 5B (K3): every archive is decoded through this one gate (the price step, a game turned on, the migration).
+    @ObservationIgnored var archiveGate: ArchiveGate { priceSync.gate }
+    /// Phase 5B: +1 per day file written in this run (set on the main actor after each call to the gate).
+    private(set) var priceDaysVersion = 0
+    /// K10: the launch's one clean-up of old day files, old archives and cut-short downloads; nil before the launch.
+    @ObservationIgnored private(set) var priceDaysCleaning: Task<Void, Never>?
+    /// K11: the archives on disk were migrated into day files in this run (once, after the launch's price step).
+    @ObservationIgnored private var priceDaysMigrated = false
     @ObservationIgnored private let ygoLoader: YGOIndexLoader
     /// The clock (internal: the price history reads it too).
     @ObservationIgnored let now: () -> Date
@@ -672,8 +680,47 @@ final class AppModel {
         let days = games.map { prices.day(game: $0.id) }
         let haveDay = days.contains(nil) ? nil : days.compactMap { $0 }.min()
         guard !games.isEmpty,
-              let fresh = try? await priceSync.run(games: games, now: now(), haveDay: haveDay, download: false) else { return }
-        for (game, table) in fresh where isSynced(game) { try? prices.replace(game, with: table, paths: paths) }
+              let fresh = try? await priceSync.run(games: games, now: now(), haveDay: haveDay, download: false) else {
+            await notePriceDays()
+            return
+        }
+        await notePriceDays()
+        takeNewerTables(fresh)
+    }
+
+    /// K4: the tables of the followed games whose day is newer than the table's day of that game (or that have none).
+    private func takeNewerTables(_ tables: [String: GamePrices]) {
+        for (game, table) in tables where isSynced(game) && isNewer(table, game: game) {
+            try? prices.replace(game, with: table, paths: paths)
+        }
+    }
+
+    private func isNewer(_ table: GamePrices, game: String) -> Bool {
+        guard let have = prices.day(game: game) else { return true }
+        return table.day > have
+    }
+
+    /// `priceDaysVersion` follows the gate's count of day files written in this run.
+    private func notePriceDays() async {
+        let written = await archiveGate.writtenCount
+        if written > priceDaysVersion { priceDaysVersion = written }
+    }
+
+    /// K11, once per launch: every archive on disk in the window becomes its day file through the gate, newest first,
+    /// after the launch's clean-up (K10); a decoded day's tables are taken only when newer (K4).
+    private func migratePriceDays() async {
+        guard !priceDaysMigrated else { return }
+        priceDaysMigrated = true
+        await priceDaysCleaning?.value
+        let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
+        await archiveGate.migrate(window: window, games: Games.all) { [weak self] _, decoded in
+            await self?.tookMigratedDay(decoded)
+        }
+    }
+
+    private func tookMigratedDay(_ decoded: ArchiveGate.Decoded) async {
+        await notePriceDays()
+        takeNewerTables(decoded.tables)
     }
 
     /// G5: the catalog steps of the games turned on, one after the other, when no sync runs (a running sync takes them at
@@ -1339,6 +1386,10 @@ final class AppModel {
         // store's actor, so neither the window nor a picture load waits for it. Only the run's own picture folder.
         let pictures = pictures
         pictureCleaning = Task.detached(priority: .background) { pictures.clean() }
+        // K10: once per launch, on the gate (off the main actor). A file of the archives folder counts as cut short only
+        // when it was last changed before this launch (the real clock: file dates are real).
+        let gate = archiveGate, window = PriceDay.window(endingOn: PriceDay.wanted(now: now())), launchedAt = Date()
+        priceDaysCleaning = Task.detached(priority: .utility) { await gate.cleanUp(window: window, olderThan: launchedAt) }
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
         // `-onboarding YES` it waits for the onboarding decision instead, and opens no sheet under the question.
@@ -1387,8 +1438,13 @@ final class AppModel {
         await writeMissingFacetLists()
         await setIndexRead?.value
         requestMissingSetIndexes()
-        // H10: a run that does not sync has no price step; its passes read the archives on disk from here on.
-        if !canSync { historyPriceStepEnded(newDay: true) }
+        // H10: a run that does not sync has no price step; its passes read the archives on disk from here on. K11: the
+        // archives on disk become day files first (it only reads the disk, as `fillPricesFromDisk` does: offline and
+        // with a store in memory too).
+        if !canSync {
+            await migratePriceDays()
+            historyPriceStepEnded(newDay: true)
+        }
         if let storeFailure {
             status = .failed(storeFailure)
             return
@@ -1694,6 +1750,8 @@ final class AppModel {
         catalogPending.remove(chosen.id)
         let dayBefore = syncedGames.map { prices.day(game: $0.id) }
         let priceFailure = await syncPrices(now: now)
+        // K11: once per launch, after its price step and before the history pass is asked for.
+        await migratePriceDays()
         // H10: the launch's price step, and any later one that brought a new day, ask for a pass.
         historyPriceStepEnded(newDay: syncedGames.map { prices.day(game: $0.id) } != dayBefore)
         if !held {
@@ -1801,8 +1859,13 @@ final class AppModel {
         let days = games.map { prices.day(game: $0.id) }
         let haveDay = days.contains(nil) ? nil : days.compactMap { $0 }.min()
         do {
-            if let fresh = try await priceSync.run(games: games, now: now, haveDay: haveDay) {
-                for (game, table) in fresh { try prices.replace(game, with: table, paths: paths) }
+            let fresh = try await priceSync.run(games: games, now: now, haveDay: haveDay)
+            await notePriceDays()
+            if let fresh {
+                // K4: a table takes a day only when it is newer than the table's day of that game.
+                for (game, table) in fresh where isNewer(table, game: game) {
+                    try prices.replace(game, with: table, paths: paths)
+                }
             }
             status = .syncing(StatusText.pricesLoaded(day: prices.day(game: gameID)))
             return nil
@@ -1854,6 +1917,14 @@ final class AppModel {
             }
         }
         if let error = error as? TCGCSVClientError { return "HTTP \(error.status)" }
+        if let error = error as? ArchiveGateError {
+            switch error {
+            case .noArchive(let day): return "no archive of \(day)"
+            case .failedBefore(let day): return "the archive of \(day) could not be read"
+            case .unreadableDayFile(let day): return "the price day file of \(day) could not be read"
+            case .readBackMismatch(let day): return "the price day file of \(day) did not read back"
+            }
+        }
         return error.localizedDescription
     }
 }

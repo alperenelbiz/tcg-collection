@@ -83,36 +83,43 @@ nonisolated enum PriceDay {
 actor PriceSync {
     private let paths: AppPaths
     private let client: any ArchiveFetching
+    /// Every archive is decoded through the gate (phase 5B, K3): once, into the tables and the day file.
+    nonisolated let gate: ArchiveGate
 
-    init(paths: AppPaths, client: any ArchiveFetching) {
+    init(paths: AppPaths, client: any ArchiveFetching, gate: ArchiveGate? = nil) {
         self.paths = paths
         self.client = client
+        self.gate = gate ?? ArchiveGate(paths: paths)
     }
 
-    /// Prices of every game in `games` from the wanted day's archive. Returns nil when `haveDay` is
-    /// already that day or newer, or when neither the wanted day nor the day before exists.
+    /// Prices of every game in `games` from the wanted day, else the day before. Returns nil when `haveDay` is already
+    /// that day or newer, or when neither day can be had.
     ///
-    /// An archive already on disk is never downloaded again. If reading a file that was just
-    /// downloaded (or found on disk) throws, `run` rethrows and leaves the file where it is:
-    /// a new day brings a new file, so the rule stays true.
+    /// A day whose day file exists is never downloaded: its tables come from the day file (phase 5B). An archive already
+    /// on disk is never downloaded again. The tables of a downloaded (or found) archive come from the gate's one decode,
+    /// which also writes the day file and then deletes the archive. If that decode throws, `run` rethrows and the archive
+    /// stays where it is (the gate names the day failed for the run, so it is neither decoded nor downloaded again).
     ///
-    /// `download` false (a game turned on, G5): only an archive already on disk is read; nothing is downloaded.
+    /// `download` false (a game turned on, G5): only a day file or an archive already on disk is read; nothing is
+    /// downloaded.
     func run(games: [GameDefinition], now: Date, haveDay: String?, download: Bool = true) async throws -> [String: GamePrices]? {
         let wanted = PriceDay.wanted(now: now)
+        let fm = FileManager.default
         for day in [wanted, PriceDay.before(wanted)] {
             if let haveDay, haveDay >= day { return nil }
             let file = paths.archives.appending(path: "prices-\(day).ppmd.7z")
-            if !FileManager.default.fileExists(atPath: file.path) {
+            if !fm.fileExists(atPath: paths.priceDay(day).path), !fm.fileExists(atPath: file.path) {
                 guard download else { continue }
-                try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+                try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
                 guard try await client.download(day: day, to: file) else { continue }
             }
-            return try Self.build(file: file, games: games, day: day)
+            return try await gate.decode(day: day, games: games)
         }
         return nil
     }
 
-    /// Reads one archive into a `GamePrices` per game id. A game with no rows gets empty rows.
+    /// Reads one archive into a `GamePrices` per game id, without a day file (the gate's decode does both). A game with
+    /// no rows gets empty rows. Kept for the price table's tests.
     nonisolated static func build(file: URL, games: [GameDefinition], day: String) throws -> [String: GamePrices] {
         var result: [String: GamePrices] = [:]
         var indexes: [String: [String: Int]] = [:]

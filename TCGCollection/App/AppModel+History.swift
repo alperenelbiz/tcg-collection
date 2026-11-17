@@ -283,10 +283,11 @@ extension AppModel {
         await historyPassHook?(games.map(\.id))
         #endif
 
-        // 3. The archives on disk, off the main actor.
+        // 3. The archives and the day files on disk (phase 5B task 2: a decoded day's archive is gone), off the main
+        // actor.
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
-        let result = await HistoryPass.run(games: games, archives: paths.archives, window: window,
-                                           failedDays: historyFailedDays, read: historyArchiveReader)
+        let result = await HistoryPass.run(games: games, archives: paths.archives, dayFiles: paths.priceDays,
+                                           window: window, failedDays: historyFailedDays, read: historyArchiveReader)
         // A cancelled pass keeps nothing (a folder switch, a reset).
         guard !Task.isCancelled, historyStillOn(folder) else { return }
         historyFailedDays = result.failedDays

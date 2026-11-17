@@ -15,13 +15,14 @@ struct AppModelHistoryTests {
     static let dockside = 721334, kaisa = 721337, pack = 711362, rune = 722282
     static let docksideKey = "dockside lock up"
 
-    /// Counts the archives the passes open, then reads them as the app does.
+    /// Counts the days the passes read (an archive, or since phase 5B task 2 a day file: the launch turns the archives
+    /// on disk into day files), then reads them as the app does.
     final class Reads: Sendable {
         private let files = Mutex<[String]>([])
         var count: Int { files.withLock { $0.count } }
         func read(_ url: URL, _ categories: Set<Int>, _ each: (Int, Int, [PriceRow]) -> Void) throws {
             files.withLock { $0.append(url.lastPathComponent) }
-            try PriceArchive.read(url, categories: categories, each: each)
+            try HistoryPass.readDay(url, categories, each)
         }
     }
 
