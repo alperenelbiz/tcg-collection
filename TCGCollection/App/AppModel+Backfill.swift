@@ -32,7 +32,13 @@ extension AppModel {
         if let progress = backfillProgress {
             return (MissingDays.progressText(done: progress.done, total: progress.total), false)
         }
-        guard !missingDays.isEmpty, canSync, !catalogResetRequested else { return nil }
+        guard canSync, !catalogResetRequested else { return nil }
+        // Feedback 1: after the yes a stop for the run (a request that threw, three not-found answers) is said here,
+        // with every day a later launch can still bring; before, the line went away and the gap was not said.
+        if backfillOptedIn, backfillStopped, pendingDayCount > 0 {
+            return (MissingDays.stoppedText(missing: pendingDayCount), false)
+        }
+        guard !missingDays.isEmpty else { return nil }
         // The button only while the download can run in this run (review round 1, finding 5).
         if !backfillOptedIn { return (MissingDays.lineText(missing: missingDays.count), backfillCanRunNow) }
         if !backfillNetworkAllowed { return (MissingDays.waitsForWiFi, false) }
@@ -119,8 +125,11 @@ extension AppModel {
         if await lane.backgroundStopped { backfillStopped = true }
         let days = MissingDays.days(window: window, dayFiles: dayFiles, archives: archives, failed: failed,
                                     notFound: notFound, downloaded: downloaded, now: now())
+        let pending = MissingDays.pending(window: window, dayFiles: dayFiles, archives: archives, notFound: notFound,
+                                          downloaded: downloaded, now: now()).count
         missingDaysVersion = version
         if days != missingDays { missingDays = days }
+        if pending != pendingDayCount { pendingDayCount = pending }
     }
 
     @concurrent private nonisolated static func listDays(paths: AppPaths) async -> (Set<String>, Set<String>) {

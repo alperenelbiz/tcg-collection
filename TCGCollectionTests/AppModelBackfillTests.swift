@@ -121,6 +121,9 @@ struct AppModelBackfillTests {
         #expect(!model.missingDays.contains("2025-12-31"))                      // a 404 is not missing in this run
         #expect(model.backfillProgress == nil)
         #expect(!model.canAskBackfill)
+        // Feedback 1: the line stays and says the download stopped; the 3 404 days are gaps, not counted.
+        #expect(model.backfillLine?.text == MissingDays.stoppedText(missing: 85))
+        #expect(model.backfillLine?.button == false)
         model.startBackfill()                                                    // the menu item clicked again
         await model.waitForBackfill()
         #expect(await network.calls.count == 5)
@@ -338,6 +341,9 @@ struct AppModelBackfillTests {
         #expect(await network.calls == [Self.wanted, "2026-01-01", "2025-12-31"])
         #expect(model.statusNotice == "Price history: 2025-12-31 could not be downloaded.")
         #expect(exists(AppPaths(root: root).priceDay("2026-01-01")))            // the days done are kept
+        // Feedback 1: the line stays after the stop and counts the failed day (it is asked at the next launch).
+        #expect(model.backfillLine?.text == MissingDays.stoppedText(missing: 88))
+        #expect(model.backfillLine?.button == false)
         model.startBackfill()
         await model.waitForBackfill()
         #expect(await network.calls.count == 3)                                  // stopped for the run

@@ -422,6 +422,9 @@ final class AppModel {
     /// K7: the days of the window the download still has to fetch, newest first (`MissingDays.days`). Observed: the line
     /// under the chart and the Catalog menu's item. Read again after each day, and after a day file is written elsewhere.
     var missingDays: [String] = []
+    /// Feedback 1: the days of the window a later launch can still bring (`MissingDays.pending`): the missing days, and
+    /// also the days whose request failed or whose decode failed in this run. Observed: the line after a stop.
+    var pendingDayCount = 0
     /// True when the dialog of the download is asked for (the line's button, the Catalog menu's item).
     var asksBackfill = false
     /// The missing days' count when the dialog opened (review round 1, finding 6): its text does not change while open.

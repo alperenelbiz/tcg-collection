@@ -58,6 +58,8 @@ struct MissingDaysTests {
         #expect(ninety.message == "About 380 MB in 90 files, one at a time, in the background. It takes about 6 minutes. Each day is downloaded once.")
         #expect(MissingDays.confirmation(missing: 1).message.hasPrefix("About 10 MB in 1 file,"))
         #expect(MissingDays.lineText(missing: 89) == "Prices of 89 of the last 90 days are missing.")
+        #expect(MissingDays.stoppedText(missing: 16)
+                == "Prices of 16 of the last 90 days are missing. The download stopped and goes on at the next launch.")
     }
 
     @Test func theIPhoneNetworkRule() {

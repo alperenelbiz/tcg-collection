@@ -27,6 +27,22 @@ nonisolated enum MissingDays {
         "Prices of \(missing) of the last 90 days are missing."
     }
 
+    /// Feedback 1 (2026-11-17): the days a later launch can still bring: `days` without this run's failures (a request
+    /// that threw is asked again at the next launch; a failed decode keeps its archive, decoded at the next launch), and
+    /// with the archives on disk counted although the record holds them. A kept 404 and a day recorded with no file or
+    /// archive stay gaps and are not counted.
+    static func pending(window: ClosedRange<String>, dayFiles: Set<String>, archives: Set<String>, notFound: Set<String>,
+                        downloaded: Set<String>, now: Date) -> [String] {
+        days(window: window, dayFiles: dayFiles, archives: [], failed: [], notFound: notFound,
+             downloaded: downloaded.subtracting(archives), now: now)
+    }
+
+    /// Feedback 1: the line under the chart after the user's yes, once the download stopped for the run (a request that
+    /// threw, three not-found answers) while days are still to come.
+    static func stoppedText(missing: Int) -> String {
+        "\(lineText(missing: missing)) The download stopped and goes on at the next launch."
+    }
+
     /// The line under the chart while the download runs.
     static func progressText(done: Int, total: Int) -> String {
         "Downloading price history: \(done) of \(total) days."
