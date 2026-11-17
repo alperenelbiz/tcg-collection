@@ -231,6 +231,9 @@ nonisolated struct PriceDayReader: Sendable {
     /// The categories the file has a section of, in the file's order.
     var categories: [Int] { sections.map(\.category) }
 
+    /// The number of rows stored for a category (0 for one the file lacks), out-of-range finish indexes included.
+    func rowCount(category: Int) -> Int { sections.filter { $0.category == category }.reduce(0) { $0 + $1.count } }
+
     /// Every row of one category in the file's order (product id, then finish index); none for a category the file
     /// lacks. A row whose finish index is out of range is skipped. (Phase 5B task 2: the price table of a day whose
     /// archive is gone, and the 5A pass's day-file adapter.)

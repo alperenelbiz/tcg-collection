@@ -123,6 +123,72 @@ struct ArchiveGateTests {
         #expect(await gate.dayFiles() == ["2025-12-30", "2025-12-31", "2026-01-02"])
     }
 
+    /// Review 1, item 1: the day is written under `<day>.prices.tmp` and gets its name only once it is verified; while
+    /// the writer runs there is no `.prices` and the archive is there.
+    @Test func theDayFileGetsItsNameOnlyOnceVerified() async throws {
+        try place(["2026-01-02"])
+        let dayFile = paths.priceDay("2026-01-02"), archiveFile = archive("2026-01-02")
+        let seen = Mutex<[String]>([])
+        let watching: ArchiveGate.Writer = { data, url in
+            seen.withLock { $0.append(url.lastPathComponent) }
+            #expect(!FileManager.default.fileExists(atPath: dayFile.path))
+            #expect(FileManager.default.fileExists(atPath: archiveFile.path))
+            try PriceDayFile.write(data, to: url)
+        }
+        let gate = ArchiveGate(paths: paths, write: watching)
+        _ = try await gate.decode(day: "2026-01-02", games: Games.all)
+        #expect(seen.withLock { $0 } == ["2026-01-02.prices.tmp"])
+        #expect(exists(dayFile) && !exists(archiveFile))
+        #expect(!exists(paths.priceDays.appending(path: "2026-01-02.prices.tmp")))
+    }
+
+    /// A kill after the temporary write (the `.tmp` is there, no `.prices`): the next decode reads the archive again.
+    @Test func aKillAfterTheTemporaryWriteDecodesAgain() async throws {
+        try place(["2026-01-02"])
+        try FileManager.default.createDirectory(at: paths.priceDays, withIntermediateDirectories: true)
+        let stale = paths.priceDays.appending(path: "2026-01-02.prices.tmp")
+        try Data([1, 2, 3]).write(to: stale)
+        let reads = Reads()
+        let gate = ArchiveGate(paths: paths, read: reads.read)
+        let tables = try await gate.decode(day: "2026-01-02", games: Games.all)
+        #expect(reads.count == 1)
+        #expect(tables["cyberpunk"]?.rows.count == 18)
+        #expect(try PriceDayReader(url: paths.priceDay("2026-01-02")).day == "2026-01-02")
+        #expect(!exists(stale) && !exists(archive("2026-01-02")))
+    }
+
+    /// A `.prices` whose header names another day is not this day's file: the archive is kept.
+    @Test func aDayFileOfAnotherDayKeepsTheArchive() async throws {
+        try place(["2026-01-02"])
+        try PriceDayFile.write(PriceDayFile.data(day: "2026-01-01", rows: [:]), to: paths.priceDay("2026-01-02"))
+        let reads = Reads()
+        let gate = ArchiveGate(paths: paths, read: reads.read)
+        await #expect(throws: ArchiveGateError.unreadableDayFile("2026-01-02")) {
+            try await gate.decode(day: "2026-01-02", games: Games.all)
+        }
+        #expect(exists(archive("2026-01-02")))
+        #expect(reads.count == 0)
+    }
+
+    /// Review 1, item 5: a file with a row more than went in does not read back.
+    @Test func aDayFileWithAnExtraRowDoesNotReadBack() async throws {
+        try place(["2026-01-02"])
+        let category = Games.game("magic-the-gathering")!.categoryID
+        let extra: ArchiveGate.Writer = { data, url in
+            // The real rows plus one Magic row (the fixture has none): every row that went in is still found.
+            let reader = try PriceDayReader(data: data)
+            var rows: [Int: [PriceDayRow]] = [:]
+            for c in reader.categories { rows[c] = reader.rows(category: c) }
+            rows[category, default: []].append(PriceDayRow(productID: 5, finish: "Normal", price: ShownPrice(amount: 1, isLow: false)))
+            try PriceDayFile.write(PriceDayFile.data(day: reader.day, rows: rows), to: url)
+        }
+        let gate = ArchiveGate(paths: paths, write: extra)
+        await #expect(throws: ArchiveGateError.readBackMismatch("2026-01-02")) {
+            try await gate.decode(day: "2026-01-02", games: Games.all)
+        }
+        #expect(exists(archive("2026-01-02")) && !exists(paths.priceDay("2026-01-02")))
+    }
+
     @Test func anArchiveWhoseDayFileExistsIsDeletedWithoutADecode() async throws {
         try place(["2026-01-02"])
         let first = ArchiveGate(paths: paths)
@@ -163,6 +229,8 @@ struct ArchiveGateTests {
         }
         let other = paths.priceDays.appending(path: "notes.txt")
         try Data([1]).write(to: other)
+        let staleTemporary = paths.priceDays.appending(path: "2025-12-01.prices.tmp")
+        try Data([1]).write(to: staleTemporary)
         try place(["2025-09-30", "2025-12-02"])
         let launch = Date()
         let old = launch.addingTimeInterval(-3600)
@@ -177,6 +245,7 @@ struct ArchiveGateTests {
         await gate.cleanUp(window: window, olderThan: launch)
         #expect(await gate.dayFiles() == ["2025-10-05", "2025-12-01", "2026-01-02", "2026-01-05"])
         #expect(exists(other))                                           // not a day file: not the clean-up's
+        #expect(!exists(staleTemporary))                                 // a day file a kill left unverified
         #expect(!exists(archive("2025-09-30")))
         #expect(exists(archive("2025-12-02")))
         #expect(!exists(partial) && !exists(temporary))

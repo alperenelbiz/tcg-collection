@@ -399,6 +399,10 @@ final class AppModel {
     @ObservationIgnored private(set) var priceDaysCleaning: Task<Void, Never>?
     /// K11: the archives on disk were migrated into day files in this run (once, after the launch's price step).
     @ObservationIgnored private var priceDaysMigrated = false
+    #if DEBUG
+    /// Test only: called on the main actor when the launch's migration starts.
+    @ObservationIgnored var priceDaysMigrationHook: (@MainActor () async -> Void)?
+    #endif
     @ObservationIgnored private let ygoLoader: YGOIndexLoader
     /// The clock (internal: the price history reads it too).
     @ObservationIgnored let now: () -> Date
@@ -711,6 +715,9 @@ final class AppModel {
     private func migratePriceDays() async {
         guard !priceDaysMigrated else { return }
         priceDaysMigrated = true
+        #if DEBUG
+        await priceDaysMigrationHook?()
+        #endif
         await priceDaysCleaning?.value
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
         await archiveGate.migrate(window: window, games: Games.all) { [weak self] _, decoded in
@@ -1750,10 +1757,6 @@ final class AppModel {
         catalogPending.remove(chosen.id)
         let dayBefore = syncedGames.map { prices.day(game: $0.id) }
         let priceFailure = await syncPrices(now: now)
-        // K11: once per launch, after its price step and before the history pass is asked for.
-        await migratePriceDays()
-        // H10: the launch's price step, and any later one that brought a new day, ask for a pass.
-        historyPriceStepEnded(newDay: syncedGames.map { prices.day(game: $0.id) } != dayBefore)
         if !held {
             // The followed games of this moment: a game turned on since the launch is among them.
             let others = syncedGames.filter { $0.id != chosen.id }
@@ -1761,6 +1764,11 @@ final class AppModel {
             rest = await syncCatalog(of: others, now: now, rebuild: rebuild)
             catalogPending = Set(turnedOn)
         }
+        // K11: once per launch, after the price step and the other games' catalog steps (review 1: the first launch's
+        // catalogs do not wait for it), and before the history pass is asked for.
+        await migratePriceDays()
+        // H10: the launch's price step, and any later one that brought a new day, ask for a pass.
+        historyPriceStepEnded(newDay: syncedGames.map { prices.day(game: $0.id) } != dayBefore)
         let result = SyncResult(fetched: first.fetched + rest.fetched, failed: first.failed + rest.failed,
                                 failedSetLists: first.failedSetLists + rest.failedSetLists,
                                 removedSets: first.removedSets + rest.removedSets,

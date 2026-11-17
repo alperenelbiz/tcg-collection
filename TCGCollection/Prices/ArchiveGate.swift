@@ -52,10 +52,14 @@ actor ArchiveGate {
 
     /// The tables of `games` for `day`:
     /// - a day file of the day is there: the tables come from it, and the archive (when there is one) is deleted without
-    ///   a decode; a day file that does not read throws `unreadableDayFile` and touches nothing;
-    /// - else the archive is read once, for every game's category (K1: the day file keeps all four games), the day file
-    ///   written, read back and compared, then the archive deleted. A read or a write that fails, or a day file that
-    ///   does not read back, keeps the archive and names the day failed for the run.
+    ///   a decode; a day file that does not read, or whose header names another day, throws `unreadableDayFile` and
+    ///   touches nothing;
+    /// - else the archive is read once, for every game's category (K1: the day file keeps all four games). The day is
+    ///   written to `<day>.prices.tmp`, flushed to disk, read back and compared, and only then renamed to `<day>.prices`
+    ///   (review 1: a `.prices` on disk is always a verified file, since its presence lets the archive go); then the
+    ///   archive is deleted. A read or a write that fails, or a file that does not read back, keeps the archive, removes
+    ///   the temporary file and names the day failed for the run. A kill before the rename leaves only the `.tmp`: the
+    ///   next decode reads the archive again (and the clean-up removes the `.tmp`).
     func decodeDay(day: String, games: [GameDefinition]) throws -> Decoded {
         let fm = FileManager.default
         let dayFile = paths.priceDay(day)
@@ -63,6 +67,7 @@ actor ArchiveGate {
         if fm.fileExists(atPath: dayFile.path) {
             let reader: PriceDayReader
             do { reader = try PriceDayReader(url: dayFile) } catch { throw ArchiveGateError.unreadableDayFile(day) }
+            guard reader.day == day else { throw ArchiveGateError.unreadableDayFile(day) }
             try? fm.removeItem(at: archive)
             return Decoded(tables: Self.tables(of: reader, day: day, games: games), wroteDayFile: false)
         }
@@ -102,22 +107,43 @@ actor ArchiveGate {
         // Every game's category has a section, also one without a row: the file says the category was read.
         for game in all where rows[game.categoryID] == nil { rows[game.categoryID] = [] }
 
+        let temporary = Self.temporary(dayFile)
         do {
-            try write(PriceDayFile.data(day: day, rows: rows), dayFile)
+            try write(PriceDayFile.data(day: day, rows: rows), temporary)
+            let handle = try FileHandle(forWritingTo: temporary)
+            defer { try? handle.close() }
+            try handle.synchronize()
         } catch {
             failedDays.insert(day)
-            try? fm.removeItem(at: dayFile)
+            try? fm.removeItem(at: temporary)
             throw error
         }
-        guard Self.readsBack(dayFile, day: day, rows: rows) else {
+        guard Self.readsBack(temporary, day: day, rows: rows) else {
             failedDays.insert(day)
-            try? fm.removeItem(at: dayFile)
+            try? fm.removeItem(at: temporary)
             throw ArchiveGateError.readBackMismatch(day)
+        }
+        // Replace nothing: a `.prices` that appeared meanwhile is kept (it is verified by this rule) and is the day.
+        if fm.fileExists(atPath: dayFile.path) {
+            try? fm.removeItem(at: temporary)
+            return try decodeDay(day: day, games: games)
+        }
+        do {
+            try fm.moveItem(at: temporary, to: dayFile)
+        } catch {
+            failedDays.insert(day)
+            try? fm.removeItem(at: temporary)
+            throw error
         }
         writtenCount += 1
         try? fm.removeItem(at: archive)
         let asked = Set(games.map(\.id))
         return Decoded(tables: tables.filter { asked.contains($0.key) }, wroteDayFile: true)
+    }
+
+    /// The temporary name of a day file before it is verified: `<day>.prices.tmp`.
+    nonisolated static func temporary(_ dayFile: URL) -> URL {
+        dayFile.deletingLastPathComponent().appending(path: dayFile.lastPathComponent + ".tmp")
     }
 
     /// The days of the day files in `support/price-days`.
@@ -141,9 +167,14 @@ actor ArchiveGate {
     /// K10, once per launch: deletes the day files of days before `window`, the archives of days before `window`
     /// (without a decode), and in the archives folder every regular file that is not exactly `prices-YYYY-MM-DD.ppmd.7z`
     /// and was last changed before `olderThan` (a download cut short). A day file inside the window (or after it) is
-    /// never deleted; a file in `price-days` that is not a day file is not the clean-up's.
+    /// never deleted. Every `*.prices.tmp` in `price-days` is deleted (a day file a kill left unverified; no decode runs
+    /// meanwhile: the gate is serial); any other file there is not the clean-up's.
     func cleanUp(window: ClosedRange<String>, olderThan: Date) {
         let fm = FileManager.default
+        for url in (try? fm.contentsOfDirectory(at: paths.priceDays, includingPropertiesForKeys: nil)) ?? []
+        where url.lastPathComponent.hasSuffix(".prices.tmp") {
+            try? fm.removeItem(at: url)
+        }
         for day in PriceDayFile.days(in: paths.priceDays) where day < window.lowerBound {
             try? fm.removeItem(at: paths.priceDay(day))
         }
@@ -183,10 +214,13 @@ actor ArchiveGate {
         return result
     }
 
-    /// True when the day file reads, is of `day`, and holds every row that went in with its price, as the writer stores
-    /// it (`PriceDayFile.data`: the first row of a product and finish, the stored rows only).
+    /// True when the day file reads, is of `day`, holds every row that went in with its price, and no row more (the same
+    /// number of rows). It checks the writer's output against the rows the writer chose to keep (`PriceDayFile.data`:
+    /// the first row of a product and finish; a row that is no price, rounds to 0 cents or past the cap, or has a finish
+    /// name over 255 bytes is not stored by design, R1), not against every row of the archive.
     nonisolated static func readsBack(_ url: URL, day: String, rows: [Int: [PriceDayRow]]) -> Bool {
         guard let reader = try? PriceDayReader(url: url), reader.day == day else { return false }
+        var expectedCount = 0
         for (category, list) in rows {
             guard category >= 0, category <= Int(UInt32.max) else { continue }
             let names = Set(Array(Set(list.map(\.finish)).filter { $0.utf8.count <= 255 }.sorted().prefix(255)))
@@ -197,10 +231,12 @@ actor ArchiveGate {
                 expected[row.productID, default: [:]][row.finish] = ShownPrice(amount: Double(cents) / 100, isLow: row.price.isLow)
             }
             for (productID, prices) in expected {
+                expectedCount += prices.count
                 let found = reader.prices(category: category, productID: productID)
                 for (finish, price) in prices where found[finish] != price { return false }
             }
         }
-        return true
+        let stored = reader.categories.reduce(0) { $0 + reader.rowCount(category: $1) }
+        return stored == expectedCount
     }
 }

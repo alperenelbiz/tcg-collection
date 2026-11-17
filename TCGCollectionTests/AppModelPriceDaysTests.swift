@@ -54,4 +54,45 @@ struct AppModelPriceDaysTests {
         #expect(HistoryPass.archiveDays(in: paths.archives).isEmpty)
         #expect(model.priceDaysVersion == 2)
     }
+
+    // MARK: Online launches (review 1, items 3 and 4)
+
+    @MainActor private func onlineModel(_ root: URL, log: CallLog) throws -> AppModel {
+        AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                 catalogClient: FakeCatalog(groups: try fixture("groups-89.json"), products: try fixture("products-89.json"), log: log),
+                 archiveClient: FakeArchive(log: log), fetcher: FakeFetcher(body: try fixture("cardinfo-sample.json"), log: log),
+                 now: { Self.day1 })
+    }
+
+    /// K4 on the price step's own path: its decoded day (2026-01-02) is older than the table's (2026-01-05).
+    @Test(.timeLimit(.minutes(1))) func thePriceStepDoesNotReplaceANewerTable() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let table = GamePrices(day: "2026-01-05", finishes: ["Normal"], rows: [721334: [0: Price(market: 7, low: nil, mid: nil, high: nil)]])
+        try JSONEncoder().encode(table).write(to: paths.prices("riftbound"))
+        let log = CallLog()
+        let model = try onlineModel(root, log: log)
+        await model.start()
+        #expect(await log.entries.contains("archive 2026-01-02"))          // the step ran: other games had no table
+        #expect(model.prices.day(game: "riftbound") == "2026-01-05")
+        #expect(model.prices.day(game: "cyberpunk") == "2026-01-02")
+        #expect(exists(paths.priceDay("2026-01-02")))
+    }
+
+    /// Item 4: an online launch migrates after the other games' catalog steps, and before the history pass is asked for.
+    @Test(.timeLimit(.minutes(1))) func anOnlineLaunchMigratesAfterTheCatalogStepsBeforeTheHistoryPass() async throws {
+        let root = tempRoot()
+        let log = CallLog()
+        let model = try onlineModel(root, log: log)
+        var historyReadyAtMigration: Bool?
+        model.priceDaysMigrationHook = {
+            historyReadyAtMigration = model.historyLaunchReady
+            await log.add("migrate")
+        }
+        await model.start()
+        #expect(await log.entries == ["groups 89", "archive 2026-01-02", "groups 1", "groups 2", "groups 92", "migrate",
+                                      "fetch cardinfo.php"])
+        #expect(historyReadyAtMigration == false)
+        #expect(model.historyLaunchReady)
+    }
 }
