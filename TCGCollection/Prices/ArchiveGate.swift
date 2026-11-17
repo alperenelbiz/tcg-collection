@@ -43,7 +43,7 @@ actor ArchiveGate {
         self.write = write
     }
 
-    private func archive(_ day: String) -> URL { paths.archives.appending(path: HistoryPass.archiveName(day: day)) }
+    private func archive(_ day: String) -> URL { paths.archives.appending(path: Self.archiveName(day: day)) }
 
     /// The tables of `games` for `day`. See `decodeDay`.
     func decode(day: String, games: [GameDefinition]) throws -> [String: GamePrices] {
@@ -141,17 +141,39 @@ actor ArchiveGate {
         return Decoded(tables: tables.filter { asked.contains($0.key) }, wroteDayFile: true)
     }
 
+    /// The file of one archive day: `prices-YYYY-MM-DD.ppmd.7z`, the name `PriceSync` downloads to.
+    nonisolated static func archiveName(day: String) -> String { "prices-\(day).ppmd.7z" }
+
+    /// The days of the archives in the folder: every regular file named `prices-YYYY-MM-DD.ppmd.7z` of a real calendar
+    /// day. Any other name, a hidden file or a folder is ignored; a folder that is not there has none. (5A's
+    /// `HistoryPass.archiveDays`; since phase 5B task 3 only the gate looks at archives.)
+    nonisolated static func archiveDays(in archives: URL) -> Set<String> {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: archives, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
+        var days = Set<String>()
+        for url in urls {
+            guard let match = url.lastPathComponent.wholeMatch(of: /prices-(\d{4}-\d{2}-\d{2})\.ppmd\.7z/),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let day = String(match.1)
+            // A day the calendar does not have (2026-02-30) moves when it is read as a date: it is not an archive day.
+            guard PriceDay.after(PriceDay.before(day)) == day, PriceDay.before(day) != day else { continue }
+            days.insert(day)
+        }
+        return days
+    }
+
     /// The temporary name of a day file before it is verified: `<day>.prices.tmp`.
     nonisolated static func temporary(_ dayFile: URL) -> URL {
         dayFile.deletingLastPathComponent().appending(path: dayFile.lastPathComponent + ".tmp")
     }
 
-    /// The days of the day files in `support/price-days`.
+    /// The days of the day files in `support/price-days` (the days a history pass may read, K5). Waits behind a running
+    /// decode, so a day file being written is never listed half-done (it gets its name only once verified anyway).
     func dayFiles() -> Set<String> { PriceDayFile.days(in: paths.priceDays) }
 
     /// The days of the archives on disk inside `window`, newest first.
     func archiveDays(in window: ClosedRange<String>) -> [String] {
-        HistoryPass.archiveDays(in: paths.archives).filter { window.contains($0) }.sorted(by: >)
+        Self.archiveDays(in: paths.archives).filter { window.contains($0) }.sorted(by: >)
     }
 
     /// K11: every archive on disk whose day is in `window`, newest first, through the gate (a day file there: the archive
@@ -178,7 +200,7 @@ actor ArchiveGate {
         for day in PriceDayFile.days(in: paths.priceDays) where day < window.lowerBound {
             try? fm.removeItem(at: paths.priceDay(day))
         }
-        let archives = HistoryPass.archiveDays(in: paths.archives)
+        let archives = Self.archiveDays(in: paths.archives)
         for day in archives where day < window.lowerBound { try? fm.removeItem(at: archive(day)) }
         guard let urls = try? fm.contentsOfDirectory(at: paths.archives,
                                                      includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey])

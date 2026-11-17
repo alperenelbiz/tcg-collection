@@ -1,8 +1,10 @@
 import Foundation
 
-/// One history pass (A37, H5, H8): reads the daily price archives on disk that `HistoryPlan` names into each game's
-/// history, off the main actor, one archive at a time (an archive read holds about 117 MB). It reads `archives` and
-/// nothing else, and writes nothing: the caller decides what to write (H9).
+/// One history pass (A37, H5, H8; phase 5B task 3, K5): reads the price day files (`PriceDayFile`) that `HistoryPlan`
+/// names into each game's history, off the main actor, one day file at a time: one binary-search lookup per planned
+/// product (`PriceDayReader.prices(category:productID:)`), never a scan of a category. It reads no archive (archives are
+/// the gate's alone: `ArchiveGate` turns each into its day file before any pass) and writes nothing: the caller decides
+/// what to write (H9).
 nonisolated enum HistoryPass {
     struct Game: Sendable {
         let id: String
@@ -17,67 +19,36 @@ nonisolated enum HistoryPass {
         /// tracked printings only when the pass added a day to it. A game whose plan was empty is as it went in (no entry
         /// when it went in with none).
         var histories: [String: PriceHistory]
-        /// The days whose archive could not be read, in this pass or before it in this run (the `failedDays` passed in):
-        /// they are not tried again in this run (H8). A day a cancelled pass did not read is not one.
+        /// The days whose day file could not be read, in this pass or before it in this run (the `failedDays` passed
+        /// in): they are not tried again in this run (H8). A day a cancelled pass did not read is not one.
         var failedDays: Set<String>
     }
 
-    /// Reads one archive: calls the closure for each `(category, group, rows)` of the asked categories.
-    typealias Reader = @Sendable (URL, Set<Int>, (Int, Int, [PriceRow]) -> Void) throws -> Void
+    /// Opens the day file of one day for lookups. Throws when it does not read (`PriceDayFileError`, an IO error).
+    typealias Reader = @Sendable (_ day: String) throws -> PriceDayReader
 
-    /// Reads one day for a pass: a day file (`.prices`, phase 5B) through `PriceDayReader`, its rows as `PriceRow`s whose
-    /// `Price.shown` is the stored price (group 0); any other file as an archive (`PriceArchive.read`).
-    static func readDay(_ url: URL, _ categories: Set<Int>, _ each: (Int, Int, [PriceRow]) -> Void) throws {
-        guard url.pathExtension == "prices" else {
-            try PriceArchive.read(url, categories: categories, each: each)
-            return
-        }
-        let reader = try PriceDayReader(url: url)
-        for category in reader.categories where categories.contains(category) {
-            let rows = reader.rows(category: category).map {
-                PriceRow(productID: $0.productID, finish: $0.finish, price: PriceDayFile.price($0.price))
-            }
-            each(category, 0, rows)
+    /// The app's reader: `<folder>/<day>.prices`. A file whose header names another day than its name does not read
+    /// (`PriceDayFileError.notADayFile`, the gate's rule for a day file).
+    static func dayFileReader(in folder: URL) -> Reader {
+        { day in
+            let reader = try PriceDayReader(url: folder.appending(path: PriceDayFile.fileName(day: day)))
+            guard reader.day == day else { throw PriceDayFileError.notADayFile }
+            return reader
         }
     }
 
-    /// The file of one archive day: `prices-YYYY-MM-DD.ppmd.7z`, the name `PriceSync` downloads to.
-    static func archiveName(day: String) -> String { "prices-\(day).ppmd.7z" }
-
-    /// The days of the archives in the folder: every regular file named `prices-YYYY-MM-DD.ppmd.7z` of a real calendar
-    /// day. Any other name, a hidden file or a folder is ignored; a folder that is not there has none.
-    static func archiveDays(in archives: URL) -> Set<String> {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: archives, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return [] }
-        var days = Set<String>()
-        for url in urls {
-            guard let match = url.lastPathComponent.wholeMatch(of: /prices-(\d{4}-\d{2}-\d{2})\.ppmd\.7z/),
-                  (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-            let day = String(match.1)
-            // A day the calendar does not have (2026-02-30) moves when it is read as a date: it is not an archive day.
-            guard PriceDay.after(PriceDay.before(day)) == day, PriceDay.before(day) != day else { continue }
-            days.insert(day)
-        }
-        return days
-    }
-
-    /// Reads the planned archives (`HistoryPlan.make`) one after another, ascending; checks for cancellation between
-    /// archives (a cancelled pass returns what it has read, without a product new to the history whose planned days were not
-    /// all attempted). Per planned day each game takes its planned products from
-    /// that day's rows (`Price.shown`: market, else low marked; 0 is no price); a planned product with no row still counts
-    /// as read. An archive that cannot be read adds its day to `failedDays` and nothing else. The day is the file name's.
-    ///
-    /// Phase 5B task 2 (until task 3 switches the pass to day files): with `dayFiles` (the `price-days` folder), a day
-    /// with a day file counts as an archive day too, and its day file is read in place of its archive (the gate deletes
-    /// an archive once its day file is written). `read` is then called with the day file's URL: `readDay` reads either.
+    /// Reads the planned days (`HistoryPlan.make` over `days`, the day files on disk: `ArchiveGate.dayFiles()`) one after
+    /// another, ascending; checks for cancellation between day files (a cancelled pass returns what it has read, without a
+    /// product new to the history whose planned days were not all attempted). Per planned day each game looks up its
+    /// planned products in that day's file, in its category (a stored price is a shown price: market, else low marked;
+    /// 0 is never stored); a planned product with no row still counts as read. A day file that does not read adds its day
+    /// to `failedDays` and nothing else.
     @concurrent
-    static func run(games: [Game], archives: URL, dayFiles: URL? = nil, window: ClosedRange<String>,
-                    failedDays: Set<String>, read: Reader = readDay) async -> Result {
+    static func run(games: [Game], days: Set<String>, window: ClosedRange<String>, failedDays: Set<String>,
+                    read: Reader) async -> Result {
         var entries: [String: (history: PriceHistory?, tracked: Set<Int>)] = [:]
         for game in games { entries[game.id] = (game.history, game.tracked) }
-        let days = archiveDays(in: archives).union(dayFiles.map { PriceDayFile.days(in: $0) } ?? [])
-        let plan = HistoryPlan.make(window: window, archiveDays: days, failedDays: failedDays, games: entries)
-        let categories = Dictionary(games.map { ($0.categoryID, $0.id) }, uniquingKeysWith: { first, _ in first })
+        let plan = HistoryPlan.make(window: window, days: days, failedDays: failedDays, games: entries)
         let categoryOf = Dictionary(games.map { ($0.id, $0.categoryID) }, uniquingKeysWith: { first, _ in first })
 
         var histories: [String: PriceHistory] = [:]
@@ -90,39 +61,22 @@ nonisolated enum HistoryPass {
             if Task.isCancelled { break }
             attempted.insert(day)
             let reads = plan.reads[day]!
-            var rows: [String: [Int: [String: ShownPrice]]] = [:]
-            let wanted = Set(reads.keys.compactMap { categoryOf[$0] })
-            func readFile(_ url: URL) throws {
-                try read(url, wanted) { category, _, categoryRows in
-                    guard let game = categories[category], let ids = reads[game] else { return }
-                    for row in categoryRows where ids.contains(row.productID) {
-                        guard let shown = row.price.shown else { continue }
-                        rows[game, default: [:]][row.productID, default: [:]][row.finish] = shown
-                    }
-                }
-            }
-            let dayFile = dayFiles?.appending(path: PriceDayFile.fileName(day: day))
-            let hasDayFile = { dayFile.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+            let file: PriceDayReader
             do {
-                if hasDayFile(), let dayFile {
-                    try readFile(dayFile)
-                } else {
-                    do {
-                        try readFile(archives.appending(path: archiveName(day: day)))
-                    } catch {
-                        // The gate may have written the day file and deleted the archive since the plan was made.
-                        guard hasDayFile(), let dayFile else { throw error }
-                        rows = [:]
-                        try readFile(dayFile)
-                    }
-                }
+                file = try read(day)
             } catch {
                 failed.insert(day)
                 continue
             }
             for (game, ids) in reads {
+                guard let category = categoryOf[game] else { continue }
+                var rows: [Int: [String: ShownPrice]] = [:]
+                for productID in ids {
+                    let prices = file.prices(category: category, productID: productID)
+                    if !prices.isEmpty { rows[productID] = prices }
+                }
                 var history = histories[game] ?? PriceHistory()
-                history.setDay(day, rows: rows[game] ?? [:], for: ids)
+                history.setDay(day, rows: rows, for: ids)
                 histories[game] = history
             }
         }

@@ -18,7 +18,7 @@ struct AppModelPriceDaysTests {
         try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
         for day in days {
             try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"),
-                                             to: paths.archives.appending(path: HistoryPass.archiveName(day: day)))
+                                             to: paths.archives.appending(path: ArchiveGate.archiveName(day: day)))
         }
     }
 
@@ -37,7 +37,7 @@ struct AppModelPriceDaysTests {
         #expect(model.prices.day(game: "riftbound") == "2026-01-02")
         #expect(model.prices.shown(game: "riftbound", key: PrintingKey(productID: 721334, finish: "Normal"))?.amount == 7)
         #expect(exists(paths.priceDay("2025-12-20")))
-        #expect(!exists(paths.archives.appending(path: HistoryPass.archiveName(day: "2025-12-20"))))
+        #expect(!exists(paths.archives.appending(path: ArchiveGate.archiveName(day: "2025-12-20"))))
         #expect(model.priceDaysVersion == 1)
     }
 
@@ -51,7 +51,7 @@ struct AppModelPriceDaysTests {
         await model.start()
         #expect(model.prices.day(game: "riftbound") == "2025-12-31")
         #expect(PriceDayFile.days(in: paths.priceDays) == ["2025-12-30", "2025-12-31"])
-        #expect(HistoryPass.archiveDays(in: paths.archives).isEmpty)
+        #expect(ArchiveGate.archiveDays(in: paths.archives).isEmpty)
         #expect(model.priceDaysVersion == 2)
     }
 

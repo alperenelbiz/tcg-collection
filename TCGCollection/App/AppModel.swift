@@ -247,8 +247,9 @@ final class AppModel {
     @ObservationIgnored var historyLaunchReady = false
     /// H10: how long a library change waits for the next one before it asks for a pass. Tests set 0.
     @ObservationIgnored var historyQuietTime: Duration = .seconds(3)
-    /// Reads one day for a pass: an archive, or (phase 5B) a day file (`HistoryPass.readDay`). Tests count the reads.
-    @ObservationIgnored var historyArchiveReader: HistoryPass.Reader = HistoryPass.readDay
+    /// Opens one day file for a pass (phase 5B task 3, K5: a pass reads day files only), given the `price-days` folder.
+    /// Tests count the opens.
+    @ObservationIgnored var historyDayReader: (URL) -> HistoryPass.Reader = HistoryPass.dayFileReader(in:)
     /// Reads one history file (every read goes through it: `readHistoryFile`). Tests count the reads.
     @ObservationIgnored var historyFileReader: HistoryFileReader = { game, folder in try HistoryFiles.read(game: game, in: folder) }
     #if DEBUG

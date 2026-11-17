@@ -21,7 +21,7 @@ nonisolated enum HistoryOnDisk: Equatable, Sendable {
 ///
 /// One pass at a time, in a task the model keeps (`historyTask`): a newer request replaces a queued one. A pass reads the
 /// history files it has not read (or that changed on disk), computes each passed game's tracked printings on the main
-/// actor (one batched `reader.printings` call per game), reads the archives on disk off the main actor
+/// actor (one batched `reader.printings` call per game), reads the day files on disk off the main actor
 /// (`HistoryPass.run`), and writes a game's file only when the pass added a day or a product (H9). Its result is kept only
 /// for a game that is still followed and readable, in the folder the pass started with.
 extension AppModel {
@@ -283,11 +283,13 @@ extension AppModel {
         await historyPassHook?(games.map(\.id))
         #endif
 
-        // 3. The archives and the day files on disk (phase 5B task 2: a decoded day's archive is gone), off the main
-        // actor.
+        // 3. The day files on disk (phase 5B task 3, K5), off the main actor. The launch's migration and the price step
+        // turn every archive into its day file through the gate before they ask for a pass; a pass reads no archive.
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
-        let result = await HistoryPass.run(games: games, archives: paths.archives, dayFiles: paths.priceDays,
-                                           window: window, failedDays: historyFailedDays, read: historyArchiveReader)
+        let days = await archiveGate.dayFiles()
+        guard !Task.isCancelled, historyStillOn(folder) else { return }
+        let result = await HistoryPass.run(games: games, days: days, window: window, failedDays: historyFailedDays,
+                                           read: historyDayReader(paths.priceDays))
         // A cancelled pass keeps nothing (a folder switch, a reset).
         guard !Task.isCancelled, historyStillOn(folder) else { return }
         historyFailedDays = result.failedDays

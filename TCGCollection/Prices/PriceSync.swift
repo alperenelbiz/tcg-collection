@@ -118,8 +118,10 @@ actor PriceSync {
         return nil
     }
 
+    #if DEBUG
     /// Reads one archive into a `GamePrices` per game id, without a day file (the gate's decode does both). A game with
-    /// no rows gets empty rows. Kept for the price table's tests.
+    /// no rows gets empty rows. Kept for the price table's tests only (DEBUG): the app reads archives through the gate
+    /// alone (phase 5B task 3).
     nonisolated static func build(file: URL, games: [GameDefinition], day: String) throws -> [String: GamePrices] {
         var result: [String: GamePrices] = [:]
         var indexes: [String: [String: Int]] = [:]
@@ -146,4 +148,5 @@ actor PriceSync {
         }
         return result
     }
+    #endif
 }

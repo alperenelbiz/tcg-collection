@@ -28,7 +28,7 @@ struct ArchiveGateTests {
         }
     }
 
-    private func archive(_ day: String) -> URL { paths.archives.appending(path: HistoryPass.archiveName(day: day)) }
+    private func archive(_ day: String) -> URL { paths.archives.appending(path: ArchiveGate.archiveName(day: day)) }
 
     private func place(_ days: [String], from name: String = "prices-2026-01-02.ppmd.7z") throws {
         try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
@@ -73,7 +73,7 @@ struct ArchiveGateTests {
         let root2 = AppPaths(root: tempRoot())
         try FileManager.default.createDirectory(at: root2.archives, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"),
-                                         to: root2.archives.appending(path: HistoryPass.archiveName(day: "2026-01-02")))
+                                         to: root2.archives.appending(path: ArchiveGate.archiveName(day: "2026-01-02")))
         let lying: ArchiveGate.Writer = { _, url in
             let rows = [Games.game("riftbound")!.categoryID: [PriceDayRow(productID: 1, finish: "Normal",
                                                                          price: ShownPrice(amount: 1, isLow: false))]]
@@ -83,7 +83,7 @@ struct ArchiveGateTests {
         await #expect(throws: ArchiveGateError.readBackMismatch("2026-01-02")) {
             try await gate2.decode(day: "2026-01-02", games: Games.all)
         }
-        #expect(exists(root2.archives.appending(path: HistoryPass.archiveName(day: "2026-01-02"))))
+        #expect(exists(root2.archives.appending(path: ArchiveGate.archiveName(day: "2026-01-02"))))
         #expect(!exists(root2.priceDay("2026-01-02")))
         #expect(await gate2.writtenCount == 0)
     }
@@ -250,5 +250,20 @@ struct ArchiveGateTests {
         #expect(exists(archive("2025-12-02")))
         #expect(!exists(partial) && !exists(temporary))
         #expect(exists(fresh))                                           // newer than the launch: a download of this run
+    }
+
+    /// Only `prices-YYYY-MM-DD.ppmd.7z` of a real day names an archive day (moved from 5A's `HistoryPass` in phase 5B
+    /// task 3: archives are the gate's alone).
+    @Test func fileNamesThatAreNotArchiveDaysAreIgnored() throws {
+        let dir = tempDir()
+        try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"), to: dir.appending(path: "prices-2026-01-02.ppmd.7z"))
+        for name in ["prices-2026-1-3.ppmd.7z", "prices-2026-13-40.ppmd.7z", "prices-2026-02-30.ppmd.7z",
+                     ".prices-2026-01-05.ppmd.7z", "prices-2026-01-06.ppmd.7z.part", "prices-2026-01-07.7z",
+                     "prices-2026-01-08.ppmd.7z.tmp", "notes.txt", "Prices-2026-01-09.ppmd.7z", "xprices-2026-01-04.ppmd.7z"] {
+            try Data("x".utf8).write(to: dir.appending(path: name))
+        }
+        try FileManager.default.createDirectory(at: dir.appending(path: "prices-2026-01-03.ppmd.7z"), withIntermediateDirectories: false)
+        #expect(ArchiveGate.archiveDays(in: dir) == ["2026-01-02"])
+        #expect(ArchiveGate.archiveDays(in: dir.appending(path: "not-there")).isEmpty)
     }
 }

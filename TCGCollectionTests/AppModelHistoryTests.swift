@@ -15,14 +15,16 @@ struct AppModelHistoryTests {
     static let dockside = 721334, kaisa = 721337, pack = 711362, rune = 722282
     static let docksideKey = "dockside lock up"
 
-    /// Counts the days the passes read (an archive, or since phase 5B task 2 a day file: the launch turns the archives
-    /// on disk into day files), then reads them as the app does.
+    /// Counts the day files the passes open (phase 5B task 3: a pass reads day files only; the launch turns the archives
+    /// on disk into day files first), then opens them as the app does.
     final class Reads: Sendable {
         private let files = Mutex<[String]>([])
         var count: Int { files.withLock { $0.count } }
-        func read(_ url: URL, _ categories: Set<Int>, _ each: (Int, Int, [PriceRow]) -> Void) throws {
-            files.withLock { $0.append(url.lastPathComponent) }
-            try HistoryPass.readDay(url, categories, each)
+        func reader(_ folder: URL) -> HistoryPass.Reader {
+            { [self] day in
+                files.withLock { $0.append(day) }
+                return try HistoryPass.dayFileReader(in: folder)(day)
+            }
         }
     }
 
@@ -88,7 +90,7 @@ struct AppModelHistoryTests {
         let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-offline", "YES", "-game", "riftbound"] + extra),
                              catalogClient: NoNetwork(), archiveClient: NoNetwork(), fetcher: NoNetwork(), now: now)
         model.historyQuietTime = .zero
-        if let reads { model.historyArchiveReader = reads.read }
+        if let reads { model.historyDayReader = reads.reader }
         try await fillCatalog(model)
         try placeArchives(model, days)
         return model
@@ -105,10 +107,25 @@ struct AppModelHistoryTests {
     private func placeArchives(_ model: AppModel, _ days: [String]) throws {
         try FileManager.default.createDirectory(at: model.paths.archives, withIntermediateDirectories: true)
         for day in days {
-            let file = model.paths.archives.appending(path: HistoryPass.archiveName(day: day))
+            let file = model.paths.archives.appending(path: ArchiveGate.archiveName(day: day))
             if !FileManager.default.fileExists(atPath: file.path) {
                 try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"), to: file)
             }
+        }
+    }
+
+    /// Day files of `days` in the model's `price-days` folder, as the gate writes them (the fixture archive decoded once,
+    /// on a root of its own): a day that comes while the app runs (the price step, phase 5B's download) is a day file.
+    private func placeDayFiles(_ model: AppModel, _ days: [String]) async throws {
+        let scratch = AppPaths(root: tempRoot())
+        try FileManager.default.createDirectory(at: scratch.archives, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"),
+                                         to: scratch.archives.appending(path: ArchiveGate.archiveName(day: "2026-01-02")))
+        _ = try await ArchiveGate(paths: scratch).decode(day: "2026-01-02", games: Games.all)
+        let reader = try PriceDayReader(url: scratch.priceDay("2026-01-02"))
+        let rows = Dictionary(uniqueKeysWithValues: reader.categories.map { ($0, reader.rows(category: $0)) })
+        for day in days where !exists(model.paths.priceDay(day)) {
+            try PriceDayFile.write(PriceDayFile.data(day: day, rows: rows), to: model.paths.priceDay(day))
         }
     }
 
@@ -235,7 +252,7 @@ struct AppModelHistoryTests {
         #expect(history.products.keys.sorted() == [Self.pack, Self.dockside, Self.kaisa])
         #expect(model.history(game: "riftbound") == history)
         now = Self.day2
-        try placeArchives(model, ["2026-01-03"])
+        try await placeDayFiles(model, ["2026-01-03"])
         model.library.setCount(2, game: "riftbound", key: PrintingKey(productID: Self.pack, finish: "Normal"), name: "Pack")
         await model.waitForHistory()
         history = try stored(root)
@@ -434,7 +451,7 @@ struct AppModelHistoryTests {
         await model.waitForHistory()
         #expect(try stored(root).products.keys.sorted() == [Self.dockside, Self.kaisa])  // a new product alone keeps it
         now = Self.day2
-        try placeArchives(model, ["2026-01-03"])
+        try await placeDayFiles(model, ["2026-01-03"])
         model.library.setCount(2, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
         await model.waitForHistory()
         #expect(try stored(root).days.last == "2026-01-03")
@@ -692,7 +709,7 @@ struct AppModelHistoryTests {
         let otherHistory = PriceHistory(days: ["2025-12-01"], products: [Self.dockside: ["Normal": [ShownPrice(amount: 4, isLow: false)]]])
         try otherHistory.data().write(to: away.appending(path: "riftbound.prices.json"))
         #expect(model.library.fileChanged(historyURL(root)) == nil)
-        try placeArchives(model, ["2025-12-29"])                              // a new day, so the next pass writes
+        try await placeDayFiles(model, ["2025-12-29"])                              // a new day, so the next pass writes
         try FileManager.default.moveItem(at: away, to: user(root))
         await model.library.fileChanged(user(root).appending(path: "riftbound.json"))?.value
         #expect(!model.library.folderIsMissing)
@@ -750,7 +767,7 @@ struct AppModelHistoryTests {
         }
         model.library.fileChanged(historyURL(root))
         await model.waitForHistory()
-        try placeArchives(model, ["2025-12-29"])
+        try await placeDayFiles(model, ["2025-12-29"])
         model.requestHistory()
         await model.waitForHistory()
         let history = try stored(root)
@@ -777,7 +794,7 @@ struct AppModelHistoryTests {
             try? UserFiles.write(other.data(), to: file)                       // after this read read the file
             Self.onMain { _ = model.library.fileChanged(file) }
         }
-        try placeArchives(model, ["2025-12-29"])
+        try await placeDayFiles(model, ["2025-12-29"])
         model.requestHistory()
         await model.waitForHistory()
         let history = try stored(root)
@@ -806,7 +823,7 @@ struct AppModelHistoryTests {
         model.library.setCount(1, game: "riftbound", key: PrintingKey(productID: Self.kaisa, finish: "Normal"), name: "K")
         await model.waitForHistory()
         #expect(fired)
-        try placeArchives(model, ["2025-12-29"])
+        try await placeDayFiles(model, ["2025-12-29"])
         model.requestHistory()
         await model.waitForHistory()
         let history = try stored(root)
@@ -865,7 +882,7 @@ struct AppModelHistoryTests {
                              catalogClient: network, archiveClient: network, fetcher: network, now: { now })
         model.historyQuietTime = .zero
         let reads = Reads()
-        model.historyArchiveReader = reads.read
+        model.historyDayReader = reads.reader
         try placeArchives(model, ["2025-12-30", "2025-12-31"])
         await model.start()
         await model.waitForHistory()

@@ -2,25 +2,28 @@ import Foundation
 import Testing
 @testable import TCGCollection2
 
-/// The pure parts of the price history report (`-catalogReport YES`, phase 5A task 7).
+/// The pure parts of the price history report (`-catalogReport YES`, phase 5A task 7; phase 5B task 3: day files).
 @MainActor
 struct HistoryReportTests {
-    @Test func theArchiveLineGivesTheMedianTheMaxAndTheTotal() {
-        let line = HistoryReport.archiveLine([.milliseconds(1_500), .milliseconds(1_200), .milliseconds(1_300)],
-                                             total: .milliseconds(4_100))
-        #expect(line == "3 archives read, median 1.30 s, max 1.50 s per archive, total 4.10 s")
+    @Test func theDayLineGivesTheMedianTheMaxAndTheTotal() {
+        let line = HistoryReport.dayLine([.microseconds(1_500), .microseconds(1_200), .microseconds(1_300)],
+                                         total: .microseconds(4_100))
+        #expect(line == "3 day files read, median 1.3 ms, max 1.5 ms per day file, total 4.1 ms")
+        #expect(HistoryReport.dayLine([.milliseconds(3)], total: .milliseconds(3))
+            == "1 day file read, median 3.0 ms, max 3.0 ms per day file, total 3.0 ms")
     }
 
-    @Test func aFillOverThreeSecondsPerArchiveIsMarked() {
-        let under = HistoryReport.archiveLine([.seconds(3)], total: .seconds(3), limit: HistoryReport.fillLimit)
-        #expect(under == "1 archive read, median 3.00 s, max 3.00 s per archive, total 3.00 s")
-        let over = HistoryReport.archiveLine([.milliseconds(900), .milliseconds(3_100)], total: .seconds(4),
-                                             limit: HistoryReport.fillLimit)
-        #expect(over == "2 archives read, median 3.10 s, max 3.10 s per archive, total 4.00 s  ** over 3.00 s per archive **")
+    @Test func noDayFileReadSaysSo() {
+        #expect(HistoryReport.dayLine([], total: .milliseconds(20)) == "0 day files read, total 20.0 ms")
     }
 
-    @Test func noArchiveReadSaysSo() {
-        #expect(HistoryReport.archiveLine([], total: .milliseconds(20)) == "0 archives read, total 0.02 s")
+    /// Each day's time runs from its read's start to the next read's start, the last one's to the end.
+    @Test func theSpansRunFromEachStartToTheNext() {
+        let zero = ContinuousClock.now
+        let starts = [zero, zero + .milliseconds(5), zero + .milliseconds(7)]
+        #expect(HistoryReport.spans(starts: starts, end: zero + .milliseconds(10))
+            == [.milliseconds(5), .milliseconds(2), .milliseconds(3)])
+        #expect(HistoryReport.spans(starts: [], end: zero).isEmpty)
     }
 
     @Test func theNewProductIsTheSmallestUntrackedOne() {

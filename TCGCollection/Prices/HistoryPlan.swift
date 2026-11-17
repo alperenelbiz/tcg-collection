@@ -1,9 +1,9 @@
 import Foundation
 
-/// What one history pass reads (H8), pure: per archive day, per game, the product ids to take from that day's archive.
-/// A day is planned only when it is in the window, has an archive on disk and did not fail in this run. On such a day a
-/// tracked product the game's history does not have is read; one it has is read only when the day is not in its `days`.
-/// A day with nothing to read for any game is not planned, so one archive is opened once for all games.
+/// What one history pass reads (H8), pure: per day, per game, the product ids to look up in that day's file. A day is
+/// planned only when it is in the window, has a day file on disk (phase 5B, K5: `days`) and did not fail in this run. On
+/// such a day a tracked product the game's history does not have is read; one it has is read only when the day is not in
+/// its `days`. A day with nothing to read for any game is not planned, so one day file is opened once for all games.
 nonisolated struct HistoryPlan: Sendable, Equatable {
     /// Day → game → product ids. Every day and every game listed has at least one product.
     let reads: [String: [String: Set<Int>]]
@@ -11,10 +11,10 @@ nonisolated struct HistoryPlan: Sendable, Equatable {
     /// The planned days, ascending.
     var days: [String] { reads.keys.sorted() }
 
-    static func make(window: ClosedRange<String>, archiveDays: Set<String>, failedDays: Set<String>,
+    static func make(window: ClosedRange<String>, days: Set<String>, failedDays: Set<String>,
                      games: [String: (history: PriceHistory?, tracked: Set<Int>)]) -> HistoryPlan {
         var reads: [String: [String: Set<Int>]] = [:]
-        for day in archiveDays where window.contains(day) && !failedDays.contains(day) {
+        for day in days where window.contains(day) && !failedDays.contains(day) {
             var dayReads: [String: Set<Int>] = [:]
             for (game, entry) in games {
                 let known = entry.history?.days.contains(day) ?? false
