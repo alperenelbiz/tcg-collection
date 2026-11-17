@@ -82,6 +82,24 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.uitests
+  # iPhone UI tests: they run the Debug app in the iOS Simulator, on a temporary store and the fixture network. They take
+  # no pointer and need no "Enable UI Automation" approval on the Mac.
+  TCGCollectionPhoneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - TCGCollectionPhoneUITests
+      # The unit test fixtures, shared: the app under test reads them through `-fixtures`.
+      - path: TCGCollectionTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: TCGCollection
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.phoneuitests
+        TARGETED_DEVICE_FAMILY: "1"
 schemes:
   TCGCollection:
     build:
@@ -98,3 +116,11 @@ schemes:
         TCGCollectionUITests: [test]
     test:
       targets: [TCGCollectionUITests]
+  # Only the iPhone UI tests, in the iOS Simulator: scripts/ui-test-phone.sh.
+  TCGCollectionPhoneUI:
+    build:
+      targets:
+        TCGCollection: all
+        TCGCollectionPhoneUITests: [test]
+    test:
+      targets: [TCGCollectionPhoneUITests]
