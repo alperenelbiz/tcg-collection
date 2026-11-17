@@ -40,6 +40,28 @@ struct ThemeTests {
     }
 
     #if os(macOS)
+    /// Phase 6A task 6: the phone's sizes are iOS values; the Mac's stay as they were.
+    @MainActor @Test func theMacSizesDoNotChange() {
+        #expect(Theme.margin == 18); #expect(Theme.columnGap == 16); #expect(CountControl.height == 22)
+        #expect(Theme.chartHeight == 132)
+        #expect(Theme.bodyFont == .system(size: 13)); #expect(Theme.lineFont == .system(size: 12))
+        #expect(Theme.labelFont == .system(size: 11)); #expect(Theme.sectionFont == .system(size: 13, weight: .semibold))
+    }
+    #endif
+
+    #if os(iOS)
+    /// Phase 6A task 6 ("The look on the iPhone"): 16 pt margins, a 12 pt gap, larger type, 44 pt touch targets and a
+    /// 180 pt plot. The unit tests run on the Mac: this one compiles in the iPhone build (the phone UI tests check the
+    /// 44 pt and 180 pt on screen).
+    @MainActor @Test func thePhoneSizes() {
+        #expect(Theme.margin == 16); #expect(Theme.columnGap == 12); #expect(CountControl.height == 44)
+        #expect(Theme.chartHeight == 180)
+        #expect(Theme.bodyFont == .system(size: 15)); #expect(Theme.lineFont == .system(size: 13))
+        #expect(Theme.labelFont == .system(size: 12)); #expect(Theme.sectionFont == .system(size: 15, weight: .semibold))
+    }
+    #endif
+
+    #if os(macOS)
     /// The app's `AccentColor` asset (the sidebar's selection, the system's selection colours) is the accent token.
     @Test func theAccentAssetIsTheAccentToken() throws {
         let asset = try #require(NSColor(named: "AccentColor")?.usingColorSpace(.sRGB))

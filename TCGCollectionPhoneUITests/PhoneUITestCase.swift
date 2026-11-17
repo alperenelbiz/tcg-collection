@@ -107,6 +107,81 @@ class PhoneUITestCase: XCTestCase {
         if let writing { throw writing }
     }
 
+    // MARK: Prices and the price history (copies of the Mac's `UITestCase`, phase 6A task 6)
+
+    /// Writes the test's own price files into `<root>/support` before the launch, for every game, with a day far ahead:
+    /// the price step then has that day and downloads nothing, so no day file is written. Yu-Gi-Oh!: Swiftwind Panther
+    /// Warrior 719834 (Super Rare) 1st Edition $14.50, Unlimited $9.00; 719835 (Starlight Rare) 1st Edition $3.10. The
+    /// other games have none. With `longFinish`, 719834 also has a made-up "1st Edition Holofoil" line without a shown
+    /// price ("No price"). A copy of the Mac's `UITestCase.writePinPrices`.
+    func writePinPrices(in root: URL, longFinish: Bool = false) throws {
+        let support = root.appending(path: "support", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let none = #"{"day": "2099-12-31", "finishes": [], "rows": {}}"#
+        let long = longFinish ? #", "2": {"mid": 50}"# : ""
+        let yugioh = """
+        {"day": "2099-12-31", "finishes": ["1st Edition", "Unlimited"\(longFinish ? #", "1st Edition Holofoil""# : "")],
+         "rows": {"719834": {"0": {"market": 14.5}, "1": {"market": 9}\(long)}, "719835": {"0": {"market": 3.1}}}}
+        """
+        for game in ["magic-the-gathering", "yu-gi-oh", "riftbound", "cyberpunk"] {
+            try Data((game == "yu-gi-oh" ? yugioh : none).utf8).write(to: support.appending(path: "prices-\(game).json"))
+        }
+    }
+
+    /// The archive day the app's history window ends on: yesterday (UTC) until 20:30 UTC, then today. A copy of
+    /// `PriceDay.wanted(now:)`: the UI test target cannot import the app module.
+    static func wantedDay(now: Date = Date()) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let parts = calendar.dateComponents([.hour, .minute], from: now)
+        let afterPublish = parts.hour! * 60 + parts.minute! >= 20 * 60 + 30
+        return day(of: afterPublish ? now : now.addingTimeInterval(-86_400))
+    }
+
+    /// `day` (`yyyy-MM-dd`, UTC) moved by `days` days.
+    static func day(_ day: String, movedBy days: Int) -> String {
+        Self.day(of: noon(day).addingTimeInterval(Double(days) * 86_400))
+    }
+
+    /// `2026-10-03` → `Oct 3`, as the chart writes a day.
+    static func dayLabel(_ day: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: noon(day))
+    }
+
+    private static func day(of date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private static func noon(_ day: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")!
+        formatter.dateFormat = "yyyy-MM-dd HH"
+        return formatter.date(from: day + " 12")!
+    }
+
+    /// Writes `<root>/user/<game>.prices.json` of the running test's root before the launch, in the app's form: one
+    /// finish of one product, one price per day, the last on `day` (the test's `wantedDay()`) and the others on the days
+    /// before it. A copy of the Mac's `UITestCase.writeHistory`.
+    func writeHistory(game: String, productID: Int, finish: String, prices: [Double], endingOn day: String) throws {
+        let days = (0..<prices.count).map { Self.day(day, movedBy: $0 - (prices.count - 1)) }
+        let object: [String: Any] = ["days": days, "products": [String(productID): [finish: ["prices": prices]]],
+                                     "version": 1]
+        let folder = try XCTUnwrap(root).appending(path: "user", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            .write(to: folder.appending(path: "\(game).prices.json"))
+    }
+
     /// Polls `condition` until it holds or `timeout` seconds pass.
     func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let end = Date().addingTimeInterval(timeout)

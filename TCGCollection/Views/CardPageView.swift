@@ -52,7 +52,7 @@ struct CardPageView: View {
         } else if let shown, let game = Games.game(shown.gameID), let printings {
             ScrollView {
                 layout(shown: shown, game: game, printings: printings)
-                    .padding(.horizontal, 28)
+                    .padding(.horizontal, Self.sideMargin)
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -63,6 +63,13 @@ struct CardPageView: View {
         }
     }
 
+    /// The page's sides: 28 pt on the Mac; the iPhone's margin (16 pt), so the column is the screen's width less it.
+    #if os(iOS)
+    private static let sideMargin = Theme.margin
+    #else
+    private static let sideMargin: CGFloat = 28
+    #endif
+
     @ViewBuilder private func layout(shown: ProductRecord, game: GameDefinition, printings: [ProductRecord]) -> some View {
         #if os(macOS)
         HStack(alignment: .top, spacing: 28) {
@@ -71,7 +78,8 @@ struct CardPageView: View {
         }
         #else
         VStack(alignment: .leading, spacing: 20) {
-            CardImage(product: shown, size: .page).frame(maxWidth: 280).frame(maxWidth: .infinity)
+            // "The look on the iPhone": one column, the picture full width.
+            CardImage(product: shown, size: .page).frame(maxWidth: .infinity)
             details(shown: shown, game: game, printings: printings)
         }
         #endif
@@ -260,6 +268,11 @@ struct OwnedFinishes: View {
                 .foregroundStyle(Theme.muted)
                 .monospacedDigit()
                 .accessibilityIdentifier("card-owned")
+            #if os(iOS)
+            phoneFinishes(finishes, rows: rows, sale: sale, locked: locked != nil)
+                .font(Theme.bodyFont)
+                .disabled(locked != nil)
+            #else
             // 10 pt between the columns: at the 900 pt window the details column is 306 pt wide, and the two count controls
             // take 152 pt of it, so "1st Edition" and a price fit on one line beside them (with 16 pt they did not).
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
@@ -297,6 +310,7 @@ struct OwnedFinishes: View {
             }
             .font(Theme.bodyFont)
             .disabled(locked != nil)
+            #endif
             // The pin of "Want this printing": this product and its first finish line (the price table's first finish,
             // `Normal` when it has none). The page has no selected finish.
             if let wanted, let first = finishes.first {
@@ -313,6 +327,50 @@ struct OwnedFinishes: View {
             if let locked { CountsLockedLine(text: locked) }
         }
     }
+
+    #if os(iOS)
+    /// The iPhone's finish lines ("The look on the iPhone"): each finish as two rows, its name and its price, then its
+    /// Owned and For sale controls side by side. The column titles "Owned" and "For sale" stand once, above the first
+    /// line's controls' columns. The name may wrap (two lines at most); the price keeps its width.
+    private func phoneFinishes(_ finishes: [String], rows: [CollectionRow], sale: [SaleEntry], locked: Bool) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Theme.columnGap, verticalSpacing: 6) {
+            GridRow {
+                Text("Owned")
+                Text("For sale")
+            }
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            ForEach(finishes, id: \.self) { finish in
+                let key = PrintingKey(productID: productID, finish: finish)
+                let count = CollectionRules.count(rows, for: key)
+                let forSale = sale.first { $0.key == key }?.count ?? 0
+                GridRow {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                        finishName(finish)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        if let prices {
+                            price(prices.first { $0.finish == finish }?.price.shown)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                    }
+                    .padding(.top, 6)
+                    // The two control columns decide the width; the name wraps inside it.
+                    .gridCellUnsizedAxes(.horizontal)
+                    .gridCellColumns(2)
+                }
+                GridRow {
+                    CountControl(count: locked ? nil : count, label: finish) { step(by: $0 - count, finish: finish) }
+                    CountControl(count: locked ? nil : forSale, label: "\(finish) for sale", maximum: count,
+                                 prefix: "sale", key: finish) { stepForSale(by: $0 - forSale, finish: finish) }
+                }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+    #endif
 
     private func finishName(_ finish: String) -> some View {
         Text(finish)

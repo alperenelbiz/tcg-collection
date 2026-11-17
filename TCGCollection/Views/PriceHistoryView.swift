@@ -257,6 +257,20 @@ struct PriceHistoryView: View {
         }
         .chartOverlay { proxy in
             GeometryReader { geometry in
+                #if os(iOS)
+                // iOS: a tap shows the nearest day with a price (a second tap on that day clears it); a drag goes to
+                // `chartXSelection` below. A tap on the page beside the plot does not reach this layer.
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        guard let anchor = proxy.plotFrame,
+                              let date = proxy.value(atX: location.x - geometry[anchor].origin.x, as: Date.self)
+                        else { return }
+                        let day = chart.nearest(to: date)?.date
+                        pointer = day == pointer ? nil : day
+                    }
+                #else
                 Rectangle()
                     .fill(.clear)
                     .contentShape(Rectangle())
@@ -274,6 +288,7 @@ struct PriceHistoryView: View {
                             if pointer != nil { pointer = nil }
                         }
                     }
+                #endif
             }
         }
         #if os(iOS)

@@ -29,10 +29,20 @@ nonisolated enum Theme {
 
     /// The gallery: adaptive columns of at least this width.
     static let cellMinWidth: CGFloat = 150
+    /// Between two gallery columns. The iPhone (phase 6A, "The look on the iPhone"): 12 pt, so two columns of about
+    /// 179 pt fit the iPhone 17.
+    #if os(iOS)
+    static let columnGap: CGFloat = 12
+    #else
     static let columnGap: CGFloat = 16
+    #endif
     static let rowGap: CGFloat = 18
-    /// The gallery's outer margin.
+    /// The gallery's outer margin, and the card page's sides on the iPhone (16 pt there).
+    #if os(iOS)
+    static let margin: CGFloat = 16
+    #else
     static let margin: CGFloat = 18
+    #endif
     /// A picture in the gallery (59:86).
     static let pictureRadius: CGFloat = 6
     /// The large picture of the card page.
@@ -71,11 +81,18 @@ nonisolated enum Theme {
     static let lineGap: CGFloat = 4
     /// The card page's price chart (phase 5A): the plot's height, its line's width (also a day alone, drawn as a dot), and
     /// the dot on the line under the pointer.
+    /// The iPhone's plot is 180 pt tall: the column is the screen's width.
+    #if os(iOS)
+    static let chartHeight: CGFloat = 180
+    #else
     static let chartHeight: CGFloat = 132
+    #endif
     static let chartLineWidth: CGFloat = 2
     static let chartDot: CGFloat = 6
 
     // MARK: Type (the system face only; the window title is the system's)
+    // The iPhone (phase 6A, "The look on the iPhone") reads at arm's length: `sectionFont`, `bodyFont`, `lineFont` and
+    // `labelFont` are 2 pt larger there (1 pt for `labelFont`); nothing is under 12 pt. The other fonts are the same.
 
     /// The card page's title.
     static let pageTitleFont = Font.system(size: 22, weight: .semibold)
@@ -85,6 +102,12 @@ nonisolated enum Theme {
     static let onboardingTitleFont = Font.system(size: 15, weight: .semibold)
     /// A section's title on a deck page ("Main Deck").
     static let deckSectionFont = Font.system(size: 15, weight: .semibold)
+    #if os(iOS)
+    static let sectionFont = Font.system(size: 15, weight: .semibold)
+    static let bodyFont = Font.system(size: 15)
+    static let lineFont = Font.system(size: 13)
+    static let labelFont = Font.system(size: 12)
+    #else
     /// A section of a sheet (a game in the import sheet).
     static let sectionFont = Font.system(size: 13, weight: .semibold)
     /// A card name in the gallery, values, sentences.
@@ -93,6 +116,7 @@ nonisolated enum Theme {
     static let lineFont = Font.system(size: 12)
     /// Labels over values, the status line. Nothing is smaller.
     static let labelFont = Font.system(size: 11)
+    #endif
 
     // MARK: Colour arithmetic
 

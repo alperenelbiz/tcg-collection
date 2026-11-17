@@ -18,8 +18,19 @@ struct CountControl: View {
     let spoken: (remove: String, add: String)?
     let set: (Int) -> Void
 
-    /// The field's height; a text button beside it (`FieldButtonStyle`) has the same.
+    /// The field's height; a text button beside it (`FieldButtonStyle`) has the same. The iPhone: 44 pt, a touch target
+    /// (its `−` and `+` are 44 × 44 pt there).
+    #if os(iOS)
+    static let height: CGFloat = 44
+    #else
     static let height: CGFloat = 22
+    #endif
+    /// The width of a `−` or `+`: 44 pt on the iPhone, a square touch target.
+    #if os(iOS)
+    static let stepWidth: CGFloat = 44
+    #else
+    static let stepWidth: CGFloat = 24
+    #endif
     /// The width of the number, so the field keeps its size from 0 to 99.
     private static let numberWidth: CGFloat = 28
 
@@ -69,7 +80,7 @@ private struct StepStyle: ButtonStyle {
         configuration.label
             .foregroundStyle(isEnabled ? Theme.text : Theme.faint)
             .opacity(configuration.isPressed ? 0.6 : 1)
-            .frame(width: 24, height: CountControl.height)
+            .frame(width: CountControl.stepWidth, height: CountControl.height)
             .contentShape(Rectangle())
     }
 }
@@ -85,7 +96,12 @@ struct FieldButtonStyle: ButtonStyle {
             .foregroundStyle(isEnabled ? Theme.text : Theme.faint)
             .opacity(configuration.isPressed ? 0.6 : 1)
             .padding(.horizontal, 10)
+            #if os(iOS)
+            // At least a touch target; a label that wraps makes it taller.
+            .frame(minHeight: CountControl.height)
+            #else
             .frame(height: CountControl.height)
+            #endif
             .background(Theme.raised, in: RoundedRectangle(cornerRadius: Theme.pictureRadius))
             .contentShape(RoundedRectangle(cornerRadius: Theme.pictureRadius))
     }

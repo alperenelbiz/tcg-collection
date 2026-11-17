@@ -121,6 +121,14 @@ final class DecksPhoneTests: PhoneUITestCase {
         XCTAssertTrue(element(app, "deck-cell-\(key)-runes").waitForExistence(timeout: 10), "no cell after back")
         assertDeckTotals(app, "1 card")
         shot("decks-01-page")
+        // Phase 6A task 6 (the carried concern): at the end of the page the last cell's control is above the tab bar.
+        let plus = app.buttons["deck-cell-plus-\(key)-runes"].firstMatch
+        XCTAssertTrue(plus.waitForExistence(timeout: 10), "no cell control")
+        for _ in 0..<4 { element(app, "deck-screen").swipeUp(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(waitUntil(timeout: 5) { plus.isHittable }, "the cell's control is not on screen")
+        XCTAssertLessThanOrEqual(plus.frame.maxY, app.tabBars.firstMatch.frame.minY + 0.5,
+                                 "the last cell's control \(plus.frame) is under the tab bar")
+        shot("decks-01b-page-end")
     }
 
     /// The deck list: the active deck missing 2 copies says `2`; the long name truncates inside the screen; the unreadable
