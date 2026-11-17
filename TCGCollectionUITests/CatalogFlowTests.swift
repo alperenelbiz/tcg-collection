@@ -272,8 +272,10 @@ final class CatalogFlowTests: UITestCase {
         let search = searchField(app)
         search.click()
         search.typeText("rune")
-        XCTAssertTrue(waitUntil { cells.count > 0 && cells.count < all })
-        let found = identifiers(cells)
+        // Wait for the search's own result, not for any count under `all`: the gallery goes from 3 cells to 1 through
+        // a moment with 2 (seen in phase 5B's full run), and a list taken then is no result.
+        let found = ["card-cell-calm rune"]
+        XCTAssertTrue(waitUntil { self.identifiers(cells) == found }, "\(identifiers(cells)) of \(all)")
         element(app, "sidebar-collection").click()
         XCTAssertTrue(element(app, "collection-screen").waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntil { cells.count == 0 }, "catalog cells are visible on the Collection: \(identifiers(cells))")
