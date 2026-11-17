@@ -790,8 +790,8 @@ final class AppModel {
         #endif
         await archiveGate.migrate(window: window, games: Games.all) { [weak self] day, decoded in
             #if DEBUG
-            // The report's decode-and-write time per day: from the end of the day before to this day's day file verified
-            // and its archive deleted (the gate's whole `decodeDay`), and the process's peak resident size by then.
+            // The report's time per day, from one migrated day to the next: the gate's whole `decodeDay` (decode, write,
+            // check, delete) plus the day before's `tookMigratedDay`; and the process's peak resident size by then.
             let done = ContinuousClock.now
             await self?.notePriceDaysMigrated(day: day, done: done, wroteDayFile: decoded.wroteDayFile)
             #endif

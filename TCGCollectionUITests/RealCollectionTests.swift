@@ -461,9 +461,11 @@ final class RealCollectionTests: UITestCase {
     ///    with two or more priced days (the chart), else the first (one day: "Price history starts on …"; none: "No price
     ///    in the last 90 days."). Phase 5B: the block reads its printing's days when the page opens (K6), so the first
     ///    state it shows may be "Reading price history…" for a moment; the first other state must be the expected one.
-    ///    Then All cards: among its first cells, a card whose shown printing is not owned ("In your collection: 0"; the
-    ///    copy has no Wanted list, deck or pin, so the history file cannot hold it) shows its chart from the day files
-    ///    (A45); the download line's button is not there (offline: no backfill, A48). Then a quit.
+    ///    Then All cards: among its first cells, a card whose shown printing is not owned ("In your collection: 0")
+    ///    shows its chart from the day files (A45); the download line's button is not there (offline: no backfill, A48).
+    ///    That proves a chart of an untracked printing only when `riftbound.json` has no Wanted entry and no deck (then
+    ///    the history file cannot hold that printing): true in a run alone on a fresh copy. When the file has either (the
+    ///    class's earlier tests leave a deck), this part is skipped and the attachment says why. Then a quit.
     /// 2. The same day: the same cell's block shows the same state within 60 s, then the quiet time and a margin pass.
     ///    Quit: every file of `user/`, the history files included, is byte-equal to the end of launch 1 (no second write
     ///    on one UTC day); still no archive; every day file is byte-equal with its modification date unchanged (no second
@@ -536,10 +538,17 @@ final class RealCollectionTests: UITestCase {
                                        picture: "real-history-1-card-page")
         times.append("the chosen cell's block: \(outcome) (\(seconds(opened)) after the click)")
 
-        // A card that is not owned has its chart from the day files (A45, K6).
-        element(app, "sidebar-all-cards").click()
-        let notOwned = try notOwnedChart(app, picture: "real-history-3-not-owned")
-        times.append("a card not owned: \(notOwned)")
+        // A card that is not owned has its chart from the day files (A45, K6). Only on a file with no Wanted entry and no
+        // deck: else the history file could hold that printing (a run alone on a fresh copy has neither).
+        let file = try storedUserFile(game: "riftbound") ?? [:]
+        let tracksCards = !((file["wanted"] as? [Any])?.isEmpty ?? true) || !((file["decks"] as? [Any])?.isEmpty ?? true)
+        if tracksCards {
+            times.append("a card not owned: skipped (riftbound.json has a Wanted entry or a deck: run this test alone on a fresh copy)")
+        } else {
+            element(app, "sidebar-all-cards").click()
+            let notOwned = try notOwnedChart(app, picture: "real-history-3-not-owned")
+            times.append("a card not owned: \(notOwned)")
+        }
         quit(app)
         try assertOnlyHistoryAdded(folder, before)
         let afterFirst = try allFiles(folder, history: true)

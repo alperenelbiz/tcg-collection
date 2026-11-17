@@ -124,7 +124,8 @@ enum HistoryReport {
     }
 
     /// The launch's migration (K11): each archive day decoded through the gate, its day file written, read back and
-    /// verified, and its archive deleted; the time of each (from the end of the day before), and the process's peak
+    /// verified, and its archive deleted; the time of each from one migrated day to the next (the gate's decode, write,
+    /// check and delete, plus the day before's table taken and day files noted), and the process's peak
     /// resident size before the migration and after each day.
     private static func migration(model: AppModel, into lines: inout [String]) {
         let log = model.priceDaysMigrationLog
@@ -135,7 +136,7 @@ enum HistoryReport {
         lines.append("migration at launch: \(log.count) \(log.count == 1 ? "day" : "days") decoded through the gate, "
                      + "peak resident size \(megabytes(model.priceDaysMigrationPeakBefore)) before it")
         for entry in log {
-            lines.append("  \(entry.day): decode, write, verify, delete \(secondsText(entry.spent))"
+            lines.append("  \(entry.day): from one migrated day to the next \(secondsText(entry.spent))"
                          + (entry.wroteDayFile ? "" : " (its day file was there already)")
                          + "; peak resident size \(megabytes(entry.peakResident))")
         }
