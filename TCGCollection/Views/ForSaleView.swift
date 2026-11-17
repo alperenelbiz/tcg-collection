@@ -154,6 +154,22 @@ struct ForSaleView: View {
         return VStack(alignment: .leading, spacing: 8) {
             PrintingCell(gameID: state.gameID, entry: entry, link: link)
                 .accessibilityIdentifier("for-sale-cell-\(suffix)")
+            #if os(iOS)
+            // The iPhone (phase 6A task 8): the 44 pt count control and "Sold" do not fit one line of a 179 pt cell, and
+            // "Sold" wrapped inside its button ("Sol / d"): it keeps one line, under the control when the row is narrow.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    saleControl(entry, owned: owned, suffix: suffix)
+                    Spacer(minLength: 0)
+                    soldButton(entry, suffix: suffix)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    saleControl(entry, owned: owned, suffix: suffix)
+                    soldButton(entry, suffix: suffix)
+                }
+            }
+            .disabled(!canChange)
+            #else
             HStack(spacing: 8) {
                 CountControl(count: entry.row.count, label: "\(entry.name), \(entry.row.finish), for sale", maximum: owned,
                              prefix: "for-sale", key: suffix) { step(by: $0 - entry.row.count, entry: entry) }
@@ -168,8 +184,31 @@ struct ForSaleView: View {
                     .accessibilityIdentifier("for-sale-sold-\(suffix)")
             }
             .disabled(!canChange)
+            #endif
         }
     }
+
+    #if os(iOS)
+    /// The cell's for-sale count control (the Mac builds the same one inline).
+    private func saleControl(_ entry: CollectionEntry, owned: Int, suffix: String) -> some View {
+        CountControl(count: entry.row.count, label: "\(entry.name), \(entry.row.finish), for sale", maximum: owned,
+                     prefix: "for-sale", key: suffix) { step(by: $0 - entry.row.count, entry: entry) }
+    }
+
+    /// "Sold" on one line (its width is its word's).
+    private func soldButton(_ entry: CollectionEntry, suffix: String) -> some View {
+        Button("Sold") {
+            sold.ask(key: entry.id, name: entry.name, forSale: entry.row.count,
+                     message: soldMessage(entry, forSale: entry.row.count))
+        }
+            .buttonStyle(FieldButtonStyle())
+            .lineLimit(1)
+            .fixedSize()
+            .disabled(sold.isOpen)
+            .accessibilityLabel("Sold \(entry.name), \(entry.row.finish)")
+            .accessibilityIdentifier("for-sale-sold-\(suffix)")
+    }
+    #endif
 
     /// The PDF of the whole list, whatever the search text and the sort (it orders by price itself, C10).
     private func pdfJob(_ all: [CollectionEntry]) -> PDFJob? {

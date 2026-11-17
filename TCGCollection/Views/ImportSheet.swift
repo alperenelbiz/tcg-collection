@@ -13,6 +13,18 @@ struct ImportSheet: View {
     @State private var showsSkipped = false
     /// Goes up when `importModel.needsPrepare` turns true; each value runs one `prepare` (the first at once).
     @State private var prepareRound = 0
+    /// The sheet's width (the iPhone only): under `Theme.importSheetMinWidth` the table's rows are stacked.
+    @State private var width: CGFloat = 0
+
+    /// The iPhone (phase 6A task 8): under 640 pt a row is two lines, the name and the finish, then the choice and the
+    /// number; the Mac's sheet is never narrower than 640 pt and keeps its one-line rows.
+    private var stacked: Bool {
+        #if os(iOS)
+        width < Theme.importSheetMinWidth
+        #else
+        false
+        #endif
+    }
 
     /// What the body shows under the title.
     private enum Layout: Equatable {
@@ -49,6 +61,11 @@ struct ImportSheet: View {
         #if os(macOS)
         .frame(minWidth: Theme.importSheetMinWidth, idealWidth: Theme.importSheetIdealWidth,
                minHeight: Theme.importSheetMinHeight, idealHeight: Theme.importSheetIdealHeight)
+        #else
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .presentationDetents([.large])
+        // The accent is the default button's only (it draws its own fill): the plain buttons in `text`.
+        .tint(Theme.text)
         #endif
         .presentationBackground(Theme.ground)
         .accessibilityElement(children: .contain)
@@ -220,13 +237,54 @@ struct ImportSheet: View {
         return ForEach(changes) { change in
             let cell = cell(change)
             let id = "\(change.key.productID)-\(change.key.finish)"
+            if stacked {
+                stackedRow(change, cell: cell, id: id, ambiguous: ambiguous.contains(change.key))
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(change.name)
+                            .foregroundStyle(Theme.text)
+                            .lineLimit(2)
+                            .layoutPriority(1)
+                        if ambiguous.contains(change.key) {
+                            Text(importModel.setName(of: change.key) ?? "Product \(change.key.productID)")
+                                .foregroundStyle(Theme.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(change.key.finish)
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .frame(width: Theme.tableFinishWidth, alignment: .leading)
+                    Text(cell.text)
+                        .monospacedDigit()
+                        .foregroundStyle(cell.risk ? Theme.risk : Theme.text)
+                        .frame(width: Theme.tableNumberWidth, alignment: .trailing)
+                        .accessibilityIdentifier("import-count-\(id)")
+                    if choiceColumn {
+                        (cell.choice ?? AnyView(Color.clear.frame(height: 1)))
+                            .frame(width: Theme.tableChoiceWidth, alignment: .leading)
+                    }
+                }
+                .font(Theme.bodyFont)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("import-row-\(id)")
+            }
+        }
+    }
+
+    /// A row on the iPhone: line 1 the name (two lines at most, with the set's name where two rows would read the same)
+    /// and the finish on the right; line 2 the choice on the left and the number on the right, so the numbers of every
+    /// row stay in one right-aligned column.
+    private func stackedRow(_ change: ImportComparison.Change, cell: Cell, id: String, ambiguous: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Theme.lineGap) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(change.name)
                         .foregroundStyle(Theme.text)
                         .lineLimit(2)
-                        .layoutPriority(1)
-                    if ambiguous.contains(change.key) {
+                    if ambiguous {
                         Text(importModel.setName(of: change.key) ?? "Product \(change.key.productID)")
                             .foregroundStyle(Theme.muted)
                             .lineLimit(1)
@@ -236,21 +294,23 @@ struct ImportSheet: View {
                 Text(change.key.finish)
                     .foregroundStyle(Theme.muted)
                     .lineLimit(1)
-                    .frame(width: Theme.tableFinishWidth, alignment: .leading)
+                    .fixedSize()
+            }
+            HStack(alignment: .center, spacing: Theme.columnGap) {
+                if let choice = cell.choice {
+                    choice.fixedSize()
+                }
+                Spacer(minLength: 0)
                 Text(cell.text)
                     .monospacedDigit()
                     .foregroundStyle(cell.risk ? Theme.risk : Theme.text)
-                    .frame(width: Theme.tableNumberWidth, alignment: .trailing)
                     .accessibilityIdentifier("import-count-\(id)")
-                if choiceColumn {
-                    (cell.choice ?? AnyView(Color.clear.frame(height: 1)))
-                        .frame(width: Theme.tableChoiceWidth, alignment: .leading)
-                }
             }
-            .font(Theme.bodyFont)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("import-row-\(id)")
         }
+        .font(Theme.bodyFont)
+        .padding(.bottom, Theme.lineGap)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("import-row-\(id)")
     }
 
     /// The number column of a row, its colour, and the choice column (only "In your collection, not in this file").
@@ -285,22 +345,43 @@ struct ImportSheet: View {
                 if showsSkipped {
                     LazyVStack(alignment: .leading, spacing: Theme.tableRowSpacing) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                            HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
-                                Text("Line \(line.line)")
-                                    .monospacedDigit()
-                                    .foregroundStyle(Theme.muted)
-                                    .frame(width: Theme.tableNumberWidth, alignment: .trailing)
-                                Text(line.name.isEmpty ? "—" : line.name)
-                                    .foregroundStyle(Theme.text)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text(line.reason)
-                                    .foregroundStyle(Theme.muted)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if stacked {
+                                // The iPhone: the line number and the name, then the reason under them.
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                                        Text("Line \(line.line)")
+                                            .monospacedDigit()
+                                            .foregroundStyle(Theme.muted)
+                                            .fixedSize()
+                                        Text(line.name.isEmpty ? "—" : line.name)
+                                            .foregroundStyle(Theme.text)
+                                            .lineLimit(2)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    Text(line.reason)
+                                        .foregroundStyle(Theme.muted)
+                                }
+                                .font(Theme.bodyFont)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("import-skipped-line-\(line.line)")
+                            } else {
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                                    Text("Line \(line.line)")
+                                        .monospacedDigit()
+                                        .foregroundStyle(Theme.muted)
+                                        .frame(width: Theme.tableNumberWidth, alignment: .trailing)
+                                    Text(line.name.isEmpty ? "—" : line.name)
+                                        .foregroundStyle(Theme.text)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text(line.reason)
+                                        .foregroundStyle(Theme.muted)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .font(Theme.bodyFont)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("import-skipped-line-\(line.line)")
                             }
-                            .font(Theme.bodyFont)
-                            .accessibilityElement(children: .combine)
-                            .accessibilityIdentifier("import-skipped-line-\(line.line)")
                         }
                     }
                     .padding(.top, Theme.tableRowSpacing)

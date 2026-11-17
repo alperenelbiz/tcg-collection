@@ -100,7 +100,13 @@ final class ListsPhoneTests: PhoneUITestCase {
 
         switcher.buttons["For Sale"].tap()
         XCTAssertTrue(waitUntil(timeout: 20) { self.forSaleCells(app) == ["for-sale-cell-721334-Normal"] }, "\(forSaleCells(app))")
-        XCTAssertTrue(element(app, "for-sale-sold-721334-Normal").exists, "no Sold")
+        let soldButton = element(app, "for-sale-sold-721334-Normal")
+        XCTAssertTrue(soldButton.exists, "no Sold")
+        // Task 8: "Sold" on one line (it wrapped to "Sol / d" beside the 44 pt count control in a 179 pt cell): its width
+        // holds the word and the padding, and it stays inside its cell.
+        XCTAssertGreaterThanOrEqual(soldButton.frame.width, 50, "Sold is squeezed: \(soldButton.frame)")
+        let saleCell = element(app, "for-sale-cell-721334-Normal").frame
+        XCTAssertLessThanOrEqual(soldButton.frame.maxX, saleCell.maxX + 1, "Sold \(soldButton.frame) leaves its cell \(saleCell)")
         XCTAssertTrue(app.navigationBars.staticTexts["For Sale"].firstMatch.waitForExistence(timeout: 10), "no title For Sale")
         XCTAssertTrue(element(app, "for-sale-more").exists, "no … menu")
         assertTotals(app, "for-sale-totals", "1 copy · 1 printing · $5.12")
