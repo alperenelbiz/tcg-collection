@@ -442,70 +442,92 @@ final class RealCollectionTests: UITestCase {
         return (try XCTUnwrap(Int(key[..<dash]), key), String(key[key.index(after: dash)...]))
     }
 
-    // MARK: Price history (phase 5A task 7)
+    // MARK: Price history (phase 5A task 7; phase 5B task 6: the day files)
 
-    /// The price history on a real collection, offline (A34–A37, A41, A42, H1, H5, H6, H8, H9; Review Focus 1). Skipped
-    /// unless `TCG_REAL_STORE` is set, its root has `user/riftbound.json`, and `caches/archives` holds a daily price archive
-    /// (`prices-YYYY-MM-DD.ppmd.7z`) of a day in the window (the 90 UTC days that end on the app's wanted day). The root
-    /// needs no price file. XCTest's name order runs it after the deck test and before the profiles test; a deck test run
-    /// with archives on disk may have written the history files already, so a history file that is there before is
-    /// allowed, and only its content is checked. Two launches, on Riftbound's Collection:
-    /// 1. The Collection's subtitle agrees with the file. `riftbound.prices.json` comes: its `days` are the archive days in
-    ///    the window, and its product ids hold every product of the collection. Once the history files have stayed
-    ///    unchanged for 5 s: every file of `user/` that is not a history file is byte-equal to before, none is removed,
-    ///    and every file added or changed is the history file of a known game. The cell to open and what its block shows
-    ///    come from that file (`chooseCell`): a visible cell of a product with one owned finish, the first with two or
-    ///    more priced days (the chart), else the first (one day: "Price history starts on …"; none: "No price in the last
-    ///    90 days."). Memory is set before the write, so the first state the block shows must be that one ("Reading price
-    ///    history…" fails at once). Then a quit.
-    /// 2. The same day: the same cell's block shows the same state within 60 s (the file is read again), then the quiet
-    ///    time and a margin pass. Quit: every file of `user/`, the history files included, is byte-equal to the end of
-    ///    launch 1 (no second write on one UTC day).
+    /// The price history on a real collection, offline (A34–A37, A42, A45, A47, H1, H5, H6, H8, H9, K1, K3, K5, K6, K11;
+    /// Review Focus 1). Skipped unless `TCG_REAL_STORE` is set, its root has `user/riftbound.json`, and the window (the 90
+    /// UTC days that end on the app's wanted day) has a day: a daily price archive in `caches/archives`
+    /// (`prices-YYYY-MM-DD.ppmd.7z`) or a day file in `support/price-days` (`<day>.prices`). The root needs no price file.
+    /// XCTest's name order runs it after the deck test and before the profiles test; a deck test run with archives on disk
+    /// may have written the history files and the day files already, so a history file that is there before is allowed,
+    /// and only its content is checked. Two launches, on Riftbound's Collection:
+    /// 1. The Collection's subtitle agrees with the file. `riftbound.prices.json` comes: its `days` are the days of the
+    ///    window (the archives' and the day files'), and its product ids hold every product of the collection. Phase 5B:
+    ///    no archive is left in `caches/archives`, `support/price-days` has one `<day>.prices` per day of the window and
+    ///    no `.prices.tmp` (K3, K11: the launch decoded each archive into its day file and deleted it). Once the history
+    ///    files have stayed unchanged for 5 s: every file of `user/` that is not a history file is byte-equal to before,
+    ///    none is removed, and every file added or changed is the history file of a known game. The cell to open and what
+    ///    its block shows come from that file (`chooseCell`): a visible cell of a product with one owned finish, the first
+    ///    with two or more priced days (the chart), else the first (one day: "Price history starts on …"; none: "No price
+    ///    in the last 90 days."). Phase 5B: the block reads its printing's days when the page opens (K6), so the first
+    ///    state it shows may be "Reading price history…" for a moment; the first other state must be the expected one.
+    ///    Then All cards: among its first cells, a card whose shown printing is not owned ("In your collection: 0"; the
+    ///    copy has no Wanted list, deck or pin, so the history file cannot hold it) shows its chart from the day files
+    ///    (A45); the download line's button is not there (offline: no backfill, A48). Then a quit.
+    /// 2. The same day: the same cell's block shows the same state within 60 s, then the quiet time and a margin pass.
+    ///    Quit: every file of `user/`, the history files included, is byte-equal to the end of launch 1 (no second write
+    ///    on one UTC day); still no archive; every day file is byte-equal with its modification date unchanged (no second
+    ///    decode, K1: written once).
     /// A history file that is there before the launch (the deck test, first by name, writes one when the root has
     /// archives) is allowed; the attachment says "before the launch: yes" then, and the run does not prove that this
-    /// build's first launch creates the file: that evidence is a run of this test alone on a fresh copy ("no").
-    /// It leaves the `<game>.prices.json` files in `user/`; the later tests of the class do not compare them. No number or
-    /// name of the owner is in the test. Attachment `real-history-timings` (times measured from outside, polled every
-    /// 0.2 s: an upper bound).
+    /// build's first launch creates the file or the day files: that evidence is a run of this test alone on a fresh copy
+    /// ("no"). It leaves the `<game>.prices.json` files in `user/` and the day files in `support/price-days`; the later
+    /// tests of the class do not compare them. No number or name of the owner is in the test. Attachment
+    /// `real-history-timings` (times measured from outside, polled every 0.2 s: an upper bound).
     func testPriceHistoryOnTheRealCollection() throws {
         let root = try realStoreRoot()
         let folder = root.appending(path: "user")
         guard FileManager.default.fileExists(atPath: folder.appending(path: "riftbound.json").path) else {
             throw XCTSkip("\(folder.path)/riftbound.json is not there: this test runs on a root whose Riftbound collection is imported")
         }
+        let archives = root.appending(path: "caches/archives")
+        let priceDays = root.appending(path: "support/price-days")
         let wanted = Self.wantedDay()
         let first = Self.day(wanted, movedBy: -89)
-        let archiveDays = Self.archiveDays(in: root.appending(path: "caches/archives"))
-        let expectedDays = archiveDays.filter { $0 >= first && $0 <= wanted }.sorted()
+        let archiveDays = Self.archiveDays(in: archives)
+        let dayFilesBefore = Self.dayFileDays(in: priceDays)
+        let expectedDays = archiveDays.union(dayFilesBefore).filter { $0 >= first && $0 <= wanted }.sorted()
         guard !expectedDays.isEmpty else {
-            throw XCTSkip("no price archive of \(first)…\(wanted) in \(root.path)/caches/archives: copy the archives first")
+            throw XCTSkip("no price archive or day file of \(first)…\(wanted) in \(root.path): copy the archives first")
         }
         let before = try allFiles(folder, history: true)
         let historyFile = folder.appending(path: "riftbound.prices.json")
-        var times: [String] = ["archive days in the window: \(expectedDays.count)",
+        var times: [String] = ["days in the window: \(expectedDays.count) (archives \(archiveDays.count), "
+                                   + "day files \(dayFilesBefore.count) before the launch)",
                                "riftbound.prices.json before the launch: \(before["riftbound.prices.json"] == nil ? "no" : "yes")"]
         let seconds = { (from: Date) in String(format: "%.1f s", Date().timeIntervalSince(from)) }
 
-        // 1. The first launch on the copy: the history file comes, nothing else changes.
+        // 1. The first launch on the copy: the archives become day files, the history file comes, nothing else changes.
         var launched = Date()
         var app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
         let rows = try storedCollection(game: "riftbound")         // read only: `root` is set by the launch
         XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
         times.append("launch -> the Collection's subtitle: \(seconds(launched))")
+        XCTAssertTrue(waitUntil(timeout: 600) {
+            Self.archiveDays(in: archives).isEmpty && Set(expectedDays).isSubset(of: Self.dayFileDays(in: priceDays))
+        }, "archives left: \(Self.archiveDays(in: archives).count), day files: \(Self.dayFileDays(in: priceDays).count)")
+        times.append("launch -> every archive a day file, no archive left: \(seconds(launched))")
         let owned = Set(rows.map(\.productID))
         XCTAssertTrue(waitUntil(timeout: 600) {
             guard let history = Self.history(historyFile) else { return false }
             return history.days == expectedDays && owned.isSubset(of: history.products)
         }, "riftbound.prices.json: \(Self.history(historyFile).map { "\($0.days.count) days" } ?? "none")")
-        times.append("launch -> riftbound.prices.json with every archive day and every owned product: \(seconds(launched))")
+        times.append("launch -> riftbound.prices.json with every day and every owned product: \(seconds(launched))")
         // At rest first: another game's atomic write of the same pass may still have its temporary file in the folder.
         let settledAt = Date()
         XCTAssertTrue(waitUntilFilesRest(folder, for: 5, timeout: 300), "the history files kept changing")
         times.append("the history files at rest for 5 s: \(seconds(settledAt))")
         try assertOnlyHistoryAdded(folder, before)
+        XCTAssertEqual(Self.archiveDays(in: archives), [], "an archive is left in caches/archives")
+        XCTAssertEqual(Self.dayFileDays(in: priceDays).filter { $0 >= first && $0 <= wanted }.sorted(), expectedDays,
+                       "the day files of the window")
+        let leftovers = ((try? FileManager.default.contentsOfDirectory(atPath: priceDays.path)) ?? []).filter { $0.hasSuffix(".tmp") }
+        XCTAssertEqual(leftovers, [], "a temporary day file is left in support/price-days")
+        let dayFileSizes = Self.dayFiles(in: priceDays).values.map(\.data.count)
+        times.append(String(format: "day files: %d, %.2f MB in all", dayFileSizes.count,
+                            Double(dayFileSizes.reduce(0, +)) / 1_000_000))
 
-        // The cell and the block it must show, decided from the file the app wrote (memory is set before the write, so
-        // the block is ready at the first look).
+        // The cell and the block it must show, decided from the file the app wrote.
         let history = try XCTUnwrap(Self.history(historyFile), "riftbound.prices.json does not read")
         let (cellID, expected) = try chooseCell(app, rows: rows, history: history)
         times.append("the chosen cell's expected block: \(expected)")
@@ -513,14 +535,20 @@ final class RealCollectionTests: UITestCase {
         let outcome = try historyBlock(app, cell: cellID, expected: expected, firstLook: true,
                                        picture: "real-history-1-card-page")
         times.append("the chosen cell's block: \(outcome) (\(seconds(opened)) after the click)")
+
+        // A card that is not owned has its chart from the day files (A45, K6).
+        element(app, "sidebar-all-cards").click()
+        let notOwned = try notOwnedChart(app, picture: "real-history-3-not-owned")
+        times.append("a card not owned: \(notOwned)")
         quit(app)
         try assertOnlyHistoryAdded(folder, before)
         let afterFirst = try allFiles(folder, history: true)
         let size = afterFirst["riftbound.prices.json"]?.count ?? 0
         times.append(String(format: "riftbound.prices.json: %.1f KB", Double(size) / 1_000))
         times.append("history files: \(afterFirst.keys.filter { Self.isHistoryFile($0) }.sorted().joined(separator: ", "))")
+        let dayFilesAfterFirst = Self.dayFiles(in: priceDays)
 
-        // 2. A second launch on the same day writes nothing.
+        // 2. A second launch on the same day writes nothing and decodes nothing.
         launched = Date()
         app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
         XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
@@ -531,6 +559,13 @@ final class RealCollectionTests: UITestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(10))
         quit(app)
         try assertUnchanged(folder, afterFirst, "after a second launch on the same day", history: true)
+        XCTAssertEqual(Self.archiveDays(in: archives), [], "an archive came back after the second launch")
+        let dayFilesAfterSecond = Self.dayFiles(in: priceDays)
+        XCTAssertEqual(dayFilesAfterSecond.keys.sorted(), dayFilesAfterFirst.keys.sorted(), "the day files after a second launch")
+        for (name, file) in dayFilesAfterFirst {
+            XCTAssertEqual(dayFilesAfterSecond[name]?.data, file.data, "\(name) changed on the second launch")
+            XCTAssertEqual(dayFilesAfterSecond[name]?.modified, file.modified, "\(name) was written again on the second launch")
+        }
 
         let report = times.joined(separator: "\n")
         let attachment = XCTAttachment(string: report)
@@ -538,6 +573,84 @@ final class RealCollectionTests: UITestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         print("RealCollectionTests price history\n\(report)")
+    }
+
+    /// The days of the day files in `folder` (`<yyyy-MM-dd>.prices`, phase 5B).
+    private static func dayFileDays(in folder: URL) -> Set<String> {
+        Set(dayFiles(in: folder).keys.map { String($0.dropLast(".prices".count)) })
+    }
+
+    /// The day files of `folder` by name, with their bytes and modification dates.
+    private static func dayFiles(in folder: URL) -> [String: (data: Data, modified: Date?)] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        var files: [String: (data: Data, modified: Date?)] = [:]
+        for name in names where name.wholeMatch(of: /\d{4}-\d{2}-\d{2}\.prices/) != nil {
+            let url = folder.appending(path: name)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            files[name] = (data, (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate)
+        }
+        return files
+    }
+
+    /// On All cards: opens its first cells one by one (at most 12, from one snapshot) until a card whose shown printing
+    /// is not owned ("In your collection: 0") shows a chart with its summary; checks that the download line has no button
+    /// (offline); keeps a picture; returns what each opened cell showed. Fails when none of them shows a chart.
+    private func notOwnedChart(_ app: XCUIApplication, picture: String,
+                               file: StaticString = #filePath, line: UInt = #line) throws -> String {
+        let match = ElementMatch(.any, "identifier BEGINSWITH 'card-cell-'")
+        XCTAssertTrue(waitUntil(timeout: 60) { !self.identifiersInOrder(app, match).isEmpty }, "no All cards cell",
+                      file: file, line: line)
+        var seen: [String] = []
+        for (index, cell) in identifiersInOrder(app, match).prefix(12).enumerated() {
+            let link = app.buttons[cell]
+            guard link.waitForExistence(timeout: 10) else { continue }
+            for _ in 0..<10 where !link.isHittable { element(app, "gallery").scroll(byDeltaX: 0, deltaY: -150) }
+            settled(link).click()
+            let page = element(app, "card-page")
+            XCTAssertTrue(page.waitForExistence(timeout: 10), "no card page", file: file, line: line)
+            let owned = element(app, "card-owned")
+            _ = waitUntil(timeout: 10) { self.text(owned).hasPrefix("In your collection: ") && !self.text(owned).hasSuffix("—") }
+            let block = element(app, "price-history")
+            XCTAssertTrue(block.waitForExistence(timeout: 10), "no price history block", file: file, line: line)
+            for _ in 0..<10 where !block.isHittable { page.scroll(byDeltaX: 0, deltaY: -200) }
+            var state = ""
+            _ = waitUntil(timeout: 30) { state = self.blockState(app); return !state.isEmpty && state != "Reading price history…" }
+            let isOwned = text(owned) != "In your collection: 0"
+            seen.append("cell \(index + 1): \(isOwned ? "owned" : "not owned"), \(state)")
+            if !isOwned && state == "chart" {
+                XCTAssertTrue(element(app, "price-history-summary").exists, "a chart without its summary", file: file, line: line)
+                XCTAssertFalse(app.buttons["price-history-download"].exists, "a download button offline", file: file, line: line)
+                showPlot(app, page: page)
+                shot(picture)
+                app.toolbars.buttons["Back"].firstMatch.click()
+                return seen.joined(separator: "; ")
+            }
+            app.toolbars.buttons["Back"].firstMatch.click()
+            XCTAssertTrue(app.buttons[cell].waitForExistence(timeout: 10), "Back did not show All cards", file: file, line: line)
+        }
+        XCTFail("no card that is not owned showed a chart: \(seen.joined(separator: "; "))", file: file, line: line)
+        return seen.joined(separator: "; ")
+    }
+
+    /// Scrolls the card page until the plot's bottom is inside the window (phase 5B task 6: the pictures show the plot,
+    /// not only the heading at the window's edge); at most 10 steps.
+    private func showPlot(_ app: XCUIApplication, page: XCUIElement) {
+        let plot = element(app, "price-history-chart")
+        let window = mainWindow(app).frame
+        for _ in 0..<10 where plot.exists && plot.frame.maxY > window.maxY - 8 { page.scroll(byDeltaX: 0, deltaY: -120) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    }
+
+    /// What the price history block shows now: `"chart"`, `"one day"`, `"no price"`, another sentence as it is, or `""`
+    /// (the frame with no sentence).
+    private func blockState(_ app: XCUIApplication) -> String {
+        if element(app, "price-history-chart").exists { return "chart" }
+        let note = element(app, "price-history-note")
+        guard note.exists else { return "" }
+        let sentence = text(note)
+        if sentence.hasPrefix("Price history starts on ") { return "one day" }
+        if sentence == "No price in the last 90 days." { return "no price" }
+        return sentence
     }
 
     /// The history file names the app may write: `<game id>.prices.json` of the four games.
@@ -615,40 +728,40 @@ final class RealCollectionTests: UITestCase {
 
     /// Opens the card page of the Collection cell `cell`, scrolls to the price history block and checks it shows
     /// `expected`: `"chart"` (the plot and its summary), `"one day"` ("Price history starts on …") or `"no price"` ("No
-    /// price in the last 90 days."). With `firstLook` the first state seen must be it ("Reading price history…" or any
-    /// other sentence fails at once); else it must come within 60 s. Then keeps a picture `picture` of the card page
+    /// price in the last 90 days."). With `firstLook` the first state seen after "Reading price history…" must be it
+    /// (any other sentence fails at once); else it must come within 60 s. Then keeps a picture `picture` of the card page
     /// with the block, and goes back to the Collection.
     @discardableResult
     private func historyBlock(_ app: XCUIApplication, cell: String, expected: String, firstLook: Bool, picture: String,
                               file: StaticString = #filePath, line: UInt = #line) throws -> String {
         let link = app.buttons[cell]
         XCTAssertTrue(link.waitForExistence(timeout: 30), "\(cell) is not a link", file: file, line: line)
-        for _ in 0..<10 where !link.isHittable { element(app, "collection-gallery").scroll(byDeltaX: 0, deltaY: -150) }
+        // Phase 5B task 6: right after a launch the cell can exist before the window's content does (seen once: the
+        // gallery was not in the hierarchy yet); wait for it before a scroll.
+        _ = waitUntil(timeout: 10) { link.isHittable }
+        let gallery = element(app, "collection-gallery")
+        for _ in 0..<10 where !link.isHittable && gallery.waitForExistence(timeout: 10) {
+            gallery.scroll(byDeltaX: 0, deltaY: -150)
+        }
         settled(link).click()
         let page = element(app, "card-page")
         XCTAssertTrue(page.waitForExistence(timeout: 10), "no card page", file: file, line: line)
         let block = element(app, "price-history")
         XCTAssertTrue(block.waitForExistence(timeout: 10), "no price history block", file: file, line: line)
         for _ in 0..<10 where !block.isHittable { page.scroll(byDeltaX: 0, deltaY: -200) }
-        let chart = element(app, "price-history-chart"), note = element(app, "price-history-note")
-        let seen = {
-            if chart.exists { return "chart" }
-            guard note.exists else { return "" }
-            let sentence = self.text(note)
-            if sentence.hasPrefix("Price history starts on ") { return "one day" }
-            if sentence == "No price in the last 90 days." { return "no price" }
-            return sentence
-        }
+        let seen = { self.blockState(app) }
         var outcome = ""
         if firstLook {
-            // The first state the block shows (the frame with no sentence is not a state: wait for one).
-            _ = waitUntil(timeout: 10) { outcome = seen(); return !outcome.isEmpty }
+            // The first state the block shows (the frame with no sentence is not a state: wait for one). Phase 5B: the
+            // page reads its printing's day files when it opens (K6), so "Reading price history…" may show for a moment.
+            _ = waitUntil(timeout: 10) { outcome = seen(); return !outcome.isEmpty && outcome != "Reading price history…" }
         } else {
             _ = waitUntil(timeout: 60) { outcome = seen(); return outcome == expected }
         }
         XCTAssertEqual(outcome, expected, "the block of \(cell)", file: file, line: line)
         if outcome == "chart" {
             XCTAssertTrue(element(app, "price-history-summary").exists, "a chart without its summary", file: file, line: line)
+            showPlot(app, page: page)
         }
         shot(picture)                                              // the card page with its block, before Back
         let back = app.toolbars.buttons["Back"].firstMatch
