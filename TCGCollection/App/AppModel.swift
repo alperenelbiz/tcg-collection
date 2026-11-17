@@ -27,6 +27,9 @@ nonisolated enum Screen: Hashable, Sendable {
     case allCards
     /// One deck of the game on screen, by its id.
     case deck(String)
+    /// Phase 6A: the iPhone's deck list (the Decks tab's root). The Mac's sidebar lists the decks itself and never shows
+    /// it: a stored "decks" read on the Mac opens the Collection (`checked`).
+    case decks
 
     private static let deckPrefix = "deck:"
 
@@ -37,6 +40,7 @@ nonisolated enum Screen: Hashable, Sendable {
         case "for-sale": self = .forSale
         case "sets": self = .sets
         case "all-cards": self = .allCards
+        case "decks": self = .decks
         case _ where storedValue.hasPrefix(Self.deckPrefix) && storedValue.count > Self.deckPrefix.count:
             self = .deck(String(storedValue.dropFirst(Self.deckPrefix.count)))
         default: return nil
@@ -51,6 +55,7 @@ nonisolated enum Screen: Hashable, Sendable {
         case .sets: "sets"
         case .allCards: "all-cards"
         case .deck(let id): Self.deckPrefix + id
+        case .decks: "decks"
         }
     }
 
@@ -59,9 +64,21 @@ nonisolated enum Screen: Hashable, Sendable {
     var isList: Bool { self != .allCards }
 
     /// `screen` as a launch may show it once the folder is read (`GameSections.screen`): a deck that `deckIDs` (the game's
-    /// decks) lacks, a deck without the player role and Sets without the collector role open the Collection.
-    static func checked(_ screen: Screen, profile: GameProfile = .all, deckIDs: [String]) -> Screen {
-        GameSections.screen(screen, profile: profile, deckExists: deckIDs.contains)
+    /// decks) lacks, a deck without the player role and Sets without the collector role open the Collection. The deck
+    /// list (`decks`) opens the Collection where there is none (`hasDeckList` false: the Mac).
+    static func checked(_ screen: Screen, profile: GameProfile = .all, deckIDs: [String],
+                        hasDeckList: Bool = Screen.hasDeckList) -> Screen {
+        if screen == .decks, !hasDeckList { return .collection }
+        return GameSections.screen(screen, profile: profile, deckExists: deckIDs.contains)
+    }
+
+    /// The iPhone has a deck list (its Decks tab); the Mac lists the decks in its sidebar.
+    static var hasDeckList: Bool {
+        #if os(iOS)
+        true
+        #else
+        false
+        #endif
     }
 }
 
@@ -160,6 +177,7 @@ final class AppModel {
             // collector role.
             if gameID != oldValue, case .deck = screen { screen = .collection }
             if gameID != oldValue, screen == .sets, !GameSections.showsSets(profile(of: gameID)) { screen = .collection }
+            if gameID != oldValue, screen == .decks, !GameSections.showsDecks(profile(of: gameID)) { screen = .collection }
         }
     }
     var game: GameDefinition { Games.game(gameID) ?? Games.all[0] }
@@ -284,6 +302,8 @@ final class AppModel {
     private(set) var needsUserFolder: Bool
     /// "Collection Folder…" asked for the folder sheet.
     var showsFolderSheet = false
+    /// Phase 6A (A54): the iPhone's gear asked for Settings (a sheet; the Mac has its Settings window).
+    var showsSettings = false
     /// G11: the first-run question (which games, which roles) is to be answered: the folder was read, it is new (no game file
     /// of any known game) and this run asks (`Onboarding.isDue`). Decided only when a folder's read has ended (the launch's
     /// load, a folder switch: `decideOnboarding`), never by a reload or during a read, so the owner's folder never sees it
@@ -342,7 +362,7 @@ final class AppModel {
     /// (final fix B5).
     private var showsOtherSheet: Bool {
         needsUserFolder || showsFolderSheet || showsNewDeck || renamingDeck || pasting != nil || showsSharing
-            || onboardingDue || showsOnboarding
+            || onboardingDue || showsOnboarding || showsSettings
     }
     /// Said once after an import, when for-sale counts followed owned counts down (`UserLibrary.saleNotice`, C8), and when
     /// a Sold or a PDF did not end as asked (refused, not saved, not made): the status line shows it in place of `status`

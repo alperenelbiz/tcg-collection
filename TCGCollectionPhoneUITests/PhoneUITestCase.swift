@@ -94,6 +94,19 @@ class PhoneUITestCase: XCTestCase {
         try data.write(to: folder.appending(path: "\(game).json"))
     }
 
+    /// Replaces `<root>/user/<game>.json` while the app runs, as another device's write does: a coordinated write (as the
+    /// Mac's `UITestCase.changeUserFile`), so the app's file presenter reports it.
+    func changeUserFile(game: String, json: String) throws {
+        let file = try XCTUnwrap(root).appending(path: "user").appending(path: "\(game).json")
+        var coordination: NSError?
+        var writing: (any Error)?
+        NSFileCoordinator().coordinate(writingItemAt: file, options: .forReplacing, error: &coordination) { url in
+            do { try Data(json.utf8).write(to: url, options: .atomic) } catch { writing = error }
+        }
+        if let coordination { throw coordination }
+        if let writing { throw writing }
+    }
+
     /// Polls `condition` until it holds or `timeout` seconds pass.
     func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let end = Date().addingTimeInterval(timeout)

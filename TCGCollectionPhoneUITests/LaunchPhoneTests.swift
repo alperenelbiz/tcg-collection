@@ -9,14 +9,13 @@ import XCTest
 final class LaunchPhoneTests: PhoneUITestCase {
     func testTheAppStartsOnTheFixtures() throws {
         let app = launch()
+        // Phase 6A task 2: the full status line is in Settings (the line above the tab bar shows only while there is
+        // something to say: a sync, a failure, a notice).
+        let gear = element(app, "settings-button")
+        XCTAssertTrue(gear.waitForExistence(timeout: 20), "no gear")
+        gear.tap()
         let status = app.staticTexts["status-line"]
-        // On the iPhone the split view is collapsed (ruling P1): when the status line is not on screen, go back to the
-        // sidebar, whose status area has it.
-        if !status.waitForExistence(timeout: 10) {
-            let back = app.navigationBars.buttons.firstMatch
-            if back.exists { back.tap() }
-        }
-        XCTAssertTrue(status.waitForExistence(timeout: 20), "no status line")
+        XCTAssertTrue(status.waitForExistence(timeout: 20), "no status line in Settings")
         let upToDate = waitUntil(timeout: 30) { self.text(status).hasPrefix("Catalog up to date") }
         XCTAssertTrue(upToDate, "status line: \(text(status))")
         shot("launch-01")

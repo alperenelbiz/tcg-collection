@@ -151,7 +151,6 @@ struct GameProfilesView: View {
     }
 }
 
-#if os(macOS)
 /// The Settings window's one pane "Games" (G10): `GameProfilesView` on the library's profiles. Every toggle writes that
 /// game's profile at once (`setProfile`; no Save button), then tells the model (`profilesChanged`, which also runs by
 /// itself on the library's change).
@@ -217,4 +216,3 @@ struct GamesSettingsPane: View {
         library.problem(game: game) ?? (library.folder == nil ? ImportModel.noFolder : "Reading your collection…")
     }
 }
-#endif

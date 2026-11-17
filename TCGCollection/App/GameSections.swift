@@ -17,11 +17,12 @@ nonisolated enum GameSections {
     static func decksWritable(_ profile: GameProfile, followed: Bool) -> Bool { followed && showsDecks(profile) }
 
     /// The screen to show when `asked` is wanted (stored, launched, or on screen): a deck screen without the player role,
-    /// or of a deck that is gone (`deckExists` false), and Sets without the collector role open the Collection; any other
-    /// screen is itself.
+    /// or of a deck that is gone (`deckExists` false), the iPhone's deck list without the player role, and Sets without
+    /// the collector role open the Collection; any other screen is itself.
     static func screen(_ asked: Screen, profile: GameProfile, deckExists: (String) -> Bool) -> Screen {
         switch asked {
         case .deck(let id): showsDecks(profile) && deckExists(id) ? asked : .collection
+        case .decks: showsDecks(profile) ? asked : .collection
         case .sets: showsSets(profile) ? asked : .collection
         case .collection, .wanted, .forSale, .allCards: asked
         }

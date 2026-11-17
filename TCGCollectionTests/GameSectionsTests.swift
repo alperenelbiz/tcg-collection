@@ -40,6 +40,14 @@ struct GameSectionsTests {
         #expect(GameSections.screen(.deck("a"), profile: bothOff, deckExists: exists) == .collection)
     }
 
+    /// Phase 6A: the iPhone's deck list follows the player role, as a deck does.
+    @Test func theDeckListFollowsThePlayerRole() {
+        #expect(GameSections.screen(.decks, profile: .all, deckExists: { _ in false }) == .decks)
+        #expect(GameSections.screen(.decks, profile: collectorOff, deckExists: { _ in false }) == .decks)
+        #expect(GameSections.screen(.decks, profile: playerOff, deckExists: { _ in false }) == .collection)
+        #expect(GameSections.screen(.decks, profile: bothOff, deckExists: { _ in false }) == .collection)
+    }
+
     /// Without the player role no deck is in play; with it, every deck of the file, in its order.
     @Test func theDecksInPlayFollowThePlayerRole() {
         let decks = [deck("a"), deck("b", active: false)]

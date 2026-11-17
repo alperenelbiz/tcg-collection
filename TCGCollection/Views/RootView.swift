@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
@@ -18,8 +17,19 @@ struct RootView: View {
     @State private var decks = DeckMemory()
 
     var body: some View {
+        #if os(iOS)
+        // Phase 6A: the iPhone has its own root (a tab bar); it calls `rootSheets` itself.
+        PhoneRootView()
+        #else
+        splitView
+            .rootSheets(confirmRebuild: $confirmRebuild)
+        #endif
+    }
+
+    /// The Mac's window: the sidebar and one screen at a time.
+    private var splitView: some View {
         @Bindable var model = model
-        NavigationSplitView {
+        return NavigationSplitView {
             Sidebar(screen: model.screen)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
         } detail: {
@@ -28,7 +38,9 @@ struct RootView: View {
             // loses nothing; its open pages too (`kept(on:in:)`). Search text, filters and the open pages belong to one
             // game: a game switch drops the kept state of every screen (`keep(game:)` below; `.id` makes new stacks).
             switch model.screen {
-            case .collection:
+            // `decks` is the iPhone's deck list; the Mac shows it only for a moment before the launch checks the screen
+            // (`Screen.checked`: the Collection).
+            case .collection, .decks:
                 let state = collection.state(game: model.gameID)
                 ListStack(path: Bindable(state).path.kept(on: .collection, in: model)) { CollectionView(state: state) }
                     .id(model.gameID)
@@ -71,72 +83,11 @@ struct RootView: View {
         // A deck deleted (here, or on another device) drops its kept state at once. A view of its own reads the decks, so a
         // change of the library does not compute this body again.
         .background { DeckMemoryKeeper(memory: decks) }
-        // Phase 5B task 5 (A33, K12): the 90-day download's confirmation, from the chart's line and the Catalog menu.
-        // Its text is the count when it opened (`backfillDialog`); "Download" with nothing missing by then does nothing.
-        .confirmationDialog(model.backfillDialog?.title ?? "",
-                            isPresented: $model.asksBackfill, titleVisibility: .visible) {
-            Button(MissingDays.confirmTitle) { model.startBackfill() }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(model.backfillDialog?.message ?? "")
-        }
-        .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
-                            isPresented: $confirmRebuild, titleVisibility: .visible) {
-            Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
-        }
-        // Open while no folder is chosen (it cannot be closed then), or after "Collection Folder…". The onboarding sheet
-        // waits until this one has gone (two sheets never change places at once).
-        .sheet(isPresented: Binding(get: { model.needsUserFolder || model.showsFolderSheet },
-                                    set: { if !$0 { model.showsFolderSheet = false } }),
-               onDismiss: { model.folderSheetClosed() }) {
-            UserFolderSheet()
-                .environment(model)
-                .preferredColorScheme(.dark)
-                .onAppear { model.folderSheetOnScreen = true }
-        }
-        // G11: the first-run question on a new folder. It cannot be dismissed: only "Continue" closes it (the binding takes
-        // no write). "Collection Folder…" meanwhile closes it first and opens the folder sheet once it has gone.
-        .sheet(isPresented: Binding(get: { model.showsOnboarding }, set: { _ in }),
-               onDismiss: { model.onboardingSheetClosed() }) {
-            OnboardingSheet()
-                .environment(model)
-                .preferredColorScheme(.dark)
-        }
-        // "Import CSV…" (the Collection's toolbar and empty state, File › Import CSV…). The picked file is read, never
-        // written; the system panel is not driven by the UI tests (they use `-importCSV`).
-        .fileImporter(isPresented: $model.choosesCSVFile, allowedContentTypes: [.commaSeparatedText]) { result in
-            switch result {
-            case .success(let url): Task { await model.importCSV(from: url) }
-            case .failure(let error): model.importFailed(error)
-            }
-        }
-        // "Paste a deck…" of this sheet opens the paste sheet once this one has closed.
-        .sheet(isPresented: $model.showsNewDeck, onDismiss: {
-            model.newDeckClosed()
-            model.openPendingPaste()
-        }) {
-            // A5: the sheet's game is the one it was opened for, captured by the host when it opens.
-            NewDeckSheetHost(game: model.newDeckGame, card: model.newDeckCard)
-                .environment(model)
-                .preferredColorScheme(.dark)
-        }
-        .sheet(item: $model.importing) { importModel in
-            ImportSheet(importModel: importModel)
-                .environment(model)
-                .preferredColorScheme(.dark)
-        }
-        // "Paste…" of a deck page, and "Paste a deck…" of the New Deck sheet.
-        .sheet(item: $model.pasting) { paste in
-            PasteDeckSheet(paste: paste)
-                .environment(model)
-                .preferredColorScheme(.dark)
-        }
     }
 }
 
 /// Drops the kept state of a deck that is gone (`DeckMemory.keep(decks:)`) as soon as the game's deck ids change.
-private struct DeckMemoryKeeper: View {
+struct DeckMemoryKeeper: View {
     @Environment(AppModel.self) private var model
     let memory: DeckMemory
 
@@ -148,7 +99,7 @@ private struct DeckMemoryKeeper: View {
 }
 
 /// The catalog gallery and the card pages pushed on it.
-private struct CatalogStack: View {
+struct CatalogStack: View {
     /// The game this stack belongs to; `RootView` makes a new stack when the game changes.
     let gameID: String
     @Bindable var state: CatalogScreenState
@@ -172,6 +123,10 @@ private struct CatalogStack: View {
                         .accessibilityIdentifier("catalog-menu")
                     }
                 }
+                #if os(iOS)
+                // Phase 6A: the game menu and the gear, as on every tab's root.
+                .phoneRootToolbar()
+                #endif
         }
         .task(id: model.pendingCard) {
             // The stack of the old game is still alive for a moment: only the new one takes the card.
@@ -205,7 +160,7 @@ extension Binding where Value == NavigationPath {
 
 /// A list screen (the Collection, Wanted, For Sale, a deck) and the pages pushed on it, in the screen's own navigation
 /// stack.
-private struct ListStack<Content: View>: View {
+struct ListStack<Content: View>: View {
     @Binding var path: NavigationPath
     @ViewBuilder let content: Content
 
