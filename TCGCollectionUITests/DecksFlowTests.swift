@@ -854,6 +854,8 @@ final class DecksFlowTests: UITestCase {
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).click()
         let facts = app.staticTexts["card-facts-line"]
         XCTAssertTrue(waitUntil { self.text(facts).contains(rarity) }, text(facts), file: file, line: line)
+        // The click leaves the page scrolled to the bottom; the Decks block is above the Price history block.
+        element(app, "card-page").scroll(byDeltaX: 0, deltaY: 2000)
     }
 
     /// The card page's facts line names `rarity` (the page opened on that printing).
