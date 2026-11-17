@@ -121,7 +121,13 @@ struct WantedView: View {
                     .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             }
             .navigationTitle("Wanted")
+            #if os(macOS)
             .navigationSubtitle(phase != .list ? "" : state.searching ? WantedList.totals(shown, of: all) : WantedList.totals(all))
+            #else
+            // R3: no subtitle on the iPhone (the bar has no room for it); the totals are a line above the gallery.
+            .listTotals(phase != .list ? "" : state.searching ? WantedList.totals(shown, of: all) : WantedList.totals(all),
+                        identifier: "wanted-totals")
+            #endif
             .searchable(text: $state.text)
             #if os(iOS)
             // A54: the toolbar's items in one "…" menu.

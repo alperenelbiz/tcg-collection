@@ -396,6 +396,28 @@ private struct ActivitySheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+extension View {
+    /// R3: a list root's totals on the iPhone, in place of the Mac's subtitle: one muted line at the top of the content
+    /// (under the Collection tab's switch, whose inset is outside this one), two lines at most, never cut. Nothing while
+    /// `text` is empty.
+    func listTotals(_ text: String, identifier: String) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) {
+            if !text.isEmpty {
+                Text(text)
+                    .font(Theme.lineFont)
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.margin)
+                    .padding(.vertical, Theme.lineGap)
+                    .background(Theme.ground)
+                    .accessibilityIdentifier(identifier)
+            }
+        }
+    }
+}
+
 /// A list screen's "…" menu on the iPhone (A54): the items the screen has in its Mac toolbar, each with its Mac identifier.
 struct MoreMenu<Items: View>: View {
     let identifier: String

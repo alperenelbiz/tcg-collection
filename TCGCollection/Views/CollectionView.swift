@@ -90,7 +90,12 @@ struct CollectionView: View {
         content(phase, shown: shown, listed: listed)
             .listScreen("collection", note: phase == .list ? listed?.note : nil)
             .navigationTitle("Collection")
+            #if os(macOS)
             .navigationSubtitle(subtitle(phase, all: all, shown: shown))
+            #else
+            // R3: no subtitle on the iPhone (the bar has no room for it); the totals are a line above the gallery.
+            .listTotals(subtitle(phase, all: all, shown: shown), identifier: "collection-totals")
+            #endif
             .searchable(text: $state.text)
             #if os(iOS)
             // A54: the toolbar's items in one "…" menu; "Clear" stays a button while a filter is on.

@@ -74,7 +74,13 @@ struct ForSaleView: View {
         content(phase, shown: shown, listed: listed)
             .listScreen("for-sale", note: phase == .list ? listed?.note : nil)
             .navigationTitle("For Sale")
+            #if os(macOS)
             .navigationSubtitle(phase != .list ? "" : state.searching ? SaleList.totals(shown, of: all) : SaleList.totals(all))
+            #else
+            // R3: no subtitle on the iPhone (the bar has no room for it); the totals are a line above the gallery.
+            .listTotals(phase != .list ? "" : state.searching ? SaleList.totals(shown, of: all) : SaleList.totals(all),
+                        identifier: "for-sale-totals")
+            #endif
             .searchable(text: $state.text)
             #if os(iOS)
             // A54: the toolbar's items in one "…" menu.

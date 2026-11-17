@@ -62,6 +62,19 @@ final class ListsPhoneTests: PhoneUITestCase {
         cells(app, "wanted-cell-", excluding: ["wanted-cell-minus-", "wanted-cell-value-", "wanted-cell-plus-"])
     }
 
+    /// R3: the totals line `<screen>-totals` is hittable, wholly inside the screen, and says `expected`.
+    private func assertTotals(_ app: XCUIApplication, _ identifier: String, _ expected: String,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let totals = app.staticTexts[identifier].firstMatch
+        XCTAssertTrue(totals.waitForExistence(timeout: 20), "no \(identifier)", file: file, line: line)
+        XCTAssertTrue(waitUntil(timeout: 20) { self.text(totals) == expected }, "\(identifier): \(text(totals))",
+                      file: file, line: line)
+        XCTAssertTrue(totals.isHittable, "\(identifier) is not hittable", file: file, line: line)
+        let screen = app.windows.firstMatch.frame
+        XCTAssertTrue(screen.contains(totals.frame), "\(identifier) \(totals.frame) is not inside \(screen)",
+                      file: file, line: line)
+    }
+
     /// Opens a list screen's "…" menu.
     private func openMore(_ app: XCUIApplication, _ screen: String) {
         let more = element(app, "\(screen)-more")
@@ -82,6 +95,7 @@ final class ListsPhoneTests: PhoneUITestCase {
         XCTAssertTrue(element(app, "game-menu").exists, "no game menu")
         XCTAssertTrue(element(app, "collection-more").exists, "no … menu")
         XCTAssertTrue(element(app, "settings-button").exists, "no gear")
+        assertTotals(app, "collection-totals", "3 copies · 2 printings")
         shot("lists-01-collection")
 
         switcher.buttons["For Sale"].tap()
@@ -89,6 +103,7 @@ final class ListsPhoneTests: PhoneUITestCase {
         XCTAssertTrue(element(app, "for-sale-sold-721334-Normal").exists, "no Sold")
         XCTAssertTrue(app.navigationBars.staticTexts["For Sale"].firstMatch.waitForExistence(timeout: 10), "no title For Sale")
         XCTAssertTrue(element(app, "for-sale-more").exists, "no … menu")
+        assertTotals(app, "for-sale-totals", "1 copy · 1 printing · $5.12")
         XCTAssertTrue(app.tabBars.buttons["Collection"].firstMatch.isSelected, "For Sale is not in the Collection tab")
         shot("lists-02-for-sale")
 
@@ -126,6 +141,7 @@ final class ListsPhoneTests: PhoneUITestCase {
         XCTAssertTrue(waitUntil(timeout: 30) { dockside.label.contains("$5.12") }, dockside.label)
         XCTAssertEqual(wantedCells(app), ["wanted-cell-calm rune", "wanted-cell-dockside lock up"])
         XCTAssertTrue(app.navigationBars.staticTexts["Wanted"].firstMatch.waitForExistence(timeout: 10), "no title Wanted")
+        assertTotals(app, "wanted-totals", "5 copies · 2 cards · $15.36 + 1 without a price")
         openMore(app, "wanted")
         let sort = app.buttons["wanted-sort"].firstMatch
         XCTAssertTrue(sort.waitForExistence(timeout: 5), "no Sort in the menu")
