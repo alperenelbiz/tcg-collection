@@ -788,6 +788,10 @@ final class AppModel {
         priceDaysMigrationStart = ContinuousClock.now
         priceDaysMigrationPeakBefore = Self.peakResident()
         #endif
+        // Final fix wave, item 7: every archive day of the window found on disk is a day received, also one whose decode
+        // fails (its archive is kept): it is recorded before the decodes, so an outside cleaner that deletes it later
+        // never leads to a download.
+        await priceSync.downloads.recordHeld(Set(await archiveGate.archiveDays(in: window)))
         await archiveGate.migrate(window: window, games: Games.all) { [weak self] day, decoded in
             #if DEBUG
             // The report's time per day, from one migrated day to the next: the gate's whole `decodeDay` (decode, write,
@@ -1502,8 +1506,10 @@ final class AppModel {
         let lane = priceSync.downloads
         priceDaysCleaning = Task.detached(priority: .utility) {
             await gate.cleanUp(window: window, olderThan: launchedAt)
-            // The record of downloaded days loses the days before the window (review round 1, finding 2).
-            await lane.pruneRecord(before: window.lowerBound)
+            // The record of downloaded days, and the kept 404 days, lose the days more than 2 years before the window
+            // (review round 1, finding 2; final fix wave, item 3: never the window's start, so a clock jump forward never
+            // empties the record and turns into a re-download).
+            await lane.pruneRecord(before: ArchiveDownloads.pruneDay(windowStart: window.lowerBound))
         }
         #if DEBUG
         // `-importCSV` (with `-store`): the sheet opens before the folder is read; the import waits for that read. With
@@ -2053,6 +2059,8 @@ final class AppModel {
             }
         }
         if let error = error as? TCGCSVClientError { return "HTTP \(error.status)" }
+        // Final fix wave, item 8.
+        if let error = error as? ArchiveStoreError { return "the archive could not be saved: \(describe(error.underlying))" }
         if let error = error as? ArchiveGateError {
             switch error {
             case .noArchive(let day): return "no archive of \(day)"

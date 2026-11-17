@@ -13,7 +13,17 @@ nonisolated protocol ArchiveFetching: Sendable {
 }
 
 nonisolated struct ArchiveClient: ArchiveFetching {
-    var session: URLSession = .shared
+    /// Final fix wave, item 9: an archive request gives up after 60 s without data and after 120 s in all, so a trickling
+    /// download cannot hold a catalog step (which waits for the request in flight) for long. A timeout is an ordinary
+    /// failed request (`URLError.timedOut`): the lane stops the 90-day download for the run.
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 120
+        return URLSession(configuration: configuration)
+    }()
+
+    var session: URLSession = ArchiveClient.session
 
     func download(day: String, to file: URL) async throws -> Bool {
         var request = URLRequest(url: URL(string: "https://tcgcsv.com/archive/tcgplayer/prices-\(day).ppmd.7z")!)
@@ -60,6 +70,9 @@ nonisolated enum PriceDay {
 
     static func before(_ day: String) -> String { moved(day, by: -86_400) }
 
+    /// `day` moved back by `days` days (`yyyy-MM-dd`, UTC); `day` itself when it does not read as a day.
+    static func before(_ day: String, days: Int) -> String { moved(day, by: -86_400 * Double(days)) }
+
     /// The day after `day` (`yyyy-MM-dd`, UTC); `day` itself when it does not read as a day.
     static func after(_ day: String) -> String { moved(day, by: 86_400) }
 
@@ -92,16 +105,21 @@ nonisolated enum PriceDay {
     }
 }
 
-/// The days this device has downloaded with a 200, ever (phase 5B review round 1, A47: an archive is never downloaded
-/// twice, so a cache day that is lost does not come back). Kept in the app's preferences (with `-store`, the root's own),
-/// key `priceDaysDownloaded`, a list of `yyyy-MM-dd`; days before the window are pruned at the launch's clean-up. A
-/// reinstall loses it (stated limit). UserDefaults is thread-safe; it is only touched from `ArchiveDownloads`.
+/// The days this device has downloaded with a 200 or holds, ever (phase 5B review round 1, A47: an archive is never
+/// downloaded twice, so a cache day that is lost does not come back). Kept in the app's preferences (with `-store`, the
+/// root's own), key `priceDaysDownloaded`, a list of `yyyy-MM-dd`; at the launch's clean-up the days more than 2 years
+/// before the window's start are pruned (final fix wave, item 3: not the days before the window, so a clock jump forward
+/// never empties it; about 11 bytes a day). A reinstall loses it (stated limit). Beside it, key `priceDaysNotFound`: the
+/// days that were a 404 and are older than a day this device holds (item 4), pruned the same way. UserDefaults is
+/// thread-safe; it is only touched from `ArchiveDownloads`.
 nonisolated struct PriceDaysRecord: @unchecked Sendable {
     let defaults: UserDefaults
     init(_ defaults: UserDefaults) { self.defaults = defaults }
 
     func load() -> Set<String> { Set(defaults.stringArray(forKey: ArchiveDownloads.recordKey) ?? []) }
     func save(_ days: Set<String>) { defaults.set(days.sorted(), forKey: ArchiveDownloads.recordKey) }
+    func loadNotFound() -> Set<String> { Set(defaults.stringArray(forKey: ArchiveDownloads.notFoundKey) ?? []) }
+    func saveNotFound(_ days: Set<String>) { defaults.set(days.sorted(), forKey: ArchiveDownloads.notFoundKey) }
 }
 
 /// Every archive request of the app goes through this one lane (phase 5B task 5, A32): the price step's daily file and
@@ -111,10 +129,14 @@ nonisolated struct PriceDaysRecord: @unchecked Sendable {
 ///   asked for (another path may have made one since the caller looked).
 /// - A day downloaded with a 200 is never asked for again, in any run (`PriceDaysRecord`); without a record (tests), in
 ///   this run.
-/// - A day that was a 404, or whose request threw (a network error, an HTTP error, a failed move; not a cancel), is not
-///   asked for again in this run, by either caller (review round 1, finding 1).
-/// - After a request that threw, background callers get `.stopped` for the rest of the run: the 90-day download stops; the
-///   price step may still try another day once on a later Refresh.
+/// - A day that was a 404, or whose request threw (a network error, an HTTP error, a timeout, a failed move; not a
+///   cancel), is not asked for again in this run, by either caller (review round 1, finding 1).
+/// - A 404 of a day older than a day this device holds (the record) is kept across runs (`priceDaysNotFound`, final fix
+///   wave, item 4): tcgcsv has no archive of it, and it is never asked for again. A 404 of a day with no newer day held
+///   (the newest day not published yet, or a clock ahead) is remembered for the run only.
+/// - After a request that threw, and after 3 not-found answers to background requests in the run (item 3: a window full
+///   of 404s points to a wrong clock), background callers get `.stopped` for the rest of the run: the 90-day download
+///   stops; the price step may still try another day once on a later Refresh.
 /// - `background` callers (the 90-day download) also wait while the lane is paused (`pause()`: a catalog step runs, so
 ///   tcgcsv never gets more than its 4 requests at a time); the price step is not a background caller.
 /// The client writes the archive's name only once the whole file is there (`ArchiveClient` moves a finished temporary
@@ -125,17 +147,19 @@ actor ArchiveDownloads {
         case downloaded
         /// The day has a day file or an archive on disk already: nothing was asked for.
         case onDisk
-        /// No archive for that day (a 404, now or earlier in this run).
+        /// No archive for that day (a 404, now, earlier in this run, or kept from an earlier run).
         case notFound
         /// The day was downloaded before (this run, or an earlier one: the record) and is gone from disk: not asked again.
         case downloadedBefore
         /// The day's request threw earlier in this run: not asked again.
         case failedBefore
-        /// A background caller after a request that threw in this run: nothing is asked for.
+        /// A background caller after a request that threw, or after 3 not-found answers, in this run: nothing is asked for.
         case stopped
     }
 
     nonisolated static let recordKey = "priceDaysDownloaded"
+    /// Final fix wave, item 4: the days that were a 404, kept across runs (`PriceDaysRecord.loadNotFound`).
+    nonisolated static let notFoundKey = "priceDaysNotFound"
 
     private let paths: AppPaths
     private let client: any ArchiveFetching
@@ -145,11 +169,18 @@ actor ArchiveDownloads {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     /// Every day downloaded with a 200: this run's and the record's.
     private(set) var downloaded: Set<String>
-    /// The days that were a 404 in this run.
-    private(set) var notFound: Set<String> = []
+    /// The days that were a 404 in this run, and the days kept from earlier runs (`keptNotFound`).
+    private(set) var notFound: Set<String>
+    /// The 404 days kept across runs (item 4): each older than a day held when its 404 came.
+    private var keptNotFound: Set<String>
+    /// The not-found answers background requests got in this run (item 3: 3 stop the background).
+    private var backgroundNotFoundAnswers = 0
+    /// Item 3: the background stops after this many not-found answers in a run.
+    nonisolated static let notFoundLimit = 3
     /// The days whose request threw in this run.
     private(set) var failed: Set<String> = []
-    /// True after a request threw in this run: background callers get `.stopped`.
+    /// True after a request threw, or after 3 not-found answers to background requests, in this run: background callers
+    /// get `.stopped`.
     private(set) var backgroundStopped = false
 
     init(paths: AppPaths, client: any ArchiveFetching, record: PriceDaysRecord? = nil) {
@@ -157,6 +188,8 @@ actor ArchiveDownloads {
         self.client = client
         self.record = record
         downloaded = record?.load() ?? []
+        keptNotFound = record?.loadNotFound() ?? []
+        notFound = keptNotFound
     }
 
     func download(day: String, background: Bool) async throws -> Outcome {
@@ -201,6 +234,15 @@ actor ArchiveDownloads {
             return .downloaded
         }
         notFound.insert(day)
+        // Item 4: kept across runs only below a day held (tcgcsv published a later day, so this one is a real gap).
+        if downloaded.contains(where: { $0 > day }) {
+            keptNotFound.insert(day)
+            record?.saveNotFound(keptNotFound)
+        }
+        if background {
+            backgroundNotFoundAnswers += 1
+            if backgroundNotFoundAnswers >= Self.notFoundLimit { backgroundStopped = true }
+        }
         return .notFound
     }
 
@@ -214,13 +256,25 @@ actor ArchiveDownloads {
         record?.save(all)
     }
 
-    /// K10: the record's days before `day` are dropped (once per launch, with the clean-up).
+    /// K10: the record's days before `day` are dropped, and the kept 404 days before it (once per launch, with the
+    /// clean-up; the launch passes the day 2 years before the window's start: final fix wave, item 3).
     func pruneRecord(before day: String) {
         let kept = downloaded.filter { $0 >= day }
-        guard kept != downloaded else { return }
-        downloaded = kept
-        record?.save(kept)
+        if kept != downloaded {
+            downloaded = kept
+            record?.save(kept)
+        }
+        let keptMissing = keptNotFound.filter { $0 >= day }
+        if keptMissing != keptNotFound {
+            notFound.subtract(keptNotFound.subtracting(keptMissing))
+            keptNotFound = keptMissing
+            record?.saveNotFound(keptMissing)
+        }
     }
+
+    /// Item 3: the day before which the record and the kept 404 days are pruned: 2 years (730 days) before the window's
+    /// first day.
+    nonisolated static func pruneDay(windowStart: String) -> String { PriceDay.before(windowStart, days: 730) }
 
     private static func isCancel(_ error: any Error) -> Bool {
         if error is CancellationError { return true }

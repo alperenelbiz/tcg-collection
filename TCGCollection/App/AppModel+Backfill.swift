@@ -50,9 +50,10 @@ extension AppModel {
     private var backfillCanRunNow: Bool { backfillMayRun && !backfillStopped }
 
     /// The status line: a notice, else the sync's own line while it runs, else the download's progress, else the status.
+    /// A failure (`.failed`) is never hidden behind the progress (final fix wave, item 5).
     var statusLineText: String {
         if let statusNotice { return statusNotice }
-        if !status.isSyncing, let progress = backfillProgress {
+        if case .idle = status, let progress = backfillProgress {
             return MissingDays.statusText(done: progress.done, total: progress.total)
         }
         return status.text
@@ -105,7 +106,7 @@ extension AppModel {
     }
 
     /// K7: lists the day files and the archives on disk (off the main actor, without the gate: a day file gets its name
-    /// only once verified), takes the gate's failed days and this run's 404s.
+    /// only once verified), takes the gate's failed days and the lane's 404s (this run's and the kept ones).
     func refreshMissingDays() async {
         let version = priceDaysVersion
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
@@ -183,7 +184,8 @@ extension AppModel {
 
     /// One run of the queue: every missing day of this moment, newest first, one at a time. Holds the activity (K9) while it
     /// works. A history pass is asked for every 10 days and at the end (not per day: each pass plans the whole window). A
-    /// 404 marks the day not found for the run; a decode that fails is the gate's failed day (its archive is kept and
+    /// 404 marks the day not found for the run (kept across runs below a held day), and 3 of them stop the queue for the
+    /// run (`.stopped`: a wrong clock); a decode that fails is the gate's failed day (its archive is kept and
     /// decoded at the next launch, never downloaded again); a network error stops the queue for the run and is said once
     /// (every day done is kept; the next launch goes on). A cancel (a reset; going off Wi-Fi on the iPhone) stops it
     /// without a word.

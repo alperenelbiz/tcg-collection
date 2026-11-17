@@ -90,6 +90,41 @@ struct ArchiveDownloadsTests {
         _ = try await PriceSync(paths: paths, client: second, record: PriceDaysRecord(record)).run(games: Games.all, now: now, haveDay: nil)
         #expect(await second.calls == ["2026-01-01"])
     }
+
+    /// Final fix wave, item 4: a 404 of a day with no newer day held (the newest days: not published yet, or a clock
+    /// ahead) is not kept across runs; one older than a held day is.
+    @Test func a404IsKeptOnlyBelowAHeldDay() async throws {
+        let record = try #require(UserDefaults(suiteName: paths.support.appending(path: "record").path))
+        let network = BackfillNetwork(served: ["2026-01-01"])
+        let lane = ArchiveDownloads(paths: paths, client: network, record: PriceDaysRecord(record))
+        #expect(try await lane.download(day: "2026-01-02", background: false) == .notFound)
+        #expect(record.stringArray(forKey: ArchiveDownloads.notFoundKey) == nil)
+        #expect(try await lane.download(day: "2026-01-01", background: true) == .downloaded)
+        #expect(try await lane.download(day: "2025-12-31", background: true) == .notFound)
+        #expect(record.stringArray(forKey: ArchiveDownloads.notFoundKey) == ["2025-12-31"])
+        let next = ArchiveDownloads(paths: paths, client: network, record: PriceDaysRecord(record))
+        #expect(try await next.download(day: "2025-12-31", background: false) == .notFound)
+        #expect(try await next.download(day: "2026-01-02", background: false) == .notFound)
+        #expect(await network.calls == ["2026-01-02", "2026-01-01", "2025-12-31", "2026-01-02"])
+    }
+
+    /// Final fix wave, item 9: archive requests time out (60 s without data, 120 s for the whole file), so a trickling
+    /// download cannot hold a catalog step for long.
+    @Test func archiveRequestsHaveTimeouts() {
+        let configuration = ArchiveClient().session.configuration
+        #expect(configuration.timeoutIntervalForRequest == 60)
+        #expect(configuration.timeoutIntervalForResource == 120)
+    }
+
+    /// Item 9: a timeout is an ordinary failed request: not asked again in the run, and the background stops.
+    @Test func aTimeoutStopsTheBackground() async throws {
+        let network = BackfillNetwork(serveAll: true, timingOut: ["2026-01-01"])
+        let lane = ArchiveDownloads(paths: paths, client: network)
+        await #expect(throws: URLError.self) { try await lane.download(day: "2026-01-01", background: true) }
+        #expect(try await lane.download(day: "2025-12-31", background: true) == .stopped)
+        #expect(try await lane.download(day: "2026-01-01", background: false) == .failedBefore)
+        #expect(await network.calls == ["2026-01-01"])
+    }
 }
 
 /// Review round 2, A: the lane records a day at its 200, also when the client's move then fails.

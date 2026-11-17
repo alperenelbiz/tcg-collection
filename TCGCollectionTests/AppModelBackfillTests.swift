@@ -96,7 +96,7 @@ struct AppModelBackfillTests {
     @Test(.timeLimit(.minutes(1))) func theYesIsRemembered() async throws {
         let root = tempRoot()
         try optIn(root)
-        let network = BackfillNetwork(served: [Self.wanted, "2025-12-20"])
+        let network = BackfillNetwork(serveAll: true)
         let model = model(root, network)
         await model.start()
         await model.waitForBackfill()
@@ -108,20 +108,22 @@ struct AppModelBackfillTests {
 
     // MARK: Each day once (A32)
 
-    @Test(.timeLimit(.minutes(1))) func a404IsNotAskedAgainInTheRun() async throws {
+    /// Final fix wave, item 3: three not-found answers stop the queue for the run (a window full of 404s points to a
+    /// wrong clock); a 404 day is not missing and is not asked again in the run.
+    @Test(.timeLimit(.minutes(1))) func threeNotFoundAnswersStopTheBackfillForTheRun() async throws {
         let root = tempRoot()
-        let network = BackfillNetwork(served: [Self.wanted])
+        let network = BackfillNetwork(served: [Self.wanted, "2026-01-01"])
         let model = model(root, network)
         await model.start()
         model.startBackfill()
         await model.waitForBackfill()
-        #expect(await network.calls.count == 90)
-        #expect(model.missingDays.isEmpty)                                       // a 404 is not missing in this run
+        #expect(await network.calls == [Self.wanted, "2026-01-01", "2025-12-31", "2025-12-30", "2025-12-29"])
+        #expect(!model.missingDays.contains("2025-12-31"))                      // a 404 is not missing in this run
+        #expect(model.backfillProgress == nil)
+        #expect(!model.canAskBackfill)
         model.startBackfill()                                                    // the menu item clicked again
         await model.waitForBackfill()
-        #expect(await network.calls.count == 90)
-        // The price step asks again (a Refresh): a 404 day of the backfill is not asked by it either.
-        #expect(Set(await network.calls).count == 90)
+        #expect(await network.calls.count == 5)
     }
 
     @Test(.timeLimit(.minutes(1))) func aFailedDecodeIsNotDownloadedAgain() async throws {
@@ -435,23 +437,27 @@ struct AppModelBackfillTests {
         #expect(record.contains(Self.wanted))
     }
 
-    /// Finding 2: the clean-up prunes the record's days before the window.
-    @Test(.timeLimit(.minutes(1))) func theRecordIsPrunedBeforeTheWindow() async throws {
+    /// Finding 2, as changed by the final fix wave (item 3): the clean-up prunes the record's days more than 2 years
+    /// before the window's start (2025-10-05: 730 days before it is 2023-10-06), not the days before the window: a clock
+    /// jump must not empty it.
+    @Test(.timeLimit(.minutes(1))) func theRecordIsPrunedTwoYearsBeforeTheWindow() async throws {
         let root = tempRoot()
-        try preferences(root).set(["2025-01-01", "2025-12-01"], forKey: AppModel.priceDaysDownloadedKey)
+        #expect(ArchiveDownloads.pruneDay(windowStart: "2025-10-05") == "2023-10-06")
+        try preferences(root).set(["2023-10-05", "2023-10-06", "2025-01-01", "2025-12-01"],
+                                  forKey: AppModel.priceDaysDownloadedKey)
         let network = BackfillNetwork(served: [Self.wanted])
         let model = model(root, network)
         await model.start()
         await model.waitForBackfill()
         let record = Set(try preferences(root).stringArray(forKey: AppModel.priceDaysDownloadedKey) ?? [])
-        #expect(record == ["2025-12-01", Self.wanted])
+        #expect(record == ["2023-10-06", "2025-01-01", "2025-12-01", Self.wanted])
         #expect(!model.missingDays.contains("2025-12-01"))
     }
 
     /// Finding 4: a gate that closes and opens again while a day is in flight: the queue runs again once it has ended.
     @Test(.timeLimit(.minutes(1))) func theQueueRunsAgainAfterAQuickGateFlip() async throws {
         let root = tempRoot()
-        let network = BackfillNetwork(served: [Self.wanted, "2026-01-01", "2025-12-20"])
+        let network = BackfillNetwork(serveAll: true)
         let model = model(root, network)
         await model.start()
         await network.hold("2026-01-01")
@@ -544,6 +550,179 @@ struct AppModelBackfillTests {
     }
 }
 
+
+// MARK: The final fix wave (after the whole-branch review)
+
+@MainActor
+struct AppModelBackfillFinalFixTests {
+    static let day1 = AppModelBackfillTests.day1
+    static let wanted = AppModelBackfillTests.wanted
+    static let windowDays = AppModelBackfillTests.windowDays
+
+    private func model(_ root: URL, _ network: BackfillNetwork, now: @escaping () -> Date = { Self.day1 })
+        -> AppModel {
+        AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                 catalogClient: network, archiveClient: network, fetcher: network, now: now)
+    }
+
+    private func preferences(_ root: URL) throws -> UserDefaults {
+        try #require(UserDefaults(suiteName: AppPaths(root: root).support.appending(path: "preferences").path))
+    }
+
+    private func optIn(_ root: URL) throws {
+        try preferences(root).set(true, forKey: AppModel.priceDaysDownloadKey)
+    }
+
+    private func until(_ condition: () async -> Bool) async throws {
+        for _ in 0..<1000 {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("the condition never held")
+    }
+
+    /// Item 3: a launch with the clock 100 days ahead, then a launch with the right clock. The record keeps the real
+    /// window's days (pruned 2 years before the window, not at it), so no day of the real window is requested again; the
+    /// day files the clean-up deleted under the wrong clock stay gaps (the stated limit). Under the wrong clock the queue
+    /// stops after three 404s.
+    @Test(.timeLimit(.minutes(2))) func aClockJumpDoesNotLeadToARedownload() async throws {
+        let root = tempRoot()
+        try optIn(root)
+        let real = Set(Self.windowDays)
+        let first = BackfillNetwork(served: real)
+        let model1 = model(root, first)
+        await model1.start()
+        await model1.waitForBackfill()
+        #expect(await first.calls.count == 90)
+
+        let ahead = BackfillNetwork(served: real)
+        let model2 = model(root, ahead, now: { Self.day1.addingTimeInterval(100 * 86_400) })
+        await model2.start()
+        await model2.waitForBackfill()
+        await model2.priceDaysCleaning?.value
+        let aheadCalls = await ahead.calls
+        #expect(aheadCalls.allSatisfy { !real.contains($0) })
+        #expect(aheadCalls.count == 5)                                           // the price step's 2, the queue's 3
+        #expect(PriceDayFile.days(in: AppPaths(root: root).priceDays).isEmpty)   // the clean-up deleted the real days
+
+        let back = BackfillNetwork(served: real)
+        let model3 = model(root, back)
+        await model3.start()
+        await model3.waitForBackfill()
+        #expect(await back.calls.isEmpty)
+        #expect(model3.missingDays.isEmpty)                                      // gaps, not missing days
+        // The wrong clock's 404s are not kept: no day newer than them was held.
+        #expect(try preferences(root).stringArray(forKey: ArchiveDownloads.notFoundKey) == nil)
+    }
+
+    /// Item 4: a 404 is remembered across runs (`priceDaysNotFound`, kept only for a day older than a day this device
+    /// holds): the next run does not request it, and it is not missing.
+    @Test(.timeLimit(.minutes(1))) func aNotFoundDayIsNotRequestedInTheNextRun() async throws {
+        let root = tempRoot()
+        try optIn(root)
+        let first = BackfillNetwork(served: [Self.wanted, "2026-01-01"])
+        let model1 = model(root, first)
+        await model1.start()
+        await model1.waitForBackfill()
+        #expect(await first.calls == [Self.wanted, "2026-01-01", "2025-12-31", "2025-12-30", "2025-12-29"])
+        let kept = Set(try preferences(root).stringArray(forKey: ArchiveDownloads.notFoundKey) ?? [])
+        #expect(kept == ["2025-12-31", "2025-12-30", "2025-12-29"])
+        let second = BackfillNetwork(serveAll: true)
+        let model2 = model(root, second)
+        await model2.start()
+        await model2.waitForBackfill()
+        let calls = await second.calls
+        #expect(!calls.contains("2025-12-31") && !calls.contains("2025-12-30") && !calls.contains("2025-12-29"))
+        #expect(calls.count == 85)                                               // every other day of the window
+        #expect(!model2.missingDays.contains("2025-12-31"))
+    }
+
+    /// Item 5: a `.failed` status is not hidden behind the download's progress. A Refresh whose set lists fail while the
+    /// queue has days left: the status line says the failure, not "Price history: n of m days".
+    @Test(.timeLimit(.minutes(1))) func aFailedStatusShowsOverTheProgress() async throws {
+        let root = tempRoot()
+        let network = BackfillNetwork(serveAll: true)
+        let model = model(root, network)
+        await model.start()
+        await network.hold("2025-12-31")
+        model.startBackfill()
+        try await until { await network.holding }
+        #expect(model.statusLineText.hasPrefix("Price history: "))
+        await network.failGroups(true)
+        // The Refresh has two catalog steps (the game on screen, then the others); each waits for the day in flight. The
+        // queue's request between them is held, then released while the next day is held, so the Refresh can end while
+        // the queue still has a day in flight.
+        let refresh = Task { await model.refresh(rebuild: false) }
+        try await Task.sleep(for: .milliseconds(300))
+        await network.moveHold(to: "2025-12-30")
+        try await until { await network.holding }
+        try await Task.sleep(for: .milliseconds(300))
+        await network.moveHold(to: "2025-12-29")
+        await refresh.value
+        try await until { await network.holding }
+        guard case .failed(let text) = model.status else {
+            Issue.record("the refresh did not fail: \(model.status)")
+            return
+        }
+        #expect(model.backfillProgress != nil)
+        #expect(model.statusLineText == text)
+        model.stopBackfill()
+        await network.release()
+        await model.waitForBackfill()
+    }
+
+    /// Item 6: no archive request of the queue starts while a catalog step's requests run, and the app never has more
+    /// than 4 requests at tcgcsv at once (one count over set lists, products and archives).
+    @Test(.timeLimit(.minutes(1))) func noArchiveRequestRunsBesideACatalogStep() async throws {
+        let root = tempRoot()
+        let network = BackfillNetwork(serveAll: true)
+        let clock = Clock(Self.day1)
+        let model = model(root, network, now: { clock.date })
+        await model.start()
+        await network.hold("2025-12-31")
+        model.startBackfill()
+        try await until { await network.holding }
+        clock.date = TCGDate.date("2026-01-04T10:00:00")!                       // a new UTC day: every set is fetched
+        await network.holdProducts()
+        let refresh = Task { await model.refresh(rebuild: true) }
+        try await Task.sleep(for: .milliseconds(300))
+        await network.release()
+        try await until { await network.productsHolding }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await network.archivesStartedWhileProductsHeld == 0)
+        #expect(!model.missingDays.isEmpty)                                      // the queue has days left
+        await network.releaseProducts()
+        await refresh.value
+        model.stopBackfill()
+        await model.waitForBackfill()
+        #expect(await network.sharedMaxInFlight <= 4)
+    }
+
+    /// Item 7: the migration records every archive day of the window it finds, also one whose decode fails (it was
+    /// received). Deleted later by an outside cleaner, that day is not requested.
+    @Test(.timeLimit(.minutes(1))) func anArchiveThatDoesNotDecodeIsRecorded() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let archive = paths.archives.appending(path: ArchiveGate.archiveName(day: "2025-12-20"))
+        try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixtureURL("not-an-archive.7z"), to: archive)
+        let model1 = model(root, BackfillNetwork(served: [Self.wanted]))
+        await model1.start()
+        await model1.waitForBackfill()
+        #expect(FileManager.default.fileExists(atPath: archive.path))           // the gate keeps it
+        let record = Set(try preferences(root).stringArray(forKey: AppModel.priceDaysDownloadedKey) ?? [])
+        #expect(record.contains("2025-12-20"))
+        try FileManager.default.removeItem(at: archive)                         // an outside cleaner
+        try optIn(root)
+        let second = BackfillNetwork(serveAll: true)
+        let model2 = model(root, second)
+        await model2.start()
+        await model2.waitForBackfill()
+        #expect(await !second.calls.contains("2025-12-20"))
+        #expect(!model2.missingDays.contains("2025-12-20"))
+    }
+}
+
 /// tcgcsv's fake for the backfill: Riftbound's fixture catalog, no sets of the other games, and the fixture archive for
 /// the days served. Counts the archive requests per day and the requests in flight at once.
 actor BackfillNetwork {
@@ -565,8 +744,21 @@ actor BackfillNetwork {
     private(set) var holding = false
     private var waiting: CheckedContinuation<Void, Never>?
 
+    /// Final fix wave, item 6: one count of the requests in flight over groups, products and archives together.
+    private var sharedInFlight = 0
+    private(set) var sharedMaxInFlight = 0
+    /// Item 6: the first products request waits while `productsHeld`; archive requests that start meanwhile are counted.
+    private var productsHeld = false
+    private(set) var productsHolding = false
+    private var productsWaiting: CheckedContinuation<Void, Never>?
+    private(set) var archivesStartedWhileProductsHeld = 0
+    /// Item 5: every set list request fails while true.
+    private var groupsFail = false
+    private let timingOut: Set<String>
+
     init(serveAll: Bool = false, served: Set<String> = [], broken: Set<String> = [], failing: Set<String> = [],
-         statuses: [String: Int] = [:], moveFails: Set<String> = []) {
+         statuses: [String: Int] = [:], moveFails: Set<String> = [], timingOut: Set<String> = []) {
+        self.timingOut = timingOut
         self.statuses = statuses
         self.moveFails = moveFails
         self.serveAll = serveAll
@@ -588,20 +780,62 @@ actor BackfillNetwork {
         waiting = nil
     }
 
+    /// Releases the held day and holds `next` in one step (no request can start between the two).
+    func moveHold(to next: String) {
+        held = next
+        holding = false
+        waiting?.resume()
+        waiting = nil
+    }
+
+    func holdProducts() { productsHeld = true }
+
+    func releaseProducts() {
+        productsHeld = false
+        productsWaiting?.resume()
+        productsWaiting = nil
+    }
+
+    func failGroups(_ fail: Bool) { groupsFail = fail }
+
+    private func enter() {
+        sharedInFlight += 1
+        sharedMaxInFlight = max(sharedMaxInFlight, sharedInFlight)
+    }
+
     private(set) var groupCalls = 0
 
     func groups(category: Int) async throws -> Data {
         groupCalls += 1
+        enter()
+        defer { sharedInFlight -= 1 }
+        try await Task.sleep(for: .milliseconds(2))
+        if groupsFail { throw URLError(.notConnectedToInternet) }
         return category == 89 ? try fixture("groups-89.json") : Self.noSets
     }
 
-    func products(category: Int, group: Int) async throws -> Data { try fixture("products-89.json") }
+    func products(category: Int, group: Int) async throws -> Data {
+        enter()
+        defer { sharedInFlight -= 1 }
+        try await Task.sleep(for: .milliseconds(2))
+        if productsHeld, !productsHolding {
+            productsHolding = true
+            await withCheckedContinuation { productsWaiting = $0 }
+            productsHolding = false
+        }
+        return try fixture("products-89.json")
+    }
 
     func download(day: String, to file: URL) async throws -> Bool {
         calls.append(day)
         inFlight += 1
         maxInFlight = max(maxInFlight, inFlight)
-        defer { inFlight -= 1 }
+        enter()
+        if productsHolding { archivesStartedWhileProductsHeld += 1 }
+        defer {
+            inFlight -= 1
+            sharedInFlight -= 1
+        }
         try await Task.sleep(for: .milliseconds(2))
         if held == day {
             holding = true
@@ -617,6 +851,7 @@ actor BackfillNetwork {
             throw CancellationError()
         }
         if failing.contains(day) { throw URLError(.notConnectedToInternet) }
+        if timingOut.contains(day) { throw URLError(.timedOut) }
         if let status = statuses[day] { throw TCGCSVClientError(status: status) }
         if moveFails.contains(day) {
             throw ArchiveStoreError(underlying: CocoaError(.fileWriteOutOfSpace))   // a 200, then the move failed
@@ -632,7 +867,12 @@ actor BackfillNetwork {
         return true
     }
 
-    func data(from url: URL) async throws -> (Data, Int) { throw URLError(.notConnectedToInternet) }
+    /// The Yu-Gi-Oh! picture index answers (final fix wave, item 5: else every launch's status is a failure, which the
+    /// status line now shows over the download's progress); pictures are not served.
+    func data(from url: URL) async throws -> (Data, Int) {
+        guard url.lastPathComponent == "cardinfo.php" else { throw URLError(.notConnectedToInternet) }
+        return (try fixture("cardinfo-sample.json"), 200)
+    }
 }
 
 /// A clock a test moves.
