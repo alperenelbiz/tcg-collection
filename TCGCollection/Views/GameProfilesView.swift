@@ -103,6 +103,16 @@ struct GameProfilesView: View {
 
     private func row(_ row: ProfileRow) -> some View {
         VStack(alignment: .leading, spacing: Theme.lineGap) {
+            #if os(iOS)
+            // Phase 6A: the iPhone's row is two rows of switches: the game; then "Player" and "Collector" side by side.
+            checkbox(row.name, isOn: row.profile.followed, enabled: row.canFollow, member: .followed, game: row.gameID)
+            HStack(spacing: Theme.columnGap) {
+                checkbox("Player", isOn: row.profile.player, enabled: row.canChooseRoles, member: .player, game: row.gameID)
+                checkbox("Collector", isOn: row.profile.collector, enabled: row.canChooseRoles, member: .collector,
+                         game: row.gameID)
+            }
+            .padding(.leading, Theme.margin)
+            #else
             HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
                 checkbox(row.name, isOn: row.profile.followed, enabled: row.canFollow, member: .followed, game: row.gameID)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,6 +122,7 @@ struct GameProfilesView: View {
                          game: row.gameID)
                     .frame(width: Theme.profileRoleWidth, alignment: .leading)
             }
+            #endif
             if let problem = row.problem {
                 Text(problem)
                     .font(Theme.lineFont)
@@ -133,8 +144,14 @@ struct GameProfilesView: View {
             #if os(macOS)
             .toggleStyle(.checkbox)
             #endif
+            #if os(iOS)
+            // A switch's tint is its "on" track: `raised` would read as off on the dark ground. `faint`, as the
+            // segmented controls (not the accent).
+            .tint(Theme.faint)
+            #else
             // Not the accent (the sidebar row and the default button only): as the import sheet's "Remove".
             .tint(Theme.raised)
+            #endif
             .font(Theme.bodyFont)
             .foregroundStyle(Theme.text)
             .lineLimit(1)

@@ -302,8 +302,15 @@ final class AppModel {
     private(set) var needsUserFolder: Bool
     /// "Collection Folder…" asked for the folder sheet.
     var showsFolderSheet = false
-    /// Phase 6A (A54): the iPhone's gear asked for Settings (a sheet; the Mac has its Settings window).
+    /// Phase 6A (A54): the iPhone's gear asked for Settings (a sheet; the Mac has its Settings window). Opened only by
+    /// `openSettings` (never under another sheet); closed by Done, a swipe, "Choose a folder…" (`askForFolder`) and a
+    /// first-run question that becomes due (`decideOnboarding`).
     var showsSettings = false
+    /// Set by the iPhone's window while the Settings sheet is on screen, from its appearance until its `onDismiss`
+    /// (`settingsClosed`): the folder sheet and the onboarding sheet wait for it (two sheets never change places at once).
+    @ObservationIgnored var settingsOnScreen = false
+    /// "Choose a folder…" in Settings: the folder sheet opens once Settings has gone (`settingsClosed`).
+    @ObservationIgnored private var folderAfterSettings = false
     /// G11: the first-run question (which games, which roles) is to be answered: the folder was read, it is new (no game file
     /// of any known game) and this run asks (`Onboarding.isDue`). Decided only when a folder's read has ended (the launch's
     /// load, a folder switch: `decideOnboarding`), never by a reload or during a read, so the owner's folder never sees it
@@ -1058,7 +1065,7 @@ final class AppModel {
     /// `<root>/icloud`) and keeps the collection in it. The only code that makes a folder in iCloud Drive; a Debug build
     /// has no iCloud Drive (`userFolderSetup.iCloudDrive` is nil or the stand-in).
     func useICloudDrive() async throws {
-        guard userFolderSetup.canChoose, let drive = userFolderSetup.iCloudDrive else { throw UserFolderError.fixed }
+        guard userFolderSetup.showsICloudButton, let drive = userFolderSetup.iCloudDrive else { throw UserFolderError.fixed }
         try await use(UserFolder.defaultICloudFolder(in: drive), making: true)
     }
 
@@ -1106,13 +1113,17 @@ final class AppModel {
                                    isDebugBuild: Self.isDebugBuild, hasStore: options.storeRoot != nil,
                                    asked: options.onboarding)
         onboardingDue = due
+        // Phase 6A: the iPhone's Settings closes first; the question opens once it has gone (`settingsClosed`).
+        if due, showsSettings { showsSettings = false }
         showsOnboarding = due && !folderSheetUp
         onboardingProblem = nil
         onboardingWrote = []
     }
 
-    /// The folder sheet is on screen or asked for: the onboarding sheet waits.
-    private var folderSheetUp: Bool { folderSheetOnScreen || needsUserFolder || showsFolderSheet }
+    /// The folder sheet is on screen or asked for (or, on the iPhone, the Settings sheet is): the onboarding sheet waits.
+    private var folderSheetUp: Bool {
+        folderSheetOnScreen || needsUserFolder || showsFolderSheet || showsSettings || settingsOnScreen
+    }
 
     /// The folder sheet has gone (its `onDismiss`): the onboarding sheet opens now when it is due.
     func folderSheetClosed() {
@@ -1126,8 +1137,31 @@ final class AppModel {
         if showsOnboarding {
             folderAfterOnboarding = true
             showsOnboarding = false
+        } else if showsSettings || settingsOnScreen {
+            // Phase 6A: "Choose a folder…" in the iPhone's Settings; the folder sheet opens once Settings has gone.
+            folderAfterSettings = true
+            showsSettings = false
         } else {
             showsFolderSheet = true
+        }
+    }
+
+    /// Phase 6A (A54): the iPhone's gear. Settings opens only while no other sheet is open or due (the folder sheet, the
+    /// first-run question, an import, a deck sheet…): two sheets of one window never show at once.
+    func openSettings() {
+        guard !showsSheet else { return }
+        showsSettings = true
+    }
+
+    /// The iPhone's Settings sheet has gone (its `onDismiss`): the folder sheet "Choose a folder…" asked for opens now,
+    /// else the first-run question when it became due meanwhile.
+    func settingsClosed() {
+        settingsOnScreen = false
+        if folderAfterSettings {
+            folderAfterSettings = false
+            showsFolderSheet = true
+        } else if onboardingDue, !folderSheetUp {
+            showsOnboarding = true
         }
     }
 

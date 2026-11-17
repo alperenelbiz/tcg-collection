@@ -67,11 +67,14 @@ struct PhoneRootView: View {
             last = [PhoneTabs.tab(of: model.screen): model.screen]
         }
         .background { DeckMemoryKeeper(memory: decks) }
-        // Task 4 builds Settings; until then the sheet holds the games and roles and the full status line.
-        .sheet(isPresented: $model.showsSettings) {
-            PhoneSettingsPlaceholder()
+        // A54: Settings, a sheet of this window like the others: it opens only while no other sheet is open or due
+        // (`openSettings`), and the folder sheet or the first-run question it hands over to opens once it has gone
+        // (`settingsClosed`).
+        .sheet(isPresented: $model.showsSettings, onDismiss: { model.settingsClosed() }) {
+            SettingsSheet()
                 .environment(model)
                 .preferredColorScheme(.dark)
+                .onAppear { model.settingsOnScreen = true }
         }
         .rootSheets(confirmRebuild: $confirmRebuild)
     }
@@ -166,7 +169,7 @@ private struct PhoneRootToolbar: ViewModifier {
                 ToolbarItem(placement: .topBarLeading) { GameMenu() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        model.showsSettings = true
+                        model.openSettings()
                     } label: {
                         Image(systemName: "gearshape")
                     }
@@ -294,41 +297,12 @@ struct DeckListView: View {
             .accessibilityIdentifier("sidebar-new-deck")
         }
         .navigationTitle("Decks")
+        // Review Focus 5: this game's problem, which the Mac's sidebar shows beside the Decks section.
+        .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
+        // A container, so the identifier does not cover the lines' own identifiers (as `listScreen`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("decks-screen")
     }
 }
 
-/// Settings until Task 4 builds it: the games and roles (`GamesSettingsPane`'s rows and binding) and the full status
-/// line (`status-line`), with Done.
-private struct PhoneSettingsPlaceholder: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.ruleSpacing) {
-                    GameProfilesView(profiles: GamesSettingsPane.binding(model: model,
-                                                                         rendered: GamesSettingsPane.profiles(model.library)),
-                                     rows: GamesSettingsPane.rows(model))
-                    Text(model.statusLineText)
-                        .font(Theme.labelFont)
-                        .foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("status-line")
-                }
-                .padding(Theme.margin)
-            }
-            .background(Theme.ground)
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { model.showsSettings = false }
-                        .accessibilityIdentifier("settings-done")
-                }
-            }
-        }
-        .accessibilityIdentifier("settings-sheet")
-    }
-}
 #endif

@@ -1736,6 +1736,47 @@ struct AppModelTests {
         #expect(model.showsFolderSheet)
     }
 
+    /// Phase 6A (review m5): the iPhone's Settings sheet is one of the window's sheets. It does not open under another
+    /// sheet; "Choose a folder…" closes it first and the folder sheet opens once it has gone; a first-run question that
+    /// becomes due closes it and opens once it has gone.
+    @MainActor @Test func theSettingsSheetNeverSharesTheWindow() async throws {
+        let root = tempRoot()
+        let model = model(["app", "-store", root.path, "-offline", "YES", "-askUserFolder", "YES", "-onboarding", "YES"])
+        await model.start()
+        #expect(model.needsUserFolder)
+        model.openSettings()
+        #expect(!model.showsSettings, "Settings opened under the first-run folder sheet")
+        try await model.useICloudDrive()
+        model.folderSheetClosed()
+        #expect(model.showsOnboarding)
+        model.openSettings()
+        #expect(!model.showsSettings, "Settings opened under the first-run question")
+        await model.finishOnboarding(ProfileRows.toggled(Onboarding.draft(games: Games.all), game: "riftbound", member: .followed))
+        model.onboardingSheetClosed()
+        #expect(!model.showsSheet)
+
+        model.openSettings()
+        #expect(model.showsSettings)
+        model.settingsOnScreen = true
+        model.askForFolder()
+        #expect(!model.showsSettings); #expect(!model.showsFolderSheet, "the folder sheet opened before Settings went")
+        model.settingsClosed()
+        #expect(model.showsFolderSheet)
+        model.showsFolderSheet = false                                         // Cancel
+        model.folderSheetClosed()
+        #expect(!model.showsSheet)
+
+        // A new folder chosen elsewhere while Settings is open: the question waits until Settings has gone.
+        model.openSettings()
+        model.settingsOnScreen = true
+        let empty = root.appending(path: "empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        try await model.useFolder(empty)
+        #expect(model.onboardingDue); #expect(!model.showsSettings); #expect(!model.showsOnboarding)
+        model.settingsClosed()
+        #expect(model.showsOnboarding)
+    }
+
     // MARK: Onboarding, fix round 1 (the owner's folder arriving late)
 
     /// A game file with one row (2 copies), as another device writes it.

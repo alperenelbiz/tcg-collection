@@ -148,6 +148,31 @@ struct UserFolderTests {
         #expect(setup.lost?.sentence == "Your collection folder is in the Trash (\(path)). Put it back, or choose another folder.")
     }
 
+    /// Phase 6A (A55, ruling P3): the iPhone shows no "Use iCloud Drive" button, also where a drive (or the stand-in of
+    /// `-askUserFolder`) is known; the Mac shows it whenever the folder can be chosen and a drive exists. The platform is
+    /// a parameter of the pure setup, so this runs on the Mac.
+    @Test func theIPhoneOffersNoICloudButton() {
+        let root = URL(fileURLWithPath: "/tmp/r"), drive = URL(fileURLWithPath: "/tmp/drive")
+        func setup(_ storeRoot: URL?, ask: Bool, phone: Bool, drive found: URL?) -> UserFolderSetup {
+            UserFolder.setup(storeRoot: storeRoot, isDebugBuild: storeRoot != nil, askUserFolder: ask, bookmark: nil,
+                             offersICloud: !phone) { found }
+        }
+        // A Release first run and an `-askUserFolder` run.
+        #expect(!setup(nil, ask: false, phone: true, drive: drive).showsICloudButton)
+        #expect(!setup(root, ask: true, phone: true, drive: nil).showsICloudButton)
+        #expect(setup(nil, ask: false, phone: false, drive: drive).showsICloudButton)
+        #expect(setup(root, ask: true, phone: false, drive: nil).showsICloudButton)
+        // The Mac without a drive, and a fixed folder: no button either.
+        #expect(!setup(nil, ask: false, phone: false, drive: nil).showsICloudButton)
+        #expect(!setup(root, ask: false, phone: false, drive: drive).showsICloudButton)
+        // The platform's own value: false on the iPhone, true on the Mac.
+        #if os(iOS)
+        #expect(!UserFolder.offersICloud)
+        #else
+        #expect(UserFolder.offersICloud)
+        #endif
+    }
+
     @Test func choiceURLs() {
         let u = URL(fileURLWithPath: "/tmp/x")
         #expect(UserFolderChoice.testRoot(u).url == u); #expect(UserFolderChoice.debugLocal(u).url == u)

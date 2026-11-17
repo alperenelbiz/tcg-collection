@@ -110,6 +110,9 @@ struct CatalogStack: View {
         NavigationStack(path: $state.path.kept(on: .allCards, in: model)) {
             CatalogSearchView(state: state)
                 .toolbar {
+                    // The Mac's Catalog menu. Phase 6A: on the iPhone its actions are in Settings (A54), so the bar keeps
+                    // room for the filters and the gear.
+                    #if os(macOS)
                     ToolbarItem {
                         Menu("Catalog") {
                             Button("Refresh") { Task { await model.refresh(rebuild: false) } }
@@ -122,10 +125,13 @@ struct CatalogStack: View {
                         .disabled(model.options.offline || model.status.isSyncing || model.storeFailure != nil)
                         .accessibilityIdentifier("catalog-menu")
                     }
+                    #endif
                 }
                 #if os(iOS)
                 // Phase 6A: the game menu and the gear, as on every tab's root.
                 .phoneRootToolbar()
+                // Review Focus 5: the library's problem, which the Mac's sidebar shows beside All cards.
+                .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false, allGames: true) }
                 #endif
         }
         .task(id: model.pendingCard) {
@@ -406,12 +412,15 @@ private struct SidebarRow: View {
 /// `collection-problem` is in one place at a time.
 struct LibraryLines: View {
     let inSidebar: Bool
+    /// Phase 6A: the iPhone's search tab, which stands where the Mac's sidebar shows its lines: the first problem of all
+    /// games, in a screen's look.
+    var allGames = false
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let library = model.library
         // The Collection and its pages show this game's problem first; the sidebar the first one of all.
-        let problem = inSidebar ? library.problem : library.problem(game: model.gameID)
+        let problem = inSidebar || allGames ? library.problem : library.problem(game: model.gameID)
         if problem != nil || library.notice != nil {
             VStack(alignment: .leading, spacing: 6) {
                 if let problem {

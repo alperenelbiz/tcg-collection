@@ -14,21 +14,27 @@ struct RootSheets: ViewModifier {
     @Environment(AppModel.self) private var model
     @Binding var confirmRebuild: Bool
 
+    /// "Rebuild catalog…"'s question (the Catalog menu, and the iPhone's Settings, which asks it itself).
+    static let rebuildQuestion =
+        "Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB."
+
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
         // Phase 5B task 5 (A33, K12): the 90-day download's confirmation, from the chart's line and the Catalog menu.
         // Its text is the count when it opened (`backfillDialog`); "Download" with nothing missing by then does nothing.
+        // The iPhone's Settings sheet asks it itself while it is open (a dialog of the root cannot show over a sheet).
         .confirmationDialog(model.backfillDialog?.title ?? "",
-                            isPresented: $model.asksBackfill, titleVisibility: .visible) {
+                            isPresented: Binding(get: { model.asksBackfill && !model.showsSettings },
+                                                 set: { model.asksBackfill = $0 }),
+                            titleVisibility: .visible) {
             Button(MissingDays.confirmTitle) { model.startBackfill() }
                 .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(model.backfillDialog?.message ?? "")
         }
-        .confirmationDialog("Download every set again? Sets already downloaded today are skipped. About 1,100 requests and 190 MB.",
-                            isPresented: $confirmRebuild, titleVisibility: .visible) {
+        .confirmationDialog(Self.rebuildQuestion, isPresented: $confirmRebuild, titleVisibility: .visible) {
             Button("Rebuild catalog") { Task { await model.refresh(rebuild: true) } }
         }
         // Open while no folder is chosen (it cannot be closed then), or after "Collection Folder…". The onboarding sheet

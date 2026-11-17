@@ -37,6 +37,24 @@ struct OnboardingSheet: View {
     @State private var draft = Onboarding.draft(games: Games.all)
 
     var body: some View {
+        #if os(iOS)
+        // Phase 6A: on the iPhone a large sheet that scrolls (four games of two rows each, the problem line, Continue).
+        ScrollView { content }
+            .presentationDetents([.large])
+            .presentationBackground(Theme.ground)
+            .interactiveDismissDisabled(true)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("onboarding-sheet")
+        #else
+        content
+            .presentationBackground(Theme.ground)
+            .interactiveDismissDisabled(true)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("onboarding-sheet")
+        #endif
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("What do you collect?")
@@ -77,9 +95,5 @@ struct OnboardingSheet: View {
         #if os(macOS)
         .frame(width: Theme.settingsWidth)
         #endif
-        .presentationBackground(Theme.ground)
-        .interactiveDismissDisabled(true)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("onboarding-sheet")
     }
 }

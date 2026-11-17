@@ -49,6 +49,12 @@ nonisolated struct UserFolderSetup: Equatable, Sendable {
     var boundary: URL?
     /// The stored folder that is gone or in the Trash, when the sheet opens because of it.
     var lost: LostUserFolder? = nil
+    /// Phase 6A (A55): false on the iPhone, which has no "Use iCloud Drive" button whatever drive is known (its folder
+    /// in iCloud Drive is reached through "Choose a folder…"). `UserFolder.offersICloud` on this platform.
+    var offersICloud = true
+
+    /// The sheet shows "Use iCloud Drive": the folder can be chosen, the platform offers the button and a drive exists.
+    var showsICloudButton: Bool { canChoose && offersICloud && iCloudDrive != nil }
 }
 
 nonisolated enum UserFolderError: LocalizedError, Equatable {
@@ -95,10 +101,28 @@ nonisolated enum UserFolder {
         return chosen(bookmark, iCloudDrive: iCloudDrive, trash: trash) ?? .none
     }
 
+    /// Phase 6A (A55): the Mac offers "Use iCloud Drive"; the iPhone does not.
+    static var offersICloud: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
     /// The setup of a run. `iCloudDrive` is called only in a Release build without `-store`; `-askUserFolder` gets
-    /// `<root>/icloud` as its stand-in, so a test never reaches the real iCloud Drive.
+    /// `<root>/icloud` as its stand-in, so a test never reaches the real iCloud Drive. `offersICloud` is the platform's
+    /// rule (a parameter so the Mac's unit tests pin the iPhone's case too).
     static func setup(storeRoot: URL?, isDebugBuild: Bool, askUserFolder: Bool, bookmark: Data?, trash: URL? = userTrash,
-                      iCloudDrive: () -> URL?) -> UserFolderSetup {
+                      offersICloud: Bool = UserFolder.offersICloud, iCloudDrive: () -> URL?) -> UserFolderSetup {
+        var setup = baseSetup(storeRoot: storeRoot, isDebugBuild: isDebugBuild, askUserFolder: askUserFolder,
+                              bookmark: bookmark, trash: trash, iCloudDrive: iCloudDrive)
+        setup.offersICloud = offersICloud
+        return setup
+    }
+
+    private static func baseSetup(storeRoot: URL?, isDebugBuild: Bool, askUserFolder: Bool, bookmark: Data?, trash: URL?,
+                                  iCloudDrive: () -> URL?) -> UserFolderSetup {
         if let storeRoot, isDebugBuild, askUserFolder {
             let drive = storeRoot.appending(path: "icloud")
             let choice = resolve(storeRoot: storeRoot, isDebugBuild: true, bookmark: bookmark, iCloudDrive: drive,

@@ -25,11 +25,11 @@ struct UserFolderSheet: View {
                 }
                 if !setup.canChoose {
                     sentence("This run keeps its collection in a fixed folder.")
-                } else if setup.iCloudDrive == nil {
+                } else if !setup.showsICloudButton {
                     #if os(macOS)
                     sentence("This Mac has no iCloud Drive.")
                     #else
-                    // Without an app iCloud container the iPhone cannot name the drive itself: the folder panel can.
+                    // A55: no "Use iCloud Drive" on the iPhone; Files reaches the drive through "Choose a folder…".
                     sentence("Choose a folder in iCloud Drive to reach your other devices.")
                     #endif
                 }
@@ -68,7 +68,7 @@ struct UserFolderSheet: View {
                 Button("Choose a folder…") { choosing = true }
                     .disabled(!setup.canChoose || working)
                     .accessibilityIdentifier("user-folder-choose")
-                if setup.canChoose, setup.iCloudDrive != nil {
+                if setup.showsICloudButton {
                     Button("Use iCloud Drive") { run { try await model.useICloudDrive() } }
                         .sheetDefaultButton()
                         .disabled(working)
@@ -81,6 +81,9 @@ struct UserFolderSheet: View {
         .padding(24)
         #if os(macOS)
         .frame(width: 460)
+        #else
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .presentationDetents([.large])
         #endif
         .presentationBackground(Theme.ground)
         .interactiveDismissDisabled(firstRun)
