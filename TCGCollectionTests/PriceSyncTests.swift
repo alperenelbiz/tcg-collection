@@ -92,6 +92,26 @@ struct ArchiveDownloadsTests {
     }
 }
 
+/// Review round 2, A: the lane records a day at its 200, also when the client's move then fails.
+struct ArchiveStoreFailureTests {
+    let paths = AppPaths(root: tempRoot())
+
+    @Test func aFailedMoveAfterA200IsRecordedAndNotAskedAgain() async throws {
+        let record = try #require(UserDefaults(suiteName: paths.support.appending(path: "record").path))
+        let network = BackfillNetwork(serveAll: true, moveFails: ["2026-01-02"])
+        let now = TCGDate.date("2026-01-03T10:00:00")!
+        await #expect(throws: ArchiveStoreError.self) {
+            try await PriceSync(paths: paths, client: network, record: PriceDaysRecord(record))
+                .run(games: Games.all, now: now, haveDay: nil)
+        }
+        #expect(record.stringArray(forKey: ArchiveDownloads.recordKey) == ["2026-01-02"])
+        let second = BackfillNetwork(serveAll: true)
+        _ = try await PriceSync(paths: paths, client: second, record: PriceDaysRecord(record))
+            .run(games: Games.all, now: now, haveDay: nil)
+        #expect(await second.calls == ["2026-01-01"])
+    }
+}
+
 /// Phase 5B task 2 (K3, A47): the price step's tables come from the archive gate.
 struct PriceSyncGateTests {
     let fake: FakeArchive

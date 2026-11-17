@@ -40,12 +40,18 @@ nonisolated struct FileArchiveClient: ArchiveFetching {
         let names = try fm.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix("prices-") && $0.hasSuffix(".ppmd.7z") }
         guard names.count == 1 else { throw FixtureNetworkError.notOneArchive(found: names.count, in: directory) }
-        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // From here on the "200" came: a failure is the store's, as `ArchiveClient`'s.
         let temporary = file.deletingLastPathComponent().appending(path: "." + file.lastPathComponent + ".part")
-        try? fm.removeItem(at: temporary)
-        try fm.copyItem(at: directory.appending(path: names[0]), to: temporary)
-        try? fm.removeItem(at: file)
-        try fm.moveItem(at: temporary, to: file)
+        do {
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: temporary)
+            try fm.copyItem(at: directory.appending(path: names[0]), to: temporary)
+            try? fm.removeItem(at: file)
+            try fm.moveItem(at: temporary, to: file)
+        } catch {
+            try? fm.removeItem(at: temporary)
+            throw ArchiveStoreError(underlying: error)
+        }
         return true
     }
 

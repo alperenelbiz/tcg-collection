@@ -440,7 +440,8 @@ final class AppModel {
     /// of the queue before that.
     @ObservationIgnored var backfillLaunchReady = false
     /// A network error stopped the queue for this run (said once); the next launch goes on.
-    @ObservationIgnored var backfillStopped = false
+    /// Observed (review round 2, B): the line's button and the Catalog menu's item follow it.
+    var backfillStopped = false
     /// The watcher that starts the queue when its gates open (`watchBackfillGates`); one per model.
     @ObservationIgnored var backfillWatching = false
     /// The day files written in this run that the queue's last listing has seen, so a day file the price step or a game
@@ -1966,6 +1967,9 @@ final class AppModel {
             status = .syncing(StatusText.pricesLoaded(day: prices.day(game: gameID)))
             return nil
         } catch {
+            // Review round 2, B: a request that threw stops the 90-day download for the run; the button and the menu
+            // item go off at once.
+            if await priceSync.downloads.backgroundStopped { backfillStopped = true }
             let failure = "Prices: \(Self.describe(error))"
             status = .failed(failure)
             return failure

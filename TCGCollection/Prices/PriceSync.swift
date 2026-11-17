@@ -1,7 +1,14 @@
 import Foundation
 
+/// The server answered 200, then the archive could not be put in its place (a full disk, a permission): the request was
+/// made and answered (review round 2, A). The lane records the day all the same: it is not asked for again, ever (A47).
+nonisolated struct ArchiveStoreError: Error {
+    let underlying: any Error
+}
+
 nonisolated protocol ArchiveFetching: Sendable {
-    /// Downloads the archive of `day` to `file`. Returns false when the server has no such archive (404).
+    /// Downloads the archive of `day` to `file`. Returns false when the server has no such archive (404). A failure after
+    /// a 200 (the file cannot be moved into place) throws `ArchiveStoreError`.
     func download(day: String, to file: URL) async throws -> Bool
 }
 
@@ -19,9 +26,14 @@ nonisolated struct ArchiveClient: ArchiveFetching {
             throw TCGCSVClientError(status: status)
         }
         let fm = FileManager.default
-        try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? fm.removeItem(at: file)
-        try fm.moveItem(at: temporary, to: file)
+        do {
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: file)
+            try fm.moveItem(at: temporary, to: file)
+        } catch {
+            try? fm.removeItem(at: temporary)
+            throw ArchiveStoreError(underlying: error)
+        }
         return true
     }
 }
@@ -169,6 +181,13 @@ actor ArchiveDownloads {
         do {
             try fm.createDirectory(at: paths.archives, withIntermediateDirectories: true)
             found = try await client.download(day: day, to: archive)
+        } catch let error as ArchiveStoreError {
+            // A 200 came: the day is recorded before anything else (review round 2, A), and is a gap from now on.
+            downloaded.insert(day)
+            record?.save(downloaded)
+            failed.insert(day)
+            backgroundStopped = true
+            throw error
         } catch {
             if !Self.isCancel(error) {
                 failed.insert(day)

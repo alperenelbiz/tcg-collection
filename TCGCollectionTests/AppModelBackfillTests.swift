@@ -468,6 +468,41 @@ struct AppModelBackfillTests {
         #expect(begins.withLock { $0 } >= 2)                                     // the price step and the migration
         #expect(ends.withLock { $0 } == begins.withLock { $0 })
     }
+
+    // MARK: Review round 2
+
+    /// A: a 200 whose move fails (a full disk): the day is in the record at once, and the next launch on the same
+    /// preferences asks nothing for it (A47: it is a gap from now on).
+    @Test(.timeLimit(.minutes(1))) func aDayWhoseMoveFailedAfterIts200IsRecorded() async throws {
+        let root = tempRoot()
+        let first = BackfillNetwork(serveAll: true, moveFails: [Self.wanted])
+        let model1 = model(root, first)
+        await model1.start()
+        #expect(await first.calls == [Self.wanted])
+        let record = try preferences(root).stringArray(forKey: AppModel.priceDaysDownloadedKey) ?? []
+        #expect(record.contains(Self.wanted))
+        #expect(!model1.canAskBackfill)                                          // stopped for the run
+        let second = BackfillNetwork(serveAll: true)
+        let model2 = model(root, second)
+        await model2.start()
+        #expect(await !second.calls.contains(Self.wanted))
+    }
+
+    /// B: a Refresh's price step that throws turns the line's button and the menu item off.
+    @Test(.timeLimit(.minutes(1))) func aRefreshWhosePriceStepThrewTurnsTheAskOff() async throws {
+        let root = tempRoot()
+        let network = BackfillNetwork(served: [Self.wanted], failing: ["2026-01-03"])
+        let clock = Clock(Self.day1)
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: network, fetcher: network, now: { clock.date })
+        await model.start()
+        #expect(model.canAskBackfill)
+        clock.date = TCGDate.date("2026-01-03T21:00:00")!
+        await model.refresh(rebuild: false)
+        #expect(await network.calls.contains("2026-01-03"))
+        #expect(!model.canAskBackfill)
+        #expect(model.backfillLine?.button != true)
+    }
 }
 
 /// tcgcsv's fake for the backfill: Riftbound's fixture catalog, no sets of the other games, and the fixture archive for
@@ -480,6 +515,7 @@ actor BackfillNetwork {
     private let broken: Set<String>
     private let failing: Set<String>
     private let statuses: [String: Int]
+    private let moveFails: Set<String>
     private(set) var calls: [String] = []
     /// The days whose answer was written to the archive's name.
     private(set) var completed: [String] = []
@@ -491,8 +527,9 @@ actor BackfillNetwork {
     private var waiting: CheckedContinuation<Void, Never>?
 
     init(serveAll: Bool = false, served: Set<String> = [], broken: Set<String> = [], failing: Set<String> = [],
-         statuses: [String: Int] = [:]) {
+         statuses: [String: Int] = [:], moveFails: Set<String> = []) {
         self.statuses = statuses
+        self.moveFails = moveFails
         self.serveAll = serveAll
         self.served = served
         self.broken = broken
@@ -542,6 +579,9 @@ actor BackfillNetwork {
         }
         if failing.contains(day) { throw URLError(.notConnectedToInternet) }
         if let status = statuses[day] { throw TCGCSVClientError(status: status) }
+        if moveFails.contains(day) {
+            throw ArchiveStoreError(underlying: CocoaError(.fileWriteOutOfSpace))   // a 200, then the move failed
+        }
         if broken.contains(day) {
             try fm.copyItem(at: fixtureURL("not-an-archive.7z"), to: file)
             completed.append(day)
