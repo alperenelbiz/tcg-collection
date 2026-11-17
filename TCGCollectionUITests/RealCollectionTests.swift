@@ -510,9 +510,9 @@ final class RealCollectionTests: UITestCase {
         let (cellID, expected) = try chooseCell(app, rows: rows, history: history)
         times.append("the chosen cell's expected block: \(expected)")
         let opened = Date()
-        let outcome = try historyBlock(app, cell: cellID, expected: expected, firstLook: true)
+        let outcome = try historyBlock(app, cell: cellID, expected: expected, firstLook: true,
+                                       picture: "real-history-1-card-page")
         times.append("the chosen cell's block: \(outcome) (\(seconds(opened)) after the click)")
-        shot("real-history-1-card-page")
         quit(app)
         try assertOnlyHistoryAdded(folder, before)
         let afterFirst = try allFiles(folder, history: true)
@@ -524,11 +524,11 @@ final class RealCollectionTests: UITestCase {
         launched = Date()
         app = launch(storeRoot: root, game: "riftbound", extra: ["-screen", "collection"])
         XCTAssertTrue(waitUntil(timeout: 60) { self.mainWindow(app).title.hasSuffix(" " + self.totals(rows)) }, mainWindow(app).title)
-        _ = try historyBlock(app, cell: cellID, expected: expected, firstLook: false)
+        _ = try historyBlock(app, cell: cellID, expected: expected, firstLook: false,
+                             picture: "real-history-2-second-launch")
         times.append("second launch -> the chosen cell's block: \(seconds(launched))")
         // The pass of this launch (after the launch's price step) and the quiet time of a change (3 s) end well within it.
         RunLoop.current.run(until: Date().addingTimeInterval(10))
-        shot("real-history-2-second-launch")
         quit(app)
         try assertUnchanged(folder, afterFirst, "after a second launch on the same day", history: true)
 
@@ -616,9 +616,10 @@ final class RealCollectionTests: UITestCase {
     /// Opens the card page of the Collection cell `cell`, scrolls to the price history block and checks it shows
     /// `expected`: `"chart"` (the plot and its summary), `"one day"` ("Price history starts on …") or `"no price"` ("No
     /// price in the last 90 days."). With `firstLook` the first state seen must be it ("Reading price history…" or any
-    /// other sentence fails at once); else it must come within 60 s. Then goes back to the Collection.
+    /// other sentence fails at once); else it must come within 60 s. Then keeps a picture `picture` of the card page
+    /// with the block, and goes back to the Collection.
     @discardableResult
-    private func historyBlock(_ app: XCUIApplication, cell: String, expected: String, firstLook: Bool,
+    private func historyBlock(_ app: XCUIApplication, cell: String, expected: String, firstLook: Bool, picture: String,
                               file: StaticString = #filePath, line: UInt = #line) throws -> String {
         let link = app.buttons[cell]
         XCTAssertTrue(link.waitForExistence(timeout: 30), "\(cell) is not a link", file: file, line: line)
@@ -649,6 +650,7 @@ final class RealCollectionTests: UITestCase {
         if outcome == "chart" {
             XCTAssertTrue(element(app, "price-history-summary").exists, "a chart without its summary", file: file, line: line)
         }
+        shot(picture)                                              // the card page with its block, before Back
         let back = app.toolbars.buttons["Back"].firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 5), "no Back button", file: file, line: line)
         back.click()
