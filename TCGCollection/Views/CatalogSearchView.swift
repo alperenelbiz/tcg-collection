@@ -79,23 +79,46 @@ struct CatalogSearchView: View {
         framed(content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { Theme.ground.ignoresSafeArea() })
+            #if os(macOS)
             .navigationSubtitle(subtitle)
             .searchable(text: $state.text)
             .toolbar {
                 ToolbarItemGroup {
-                    FilterMenu(title: "Set", selection: $state.filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
-                    FilterMenu(title: "Rarity", selection: $state.filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
-                    FilterMenu(title: "Type", selection: $state.filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
+                    filterMenus
                     if state.filtersOn > 0 {
                         ClearFiltersButton(identifier: "catalog-clear-filters") { state.clearFilters() }
                     }
                 }
             }
+            #else
+            // R3: no subtitle on the iPhone; the count is a line above the gallery.
+            .listTotals(subtitle, identifier: "catalog-totals")
+            // All cards: the search tab's field (`PhoneRootView`); a deck's search has its own.
+            .modifier(DeckSearchField(text: $state.text, applies: deckID != nil))
+            // A54: the Set / Rarity / Type menus in one "…" menu; "Clear" stays a button while a filter is on.
+            .toolbar {
+                if state.filtersOn > 0 {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ClearFiltersButton(identifier: "catalog-clear-filters") { state.clearFilters() }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "catalog-more") { filterMenus }
+                }
+            }
+            #endif
             // A deck's search reads its cards' printings again when the Yu-Gi-Oh! index is replaced (final fix B7).
             .task(id: SearchKey(text: state.text, filter: state.filter, catalogVersion: model.catalogVersion,
                                 ygoIndexVersion: deckID == nil ? 0 : model.ygoIndexVersion)) { await search() }
             // The set list is cheap; the rarity and type lists come from `model.facets` (a file, P4).
             .task(id: model.filtersVersion) { await loadSets() }
+    }
+
+    /// The Set, Rarity and Type menus: in the Mac's toolbar, in the iPhone's "…" menu.
+    @ViewBuilder private var filterMenus: some View {
+        FilterMenu(title: "Set", selection: $state.filter.groupID, choices: sets.map { ($0.groupID, $0.name) })
+        FilterMenu(title: "Rarity", selection: $state.filter.rarity, choices: (model.facets(game: model.gameID)?.rarities ?? []).map { ($0, $0) })
+        FilterMenu(title: "Type", selection: $state.filter.typeFacet, choices: (model.facets(game: model.gameID)?.types ?? []).map { ($0, $0) })
     }
 
     /// All cards: the game's name as the title, and the pages its cells open. A deck's search: "Add to <deck name>" and the
@@ -290,6 +313,22 @@ struct PlaceholderCell: View {
         .accessibilityHidden(true)
     }
 }
+
+#if os(iOS)
+/// A deck's search keeps the field on its own page; All cards' field is the search tab's (`PhoneRootView`).
+private struct DeckSearchField: ViewModifier {
+    @Binding var text: String
+    let applies: Bool
+
+    func body(content: Content) -> some View {
+        if applies {
+            content.searchable(text: $text)
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 private nonisolated struct SearchKey: Equatable {
     let text: String

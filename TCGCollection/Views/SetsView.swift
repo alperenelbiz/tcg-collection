@@ -170,8 +170,30 @@ struct SetsView: View {
                     .safeAreaInset(edge: .top, spacing: 0) { LibraryLines(inSidebar: false) }
             }
             .navigationTitle("Sets")
+            #if os(macOS)
             .navigationSubtitle(phase == .list ? SetMaths.subtitle(shown: shown.count, of: all, searching: state.searching) : "")
+            #else
+            // R3: no subtitle on the iPhone; the totals are a line above the rows.
+            .listTotals(phase == .list ? SetMaths.subtitle(shown: shown.count, of: all, searching: state.searching) : "",
+                        identifier: "sets-totals")
+            #endif
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: the scope and Sort in one "…" menu, with their Mac identifiers.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "sets-more") {
+                        Picker("Sets", selection: Binding(get: { scope }, set: { state.scope = $0 })) {
+                            Text("My sets").tag(SetScope.mine)
+                            Text("All sets").tag(SetScope.all)
+                        }
+                        .pickerStyle(.inline)
+                        .accessibilityIdentifier("sets-scope")
+                        SetSortMenu(sort: $state.sort)
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     Picker("Sets", selection: Binding(get: { scope }, set: { state.scope = $0 })) {
@@ -187,6 +209,7 @@ struct SetsView: View {
                     SetSortMenu(sort: $state.sort)
                 }
             }
+            #endif
             .task(id: key) { await state.makeRows(key, model: model) }
     }
 
@@ -229,43 +252,7 @@ private struct SetListRow: View {
     var body: some View {
         let numbers = row.numbers, id = row.id
         let cost = SetMaths.costText(numbers), date = SetMaths.releaseText(row.set.publishedOn)
-        HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.set.name)
-                    .font(Theme.bodyFont)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if !date.isEmpty {
-                    Text(date)
-                        .font(Theme.lineFont)
-                        .foregroundStyle(Theme.muted)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("sets-date-\(id)")
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Text(SetMaths.countText(numbers))
-                .font(Theme.bodyFont)
-                .monospacedDigit()
-                .foregroundStyle(numbers.isComplete ? Theme.text : Theme.muted)
-                .lineLimit(1)
-                .frame(width: Theme.setCountWidth, alignment: .trailing)
-                .accessibilityIdentifier("sets-count-\(id)")
-            Group {
-                if let cost {
-                    Text(cost)
-                        .font(Theme.lineFont)
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.muted)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("sets-cost-\(id)")
-                } else {
-                    Color.clear.frame(height: 1)
-                }
-            }
-            .frame(width: Theme.setCostWidth, alignment: .trailing)
-        }
+        texts(numbers: numbers, cost: cost, date: date)
         .padding(Self.hoverPadding)
         .background { if hovering { RoundedRectangle(cornerRadius: Theme.pictureRadius).fill(Theme.surface) } }
         // The link lies over the texts, so the texts keep their own identifiers for the tests.
@@ -280,6 +267,81 @@ private struct SetListRow: View {
         .onHover { hovering = $0 }
         .padding(.horizontal, -Self.hoverPadding)
     }
+
+    private var name: some View {
+        Text(row.set.name)
+            .font(Theme.bodyFont)
+            .foregroundStyle(Theme.text)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private func count(_ numbers: SetNumbers) -> some View {
+        Text(SetMaths.countText(numbers))
+            .font(Theme.bodyFont)
+            .monospacedDigit()
+            .foregroundStyle(numbers.isComplete ? Theme.text : Theme.muted)
+            .lineLimit(1)
+    }
+
+    private func costText(_ cost: String) -> some View {
+        Text(cost)
+            .font(Theme.lineFont)
+            .monospacedDigit()
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .accessibilityIdentifier("sets-cost-\(row.id)")
+    }
+
+    private func dateText(_ date: String) -> some View {
+        Text(date)
+            .font(Theme.lineFont)
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .accessibilityIdentifier("sets-date-\(row.id)")
+    }
+
+    #if os(iOS)
+    /// The iPhone's row (the look's "Sets list"): two lines across the screen's width. Line 1 the name (one line, cut at
+    /// the end) and `187 / 412` trailing; line 2 the release month and the missing targets' cost trailing.
+    private func texts(numbers: SetNumbers, cost: String?, date: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                name.frame(maxWidth: .infinity, alignment: .leading)
+                count(numbers).fixedSize()
+                    .accessibilityIdentifier("sets-count-\(row.id)")
+            }
+            if !date.isEmpty || cost != nil {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+                    if !date.isEmpty { dateText(date) }
+                    Spacer(minLength: 0)
+                    if let cost { costText(cost).fixedSize() }
+                }
+            }
+        }
+    }
+    #else
+    private func texts(numbers: SetNumbers, cost: String?, date: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.columnGap) {
+            VStack(alignment: .leading, spacing: 2) {
+                name
+                if !date.isEmpty { dateText(date) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            count(numbers)
+                .frame(width: Theme.setCountWidth, alignment: .trailing)
+                .accessibilityIdentifier("sets-count-\(row.id)")
+            Group {
+                if let cost {
+                    costText(cost)
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+            }
+            .frame(width: Theme.setCostWidth, alignment: .trailing)
+        }
+    }
+    #endif
 }
 
 /// The Sets list while the folder is read or its first rows are made: the rows' layout with flat `surface` blocks. No

@@ -43,9 +43,10 @@ class PhoneUITestCase: XCTestCase {
     }
 
     /// Launches the app with `-store <fresh root> -fixtures <Fixtures> -game <game>`, then `extra`. `prepare` gets the
-    /// fresh root before the app starts, to put files into it (`writeCollection`).
+    /// fresh root before the app starts, to put files into it (`writeCollection`). `fixtures` names another fixtures
+    /// folder from the root (a copy that `prepare` made, as the Mac's `SetsFlowTests`), instead of the bundle's.
     @discardableResult
-    func launch(game: String = "riftbound", extra: [String] = [],
+    func launch(game: String = "riftbound", extra: [String] = [], fixtures: ((URL) -> URL)? = nil,
                 prepare: ((URL) throws -> Void)? = nil) -> XCUIApplication {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "tcg-phone-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -57,7 +58,8 @@ class PhoneUITestCase: XCTestCase {
             XCTFail("the store root could not be prepared: \(error)")
         }
         let app = XCUIApplication(bundleIdentifier: Self.debugBundleID)
-        app.launchArguments = ["-store", root.path, "-fixtures", Self.fixturesDirectory.path, "-game", game] + extra
+        let served = fixtures?(root) ?? Self.fixturesDirectory
+        app.launchArguments = ["-store", root.path, "-fixtures", served.path, "-game", game] + extra
         self.app = app
         app.launch()
         return app

@@ -57,6 +57,12 @@ struct PhoneRootView: View {
                 tabContent(.search)
             }
         }
+        // The search tab's field (`Tab(role: .search)`): on the tab view, so the system draws it in the tab bar's place
+        // while the search tab shows. It is All cards' text. While the search is presented the bar keeps the game menu, the
+        // "…" menu and the gear (`avoidHidingContent`), so the filters stay at hand over the results.
+        .searchable(text: Binding(get: { catalog.state(game: model.gameID, search: model.options.search).text },
+                                  set: { catalog.state(game: model.gameID, search: model.options.search).text = $0 }))
+        .searchPresentationToolbarBehavior(.avoidHidingContent)
         .onChange(of: model.screen, initial: true) { _, screen in last[PhoneTabs.tab(of: screen)] = screen }
         // Every tab of the old game starts afresh, not only the one on show.
         .onChange(of: model.gameID) { _, game in

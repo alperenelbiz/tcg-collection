@@ -240,12 +240,36 @@ struct SetPageView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 CatalogNote(text: phase == .unavailable ? nil : note, identifier: "set-note")
             }
+            #if os(iOS)
+            // R3: no subtitle on the iPhone; the count is a line above the cost line.
+            .listTotals(SetPage.subtitle(phase, numbers: numbers), identifier: "set-totals")
+            #endif
             .background { Theme.ground.ignoresSafeArea() }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("set-screen")
             .navigationTitle(name)
+            #if os(macOS)
             .navigationSubtitle(SetPage.subtitle(phase, numbers: numbers))
+            #else
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .searchable(text: $state.text)
+            #if os(iOS)
+            // A54: a pushed page's actions in one "…" menu: All / Missing / Owned, with its Mac identifier.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    MoreMenu(identifier: "set-more") {
+                        Picker("Show", selection: $state.filter) {
+                            Text("All").tag(SetFilter.all)
+                            Text("Missing").tag(SetFilter.missing)
+                            Text("Owned").tag(SetFilter.owned)
+                        }
+                        .pickerStyle(.inline)
+                        .accessibilityIdentifier("set-filter")
+                    }
+                }
+            }
+            #else
             .toolbar {
                 ToolbarItemGroup {
                     Picker("Show", selection: $state.filter) {
@@ -261,6 +285,7 @@ struct SetPageView: View {
                     .accessibilityIdentifier("set-filter")
                 }
             }
+            #endif
             .task(id: key) { await state.read(key, model: model) }
     }
 
