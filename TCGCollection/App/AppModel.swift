@@ -795,8 +795,14 @@ final class AppModel {
             let done = ContinuousClock.now
             await self?.notePriceDaysMigrated(day: day, done: done, wroteDayFile: decoded.wroteDayFile)
             #endif
+            await self?.priceSync.downloads.recordHeld([day])
             await self?.tookMigratedDay(decoded)
         }
+        // Task 6 review, item 1: every day file of the window is a day this device holds: it is in the record, so the
+        // lane and the missing days never ask for it again, also when its file is lost later (A47). A day held before
+        // phase 5B's record existed is recorded at the first launch of this build.
+        let held = await archiveGate.dayFiles().filter { window.contains($0) }
+        await priceSync.downloads.recordHeld(held)
     }
 
     #if DEBUG

@@ -396,6 +396,45 @@ struct AppModelBackfillTests {
         #expect(!model2.missingDays.contains("2026-01-01"))
     }
 
+    /// Task 6 review, item 1: a day the launch's migration decoded (an archive the 5A price step downloaded) is in the
+    /// record, so an opted-in backfill never downloads it again when its day file is lost (A47).
+    @Test(.timeLimit(.minutes(1))) func aMigratedDayIsRecordedAndNotDownloadedAgain() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        try FileManager.default.createDirectory(at: paths.archives, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: fixtureURL("prices-2026-01-02.ppmd.7z"),
+                                         to: paths.archives.appending(path: ArchiveGate.archiveName(day: "2025-12-20")))
+        let model1 = model(root, BackfillNetwork(served: [Self.wanted]))
+        await model1.start()
+        await model1.waitForBackfill()
+        #expect(exists(paths.priceDay("2025-12-20")))
+        let record = Set(try preferences(root).stringArray(forKey: AppModel.priceDaysDownloadedKey) ?? [])
+        #expect(record.contains("2025-12-20"))
+        try FileManager.default.removeItem(at: paths.priceDay("2025-12-20"))
+        try optIn(root)
+        let second = BackfillNetwork(serveAll: true)
+        let model2 = model(root, second)
+        await model2.start()
+        await model2.waitForBackfill()
+        #expect(await !second.calls.contains("2025-12-20"))
+        #expect(!model2.missingDays.contains("2025-12-20"))
+    }
+
+    /// Task 6 review, item 1: a day file of the window on disk at launch (no archive, never downloaded by this build: a day
+    /// held before the record existed) is in the record after the launch.
+    @Test(.timeLimit(.minutes(1))) func aDayFileAtLaunchIsRecorded() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let row = PriceDayRow(productID: 700, finish: "Normal", price: ShownPrice(amount: 1.5, isLow: false))
+        try PriceDayFile.write(PriceDayFile.data(day: "2025-12-15", rows: [89: [row]]), to: paths.priceDay("2025-12-15"))
+        let model = model(root, BackfillNetwork(served: [Self.wanted]))
+        await model.start()
+        await model.waitForBackfill()
+        let record = Set(try preferences(root).stringArray(forKey: AppModel.priceDaysDownloadedKey) ?? [])
+        #expect(record.contains("2025-12-15"))
+        #expect(record.contains(Self.wanted))
+    }
+
     /// Finding 2: the clean-up prunes the record's days before the window.
     @Test(.timeLimit(.minutes(1))) func theRecordIsPrunedBeforeTheWindow() async throws {
         let root = tempRoot()

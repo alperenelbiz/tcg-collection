@@ -204,6 +204,16 @@ actor ArchiveDownloads {
         return .notFound
     }
 
+    /// Task 6 review, item 1: every day this device holds is recorded, not only the days this lane downloaded: the days
+    /// the launch's migration decoded (archives a 5A build downloaded) and every day file of the window at launch (a day
+    /// held before the record existed). So a lost day file of such a day is not downloaded again either (A47).
+    func recordHeld(_ days: Set<String>) {
+        let all = downloaded.union(days)
+        guard all != downloaded else { return }
+        downloaded = all
+        record?.save(all)
+    }
+
     /// K10: the record's days before `day` are dropped (once per launch, with the clean-up).
     func pruneRecord(before day: String) {
         let kept = downloaded.filter { $0 >= day }
