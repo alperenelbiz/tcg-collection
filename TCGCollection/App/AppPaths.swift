@@ -49,6 +49,10 @@ nonisolated struct AppPaths: Sendable {
     func facets(_ gameID: String) -> URL { support.appending(path: "facets-\(gameID).json") }
     /// The set index of a game (F3): `support/sets-<game>.json`.
     func sets(_ gameID: String) -> URL { support.appending(path: "sets-\(gameID).json") }
+    /// The price day files (phase 5B, K1, A45, A47): `support/price-days`, never in `caches` or the user folder.
+    var priceDays: URL { support.appending(path: "price-days", directoryHint: .isDirectory) }
+    /// One day's price day file: `support/price-days/<yyyy-MM-dd>.prices`.
+    func priceDay(_ day: String) -> URL { priceDays.appending(path: "\(day).prices") }
     var ygoIndex: URL { support.appending(path: "ygo-index.json") }
     var archives: URL { caches.appending(path: "archives", directoryHint: .isDirectory) }
     var pictures: URL { caches.appending(path: "pictures", directoryHint: .isDirectory) }
