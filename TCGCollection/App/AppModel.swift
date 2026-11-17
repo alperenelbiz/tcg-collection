@@ -784,10 +784,40 @@ final class AppModel {
         #endif
         await priceDaysCleaning?.value
         let window = PriceDay.window(endingOn: PriceDay.wanted(now: now()))
-        await archiveGate.migrate(window: window, games: Games.all) { [weak self] _, decoded in
+        #if DEBUG
+        priceDaysMigrationStart = ContinuousClock.now
+        priceDaysMigrationPeakBefore = Self.peakResident()
+        #endif
+        await archiveGate.migrate(window: window, games: Games.all) { [weak self] day, decoded in
+            #if DEBUG
+            // The report's decode-and-write time per day: from the end of the day before to this day's day file verified
+            // and its archive deleted (the gate's whole `decodeDay`), and the process's peak resident size by then.
+            let done = ContinuousClock.now
+            await self?.notePriceDaysMigrated(day: day, done: done, wroteDayFile: decoded.wroteDayFile)
+            #endif
             await self?.tookMigratedDay(decoded)
         }
     }
+
+    #if DEBUG
+    /// Test and report only (`HistoryReport`): each day the launch's migration decoded, in its order.
+    @ObservationIgnored var priceDaysMigrationLog: [(day: String, spent: Duration, wroteDayFile: Bool, peakResident: Int)] = []
+    @ObservationIgnored private var priceDaysMigrationStart: ContinuousClock.Instant?
+    /// The process's peak resident size when the launch's migration began (`getrusage`, bytes on macOS).
+    @ObservationIgnored var priceDaysMigrationPeakBefore = 0
+
+    nonisolated static func peakResident() -> Int {
+        var usage = rusage()
+        return getrusage(RUSAGE_SELF, &usage) == 0 ? usage.ru_maxrss : 0
+    }
+
+    private func notePriceDaysMigrated(day: String, done: ContinuousClock.Instant, wroteDayFile: Bool) {
+        let peak = Self.peakResident()
+        let spent = done - (priceDaysMigrationStart ?? done)
+        priceDaysMigrationStart = done
+        priceDaysMigrationLog.append((day, spent, wroteDayFile, peak))
+    }
+    #endif
 
     private func tookMigratedDay(_ decoded: ArchiveGate.Decoded) async {
         await notePriceDays()

@@ -13,6 +13,8 @@ import Foundation
 /// prints counts of days and files, sizes and times only: no card name, no product id and no count of products (they
 /// come from the owner's collection). The peak memory is the process's lifetime `ru_maxrss`; the chart's time is
 /// `PriceChart`'s construction, not the view's rendering. It reads no archive itself: the one decode goes through the gate.
+/// Phase 5B task 6 adds the launch's migration (each day's decode-and-write time and the peak resident size, from
+/// `AppModel.priceDaysMigrationLog`), each day file's size per game (K1), and the card page's read of one printing (K6).
 @MainActor
 enum HistoryReport {
     static func text(model: AppModel) async throws -> String {
@@ -24,6 +26,9 @@ enum HistoryReport {
         var lines = ["== Price history (phase 5B): the day files on disk, a first pass, a one-printing fill, the chart, a decode",
                      "window \(window.lowerBound)…\(window.upperBound); day files on disk \(onDisk.count), "
                          + "in the window \(inWindow.count)" + (inWindow.isEmpty ? "" : " (\(inWindow[0])…\(inWindow[inWindow.count - 1]))")]
+        migration(model: model, into: &lines)
+        dayFileSizes(folder: model.paths.priceDays, days: inWindow, into: &lines)
+        try await cardPageReads(model: model, window: window, days: Set(inWindow), into: &lines)
         let tracked = model.syncedGames.compactMap { game in
             model.historyTracked[game.id].map { (game: game, ids: $0) }
         }
@@ -118,6 +123,86 @@ enum HistoryReport {
         }
     }
 
+    /// The launch's migration (K11): each archive day decoded through the gate, its day file written, read back and
+    /// verified, and its archive deleted; the time of each (from the end of the day before), and the process's peak
+    /// resident size before the migration and after each day.
+    private static func migration(model: AppModel, into lines: inout [String]) {
+        let log = model.priceDaysMigrationLog
+        guard !log.isEmpty else {
+            lines.append("migration: no archive was decoded at launch")
+            return
+        }
+        lines.append("migration at launch: \(log.count) \(log.count == 1 ? "day" : "days") decoded through the gate, "
+                     + "peak resident size \(megabytes(model.priceDaysMigrationPeakBefore)) before it")
+        for entry in log {
+            lines.append("  \(entry.day): decode, write, verify, delete \(secondsText(entry.spent))"
+                         + (entry.wroteDayFile ? "" : " (its day file was there already)")
+                         + "; peak resident size \(megabytes(entry.peakResident))")
+        }
+    }
+
+    /// K1: each day file of the window, its size, and per game the rows and the section's bytes (the category, the finish
+    /// names, the row count and 9 bytes a row); the header is 18 bytes.
+    private static func dayFileSizes(folder: URL, days: [String], into lines: inout [String]) {
+        var totalBytes = 0, totalRows = 0
+        for day in days {
+            let url = folder.appending(path: PriceDayFile.fileName(day: day))
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int,
+                  let reader = try? PriceDayReader(url: url) else {
+                lines.append("day file \(day): does not read")
+                continue
+            }
+            var parts: [String] = [], counted = PriceDayFile.headerSize, rows = 0
+            for game in Games.all {
+                let gameRows = reader.rows(category: game.categoryID)
+                let names = Set(gameRows.map(\.finish))
+                let bytes = 4 + 1 + names.reduce(0) { $0 + 1 + $1.utf8.count } + 4 + gameRows.count * PriceDayFile.rowSize
+                counted += bytes
+                rows += gameRows.count
+                parts.append("\(game.name) \(kilobytes(bytes)) (\(gameRows.count) rows, \(names.count) finishes)")
+            }
+            totalBytes += size
+            totalRows += rows
+            lines.append("day file \(day): \(kilobytes(size)), \(rows) rows, "
+                         + String(format: "%.2f", Double(size) / Double(max(rows, 1))) + " bytes a row; "
+                         + parts.joined(separator: ", ") + (counted == size ? "" : "; sections counted \(counted) bytes"))
+        }
+        if days.count > 1 {
+            lines.append("day files in all: \(kilobytes(totalBytes)) for \(days.count) days, "
+                         + String(format: "%.2f", Double(totalBytes) / Double(max(totalRows, 1))) + " bytes a row")
+        }
+    }
+
+    /// K6: the card page's read of one printing (`PriceDayPoints.read`: one open and one lookup per day file), per game on
+    /// the catalog's smallest product id, over the day files of the window and over 90 days (the newest day file read
+    /// under every day name of the window, as R2). Median of 11 runs each, warm.
+    private static func cardPageReads(model: AppModel, window: ClosedRange<String>, days: Set<String>,
+                                      into lines: inout [String]) async throws {
+        guard let newest = days.max() else { return }
+        let open = HistoryPass.dayFileReader(in: model.paths.priceDays)
+        let ninety = Set(PriceDay.days(in: window))
+        for game in Games.all {
+            let catalog = try await CatalogStore(modelContainer: model.reader.modelContainer).productIDs(game: game.id)
+            guard let product = catalog.min() else { continue }
+            let onDisk = median { _ = PriceDayPoints.read(days: days, window: window, categoryID: game.categoryID,
+                                                          productID: product, open: open) }
+            let synthetic = median { _ = PriceDayPoints.read(days: ninety, window: window, categoryID: game.categoryID,
+                                                             productID: product, open: { _ in try open(newest) }) }
+            lines.append("card page read of one printing, \(game.name): \(days.count) day files \(millisecondsText(onDisk)), "
+                         + "90 days (the newest day file under each day) \(millisecondsText(synthetic)); median of 11")
+        }
+    }
+
+    private static func median(_ work: () -> Void) -> Duration {
+        var times: [Duration] = []
+        for _ in 0..<11 {
+            let start = ContinuousClock.now
+            work()
+            times.append(ContinuousClock.now - start)
+        }
+        return times.sorted()[times.count / 2]
+    }
+
     // MARK: Pure parts (unit-tested)
 
     /// `6 day files read, median 1.2 ms, max 1.5 ms per day file, total 7.3 ms`.
@@ -173,11 +258,7 @@ enum HistoryReport {
     }
 
     /// The process's peak resident size so far (`getrusage`: bytes on macOS).
-    private static func peakResident() -> Int {
-        var usage = rusage()
-        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
-        return usage.ru_maxrss
-    }
+    private static func peakResident() -> Int { AppModel.peakResident() }
 
     private static func megabytes(_ bytes: Int) -> String {
         String(format: "%.0f MB", Double(bytes) / 1_000_000)

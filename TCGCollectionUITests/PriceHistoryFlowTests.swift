@@ -196,7 +196,7 @@ final class PriceHistoryFlowTests: UITestCase {
     // MARK: The 90-day download (phase 5B task 5: A32, A33, K7, K12)
 
     private static let dialogTitle = "Download 90 days of price history?"
-    private static let dialogMessage = "About 370 MB in 89 files, one at a time, in the background. It takes about 3 minutes. "
+    private static let dialogMessage = "About 370 MB in 89 files, one at a time, in the background. It takes about 6 minutes. "
         + "Each day is downloaded once."
 
     /// The archive requests the fixture network answered, one day per line (`<root>/fixture-archive-requests.txt`).

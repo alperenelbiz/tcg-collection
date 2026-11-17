@@ -49,11 +49,12 @@ nonisolated enum MissingDays {
     static let menuTitle = "Download Price History…"
     static let confirmTitle = "Download"
 
-    /// K12: missing days × 4.2 MB, rounded to 10 MB (10 MB at least), and missing days × 2 s, rounded up to whole minutes
-    /// (1 minute at least).
+    /// K12: missing days × 4.2 MB, rounded to 10 MB (10 MB at least), and missing days × 4 s, rounded up to whole minutes
+    /// (1 minute at least). Phase 5B task 6 measured 3.2–5.1 s per day for a decode through the gate on the owner's
+    /// archives (the plan's 2 s was 5A's archive read alone); the download's own time is not in it.
     static func confirmation(missing: Int) -> (title: String, message: String) {
         let megabytes = max(10, Int((Double(missing) * 4.2 / 10).rounded()) * 10)
-        let minutes = max(1, (missing * 2 + 59) / 60)
+        let minutes = max(1, (missing * 4 + 59) / 60)
         let files = missing == 1 ? "1 file" : "\(missing) files"
         let time = minutes == 1 ? "about 1 minute" : "about \(minutes) minutes"
         return ("Download 90 days of price history?",
