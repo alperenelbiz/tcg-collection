@@ -49,7 +49,13 @@ xcodegen generate >/dev/null
 xcodebuild -project TCGCollection.xcodeproj -scheme TCGCollection -configuration Release \
   -destination 'platform=macOS' -derivedDataPath build build | grep -E "error|BUILD (SUCCEEDED|FAILED)"
 # "is running" never launches the app; a plain quit could start it (or the Debug build) to quit it.
-running() { [[ "$(osascript -e "application id \"$ID\" is running" 2>/dev/null)" == "true" ]]; }
+# Exit status of osascript is checked: a failed check is "cannot tell", never "not running".
+running() {
+  local out
+  out="$(osascript -e "application id \"$ID\" is running" 2>/dev/null)" || {
+    echo "Cannot tell if TCG Collection runs (osascript failed). Nothing was changed." >&2; exit 1; }
+  [[ "$out" == "true" ]]
+}
 if running; then
   osascript -e "tell application id \"$ID\" to quit" 2>/dev/null || true
   for _ in {1..20}; do running || break; sleep 0.5; done
@@ -58,15 +64,23 @@ if running; then
     exit 1
   fi
 fi
-# Copy first, remove after: a failed copy leaves the installed app as it was.
-rm -rf "$APP.new"
+# Copy first, then swap with the old copy kept aside until the new one is in place.
+rm -rf "$APP.new" "$APP.old"
 if ! ditto build/Build/Products/Release/TCGCollection2.app "$APP.new"; then
   rm -rf "$APP.new"
   echo "The copy failed. Nothing was changed." >&2
   exit 1
 fi
-rm -rf "$APP"
-mv "$APP.new" "$APP"
+if [[ -e "$APP" || -L "$APP" ]]; then
+  mv "$APP" "$APP.old" || { rm -rf "$APP.new"; echo "Could not move the installed app aside. Nothing was changed." >&2; exit 1; }
+fi
+if ! mv "$APP.new" "$APP"; then
+  [[ -e "$APP.old" ]] && mv "$APP.old" "$APP"
+  rm -rf "$APP.new"
+  echo "Could not put the new app in place; the old app was put back." >&2
+  exit 1
+fi
+rm -rf "$APP.old"
 echo "installed $APP"
 if [[ "$OLDID" == "$ID" ]]; then
   # Same bundle id as the new app: the quit above covered a running copy.

@@ -27,6 +27,8 @@ targets:
     postBuildScripts:
       - name: Set CFBundleName
         basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         script: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleName ${INFOPLIST_KEY_CFBundleName}" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
     settings:
