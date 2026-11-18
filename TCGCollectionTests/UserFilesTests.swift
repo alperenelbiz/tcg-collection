@@ -238,4 +238,33 @@ struct UserFilesTests {
         #expect(!library.hasGameFile)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["riftbound.prices.json", "settings.json"])
     }
+
+    /// A67: a file iCloud keeps with no content on the device is never read with a coordinated read (that read would
+    /// wait for the download): the read says not downloaded at once, and the file is left as it is.
+    @Test(.timeLimit(.minutes(1))) func aCloudOnlyFileThrowsNotDownloadedWithoutAWait() throws {
+        let file = tempDir().appending(path: "riftbound.json"), bytes = Data(#"{"version":1,"collection":[]}"#.utf8)
+        try bytes.write(to: file)
+        let cloudOnly = CloudOnlyMarks(["riftbound.json"]).check
+        #expect(throws: UserFilesError.notDownloaded) { try UserFiles.read(file, cloudOnly: cloudOnly) }
+        #expect(try Data(contentsOf: file) == bytes)
+    }
+
+    /// A67: no write replaces a cloud-only file: the create rule says it appeared, any other write that it is not
+    /// downloaded; its bytes stay.
+    @Test func aWriteNeverReplacesACloudOnlyFile() throws {
+        let file = tempDir().appending(path: "riftbound.json"), bytes = Data(#"{"version":1,"collection":[]}"#.utf8)
+        try bytes.write(to: file)
+        let cloudOnly = CloudOnlyMarks(["riftbound.json"]).check
+        let new = Data(#"{"version":1,"collection":[{"count":1}]}"#.utf8)
+        #expect(throws: UserFilesError.notDownloaded) {
+            try UserFiles.writeGameFile(new, to: file, creating: false, cloudOnly: cloudOnly)
+        }
+        #expect(throws: UserFilesError.appeared) {
+            try UserFiles.writeGameFile(new, to: file, creating: true, cloudOnly: cloudOnly)
+        }
+        #expect(throws: UserFilesError.notDownloaded) {
+            try UserFiles.writeChecked(new, to: file, creating: false, refusal: { _ in nil }, cloudOnly: cloudOnly)
+        }
+        #expect(try Data(contentsOf: file) == bytes)
+    }
 }

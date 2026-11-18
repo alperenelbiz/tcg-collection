@@ -69,6 +69,10 @@ final class UserLibrary {
     /// a folder switch) asks once for every known placeholder (`askForCloudFiles`). The iPhone's default asks
     /// `FileManager`; the Mac's is nil (its iCloud Drive downloads by itself): nothing is asked there.
     @ObservationIgnored var cloudDownload: (@MainActor (URL) -> Void)? = UserLibrary.defaultCloudDownload
+    /// A67: whether a file of the folder is only in iCloud, under its real name with no content on this device. Such a
+    /// file is never read with a coordinated read (it would wait for the download) or written over: it is asked for, its
+    /// game is refused as not downloaded, and it is read when it arrives. Always false on the Mac. Injected by the tests.
+    @ObservationIgnored var cloudOnly: @Sendable (URL) -> Bool = ICloudFiles.isCloudOnly
 
     /// Ruling G4 (b): after `askForCloudFiles` asked, the asked names are looked for on disk every `cloudCheckInterval`
     /// for at most `cloudCheckLimit` (a fallback for an arrival the watcher does not report). Injected by the tests.
@@ -463,7 +467,7 @@ final class UserLibrary {
         let error: (any Error)?
         do {
             error = await Self.store(try file.data(), at: folder.appending(path: "\(game).json"),
-                                     creating: creates.contains(game))
+                                     creating: creates.contains(game), cloudOnly: cloudOnly)
         } catch let encoding {
             error = encoding
         }
@@ -566,7 +570,7 @@ final class UserLibrary {
                 guard generation == self.loadGeneration else { return }
                 let url = folder.appending(path: "\(game.id).json")
                 await self.beforeRead?(url)
-                let result = await Self.read(url, now: self.now())
+                let result = await Self.read(url, now: self.now(), cloudOnly: self.cloudOnly)
                 guard generation == self.loadGeneration else { return }
                 self.apply(result, to: game.id)
             }
@@ -617,7 +621,7 @@ final class UserLibrary {
     func askForCloudFiles(in folder: URL) async -> [String] {
         guard let download = cloudDownload else { return [] }
         let names = await Self.listing(of: folder)
-        return ICloudFiles.request(folder: folder, names: names, download: download)
+        return ICloudFiles.request(folder: folder, names: names, download: download, cloudOnly: cloudOnly)
     }
 
     @concurrent private nonisolated static func listing(of folder: URL) async -> [String] {
@@ -628,13 +632,13 @@ final class UserLibrary {
     /// off the main actor; no network) go to `fileChanged`, each once. It ends when all arrived, at `cloudCheckLimit`,
     /// when another load or a folder switch began, or when the library is gone.
     private func startCloudCheck(_ asked: [String], in folder: URL, generation: Int) {
-        let interval = cloudCheckInterval, limit = cloudCheckLimit
+        let interval = cloudCheckInterval, limit = cloudCheckLimit, cloudOnly = cloudOnly
         cloudCheck = Task { [weak self] in
             var pending = asked
             let end = ContinuousClock.now + limit
             while !pending.isEmpty, ContinuousClock.now < end {
                 do { try await Task.sleep(for: min(interval, end - ContinuousClock.now)) } catch { return }
-                let arrived = await Self.existing(pending, in: folder)
+                let arrived = await Self.existing(pending, in: folder, cloudOnly: cloudOnly)
                 guard let self, !Task.isCancelled, self.loadGeneration == generation, self.folder == folder else { return }
                 for name in arrived {
                     pending.removeAll { $0 == name }
@@ -646,8 +650,13 @@ final class UserLibrary {
         }
     }
 
-    @concurrent private nonisolated static func existing(_ names: [String], in folder: URL) async -> [String] {
-        names.filter { FileManager.default.fileExists(atPath: folder.appending(path: $0).path) }
+    /// The names that are on this device now: the file is there and (A67) not only in iCloud.
+    @concurrent private nonisolated static func existing(_ names: [String], in folder: URL,
+                                                         cloudOnly: @Sendable (URL) -> Bool) async -> [String] {
+        names.filter {
+            let url = folder.appending(path: $0)
+            return FileManager.default.fileExists(atPath: url.path) && !cloudOnly(url)
+        }
     }
 
     /// Ruling G4 (a), the scene became active (the iPhone): every game whose last read found only a placeholder is read
@@ -753,7 +762,7 @@ final class UserLibrary {
         let before = changes[game, default: 0]
         let url = folder.appending(path: "\(game).json")
         await beforeRead?(url)
-        let result = await Self.read(url, now: now())
+        let result = await Self.read(url, now: now(), cloudOnly: cloudOnly)
         guard self.folder == folder else { return }
         // A change was made here during the read: memory is newer than what was read.
         guard changes[game, default: 0] == before else {
@@ -842,11 +851,13 @@ final class UserLibrary {
     }
 
     /// Settles conflict versions, then reads and decodes one game file.
-    @concurrent private nonisolated static func read(_ url: URL, now: Date) async -> GameRead {
+    /// A67: a file `cloudOnly` says is only in iCloud is not coordinated at all (its conflicts are settled once it is here).
+    @concurrent private nonisolated static func read(_ url: URL, now: Date,
+                                                     cloudOnly: @Sendable (URL) -> Bool) async -> GameRead {
         let name = url.lastPathComponent
         var backup: URL?, conflictFailure: String?
         do {
-            backup = try UserFiles.resolveConflicts(of: url, now: now)
+            if !cloudOnly(url) { backup = try UserFiles.resolveConflicts(of: url, now: now) }
         } catch {
             // Every version stays where it was; the current one is read, and the next read tries again.
             conflictFailure = "Two devices changed \(name) and the older version could not be saved (\(error.localizedDescription))."
@@ -854,7 +865,7 @@ final class UserLibrary {
         let content: GameRead.Content
         var unreadableDecks = 0
         do {
-            if let data = try UserFiles.read(url) {
+            if let data = try UserFiles.read(url, cloudOnly: cloudOnly) {
                 let file = try GameUserFile(data: data)
                 content = .file(file)
                 unreadableDecks = Self.deckElements(in: data) - file.decks.count
@@ -888,9 +899,10 @@ final class UserLibrary {
         }
     }
 
-    @concurrent private nonisolated static func store(_ data: Data, at url: URL, creating: Bool) async -> (any Error)? {
+    @concurrent private nonisolated static func store(_ data: Data, at url: URL, creating: Bool,
+                                                      cloudOnly: @Sendable (URL) -> Bool) async -> (any Error)? {
         do {
-            try UserFiles.writeGameFile(data, to: url, creating: creating)
+            try UserFiles.writeGameFile(data, to: url, creating: creating, cloudOnly: cloudOnly)
             return nil
         } catch {
             return error

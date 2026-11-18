@@ -202,6 +202,75 @@ struct UserLibraryTests {
         #expect(mac.problem(game: "cyberpunk") == "cyberpunk.json is not downloaded from iCloud yet.")
     }
 
+    /// A67: three game files, one kept by iCloud with no content on the device. The load ends (it never waits for the
+    /// download), that game is refused as not downloaded and asked for once, the other two read.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aCloudOnlyGameFileIsAskedForAndTheOthersRead() async throws {
+        let dir = tempDir()
+        for game in ["riftbound", "yu-gi-oh", "cyberpunk"] { try ownersFile.write(to: dir.appending(path: "\(game).json")) }
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        lib.cloudOnly = CloudOnlyMarks(["yu-gi-oh.json"]).check
+        var asked: [String] = [], events: [StepLogEvent] = []
+        lib.cloudDownload = { asked.append($0.lastPathComponent) }
+        lib.cloudCheckLimit = .milliseconds(1)
+        lib.stepLog = { events.append($0) }
+        await lib.load()
+        #expect(lib.isLoaded)
+        #expect(lib.problem(game: "yu-gi-oh") == "yu-gi-oh.json is not downloaded from iCloud yet.")
+        #expect(!lib.canChange(game: "yu-gi-oh"))
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2]); #expect(lib.canChange(game: "riftbound"))
+        #expect(lib.rows(game: "cyberpunk").map(\.count) == [2]); #expect(lib.canChange(game: "cyberpunk"))
+        #expect(asked == ["yu-gi-oh.json"])
+        guard case .folderRead(let games, let notDownloaded, _) = events.first else {
+            Issue.record("no folder-read line: \(events)"); return
+        }
+        #expect(games == 2); #expect(notDownloaded == 1)
+        #expect(Array(events.dropFirst()) == [.fileNotDownloaded(file: .game("yu-gi-oh"))])
+    }
+
+    /// A67: the disk check counts a cloud-only name as arrived only once its content is on the device; then the game is
+    /// read without a relaunch, with one `file-arrived` line.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aCloudOnlyFileThatBecomesLocalIsReadByTheDiskCheck() async throws {
+        let dir = tempDir()
+        for game in ["riftbound", "yu-gi-oh", "cyberpunk"] { try ownersFile.write(to: dir.appending(path: "\(game).json")) }
+        let marks = CloudOnlyMarks(["yu-gi-oh.json"])
+        let lib = UserLibrary(folder: dir, watcher: FakeWatcher())             // the watcher never fires
+        lib.cloudOnly = marks.check
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(50)
+        lib.cloudCheckLimit = .seconds(50)
+        var events: [StepLogEvent] = []
+        lib.stepLog = { events.append($0) }
+        await lib.load()
+        try await Task.sleep(for: .milliseconds(200))                           // still cloud-only: not counted as arrived
+        await lib.flush()
+        #expect(lib.problem(game: "yu-gi-oh") == "yu-gi-oh.json is not downloaded from iCloud yet.")
+        #expect(!events.contains(.fileArrived(file: .game("yu-gi-oh"))))
+        marks.set([])
+        let start = ContinuousClock.now
+        await lib.cloudCheck?.value
+        await lib.flush()
+        #expect(ContinuousClock.now - start < .seconds(2))
+        #expect(lib.rows(game: "yu-gi-oh").map(\.count) == [2])
+        #expect(lib.canChange(game: "yu-gi-oh"))
+        lib.readNotDownloadedAgain(); await lib.flush()
+        #expect(events.filter { $0 == .fileArrived(file: .game("yu-gi-oh")) }.count == 1)
+    }
+
+    /// A67: a change of a game whose file is cloud-only is refused, and the file is never written over.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aChangeOfACloudOnlyGameIsRefused() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json")
+        try ownersFile.write(to: file)
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        lib.cloudOnly = CloudOnlyMarks(["riftbound.json"]).check
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckLimit = .milliseconds(1)
+        await lib.load()
+        #expect(!lib.canChange(game: "riftbound"))
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()
+        #expect(lib.rows(game: "riftbound").isEmpty)
+        #expect(try Data(contentsOf: file) == ownersFile)
+    }
+
     /// Ruling G4 (b): no watcher report; the real file appears while the disk check runs: it is read within one interval,
     /// and the check ends at once (all asked names arrived), long before its limit.
     @MainActor @Test(.timeLimit(.minutes(1))) func anArrivalIsFoundByTheDiskCheckWithoutAReport() async throws {

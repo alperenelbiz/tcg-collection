@@ -160,4 +160,19 @@ struct HistoryFilesTests {
         _ = try HistoryFiles.read(game: "cyberpunk", in: dir)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["riftbound.prices.json"])
     }
+
+    /// A67: a history file with no content on the device reads as not downloaded, and a write leaves it as it is.
+    @Test(.timeLimit(.minutes(1))) func aCloudOnlyHistoryFileReadsAsNotDownloaded() throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.prices.json")
+        try HistoryFiles.write(sample, game: "riftbound", in: dir, creating: true)
+        let bytes = try Data(contentsOf: file)
+        let cloudOnly = CloudOnlyMarks(["riftbound.prices.json"]).check
+        #expect(try HistoryFiles.read(game: "riftbound", in: dir, cloudOnly: cloudOnly) == .notDownloaded)
+        #expect(throws: UserFilesError.notDownloaded) {
+            try HistoryFiles.write(PriceHistory(days: [], products: [:]), game: "riftbound", in: dir, creating: false,
+                                   cloudOnly: cloudOnly)
+        }
+        #expect(try Data(contentsOf: file) == bytes)
+        #expect(try HistoryFiles.read(game: "riftbound", in: dir) == .history(sample))
+    }
 }

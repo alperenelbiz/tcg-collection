@@ -40,4 +40,40 @@ struct ICloudFilesTests {
         let names = ICloudFiles.request(folder: gone, names: ICloudFiles.listing(of: gone)) { asked.append($0) }
         #expect(names.isEmpty); #expect(asked.isEmpty)
     }
+
+    /// A67: a known file iCloud keeps under its real name with no content on the device is asked for like a
+    /// placeholder; an unknown name is not, and each name is asked once, in listing order.
+    @Test func aCloudOnlyKnownFileIsAskedFor() {
+        let dir = tempDir()
+        var asked: [String] = []
+        let names = ICloudFiles.request(folder: dir, names: ["riftbound.json", ".yu-gi-oh.json.icloud", "notes.txt"],
+                                        download: { asked.append($0.lastPathComponent) },
+                                        cloudOnly: { $0.lastPathComponent == "riftbound.json" || $0.lastPathComponent == "notes.txt" })
+        #expect(names == ["riftbound.json", "yu-gi-oh.json"])
+        #expect(asked == ["riftbound.json", "yu-gi-oh.json"])
+    }
+
+    #if os(macOS)
+    /// A67: the Mac's iCloud Drive downloads by itself: its check never says cloud-only, so its reads are the old path.
+    @Test func theMacNeverSaysCloudOnly() throws {
+        let file = tempDir().appending(path: "riftbound.json")
+        try Data("{}".utf8).write(to: file)
+        #expect(!ICloudFiles.isCloudOnly(file))
+        #expect(!ICloudFiles.isCloudOnly(tempDir().appending(path: "gone.json")))
+    }
+    #endif
+}
+
+/// A67 (tests): marks real temporary files as cloud-only by name, for the injected `cloudOnly` check.
+final class CloudOnlyMarks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: Set<String>
+
+    init(_ names: Set<String> = []) { self.names = names }
+
+    func set(_ names: Set<String>) { lock.withLock { self.names = names } }
+
+    var check: @Sendable (URL) -> Bool {
+        { [self] url in lock.withLock { names.contains(url.lastPathComponent) } }
+    }
 }

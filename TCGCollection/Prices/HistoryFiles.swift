@@ -36,12 +36,14 @@ nonisolated enum HistoryFiles {
     /// Settles the file's conflict versions first (H4: the newest by date wins, the others are removed with no backup and
     /// no notice; a current file of a newer version is left with all its versions), then reads it. Throws only for an
     /// IO error (a failed read, a conflict that could not be settled).
-    static func read(game: String, in folder: URL) throws -> Read {
+    /// A67: a file `cloudOnly` says is only in iCloud reads as `notDownloaded` before any coordination.
+    static func read(game: String, in folder: URL, cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws -> Read {
         let url = folder.appending(path: name(game: game))
-        _ = try UserFiles.settleConflicts(of: url, plan: conflictPlan, backupsAt: nil)
         let data: Data?
         do {
-            data = try UserFiles.read(url)
+            try UserFiles.refuseIfCloudOnly(url, cloudOnly: cloudOnly)
+            _ = try UserFiles.settleConflicts(of: url, plan: conflictPlan, backupsAt: nil)
+            data = try UserFiles.read(url, cloudOnly: cloudOnly)
         } catch UserFilesError.notDownloaded {
             return .notDownloaded
         }
@@ -59,9 +61,10 @@ nonisolated enum HistoryFiles {
     /// `creating` and any file or placeholder there throws `UserFilesError.appeared`; a file of a newer version throws
     /// `notRewritable(newerVersion: true)`; a placeholder throws `notDownloaded`. Nothing is written then. It never makes
     /// a folder.
-    static func write(_ history: PriceHistory, game: String, in folder: URL, creating: Bool) throws {
+    static func write(_ history: PriceHistory, game: String, in folder: URL, creating: Bool,
+                      cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws {
         try UserFiles.writeChecked(history.data(), to: folder.appending(path: name(game: game)), creating: creating,
-                                   refusal: refusal)
+                                   refusal: refusal, cloudOnly: cloudOnly)
     }
 
     /// Why a history file with these bytes must not be replaced: only a newer version (H3). Nil when it may be.

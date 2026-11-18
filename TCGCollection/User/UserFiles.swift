@@ -36,7 +36,10 @@ nonisolated enum UserFiles {
     // MARK: Reading and writing
 
     /// The file's contents; nil when there is no file.
-    static func read(_ url: URL) throws -> Data? {
+    /// A67: a file `cloudOnly` says is only in iCloud is asked for and throws `notDownloaded` before any coordination (a
+    /// coordinated read of it would wait for the download).
+    static func read(_ url: URL, cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws -> Data? {
+        try refuseIfCloudOnly(url, cloudOnly: cloudOnly)
         let data = try coordinate(reading: url) { url -> Data? in
             do {
                 return try Data(contentsOf: url)
@@ -64,15 +67,19 @@ nonisolated enum UserFiles {
     /// `creating` (the app has read no file of the game: the write would make it): any file or placeholder of that name on
     /// disk at that moment throws `appeared` and nothing is written. The check and the write are one coordinated write, so
     /// a file that arrives late is never replaced by a new one (task 5 fix round 1 (c)).
-    static func writeGameFile(_ data: Data, to url: URL, creating: Bool = false) throws {
-        try writeChecked(data, to: url, creating: creating, refusal: refusal)
+    static func writeGameFile(_ data: Data, to url: URL, creating: Bool = false,
+                              cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws {
+        try writeChecked(data, to: url, creating: creating, refusal: refusal, cloudOnly: cloudOnly)
     }
 
     /// `writeGameFile`'s rules for any file of the folder (phase 5A: the history file), with the file's own `refusal`:
     /// why the bytes on disk at that moment must not be replaced (nil: they may). `creating` throws `appeared` for any
     /// file or placeholder of that name; else a placeholder throws `notDownloaded`. The check and the write are one
-    /// coordinated write. It never makes a folder.
-    static func writeChecked(_ data: Data, to url: URL, creating: Bool, refusal: (Data) -> UserFilesError?) throws {
+    /// coordinated write. It never makes a folder. A67: a file `cloudOnly` says is only in iCloud counts as a
+    /// placeholder, decided before any coordination (`appeared` when `creating`, else `notDownloaded`).
+    static func writeChecked(_ data: Data, to url: URL, creating: Bool, refusal: (Data) -> UserFilesError?,
+                             cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws {
+        if cloudOnly(url), let reason = placeholderRule(creating: creating, onDisk: nil, away: true) { throw reason }
         try coordinate(writing: url, options: .forReplacing) { url in
             let onDisk: Data?
             do {
@@ -80,14 +87,9 @@ nonisolated enum UserFiles {
             } catch where isNoSuchFile(error) {
                 onDisk = nil
             }
-            if creating, onDisk != nil || FileManager.default.fileExists(atPath: placeholder(of: url).path) {
-                throw UserFilesError.appeared
-            }
-            if let onDisk {
-                if let reason = refusal(onDisk) { throw reason }
-            } else if FileManager.default.fileExists(atPath: placeholder(of: url).path) {
-                throw UserFilesError.notDownloaded
-            }
+            let away = FileManager.default.fileExists(atPath: placeholder(of: url).path)
+            if let reason = placeholderRule(creating: creating, onDisk: onDisk, away: away) { throw reason }
+            if let onDisk, let reason = refusal(onDisk) { throw reason }
             try data.write(to: url, options: .atomic)
         }
     }
@@ -275,6 +277,22 @@ nonisolated enum UserFiles {
         let error = error as NSError
         if error.domain == NSCocoaErrorDomain { return [NSFileReadNoSuchFileError, NSFileNoSuchFileError].contains(error.code) }
         return error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT)
+    }
+
+    /// A67: a file `cloudOnly` says is only in iCloud is asked for once more and throws `notDownloaded`.
+    static func refuseIfCloudOnly(_ url: URL, cloudOnly: (URL) -> Bool) throws {
+        guard cloudOnly(url) else { return }
+        try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        throw UserFilesError.notDownloaded
+    }
+
+    /// The one place where a write decides on a file that is not on this device (`away`: iCloud keeps it as a
+    /// placeholder, or, A67, under its real name with no content). `creating` and any file or such a file there:
+    /// `appeared`; no bytes on disk and such a file: `notDownloaded` (writing would replace it on every device).
+    private static func placeholderRule(creating: Bool, onDisk: Data?, away: Bool) -> UserFilesError? {
+        if creating, onDisk != nil || away { return .appeared }
+        if onDisk == nil, away { return .notDownloaded }
+        return nil
     }
 
     /// Where iCloud keeps a file that is not downloaded: `.riftbound.json.icloud`.

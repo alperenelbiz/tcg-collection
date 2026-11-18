@@ -23,12 +23,40 @@ nonisolated enum ICloudFiles {
         (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
     }
 
-    /// Asks `download` once for each known placeholder of `names`, by the file's real URL in `folder`. Returns the names
-    /// asked for.
+    /// A67: whether iCloud keeps the file under its real name with no content on this device (a "dataless" file: its
+    /// downloading status is not downloaded). A coordinated read of such a file waits for the download, with no end
+    /// when there is no connection, so it is treated as a placeholder. Any error, or a file that is not ubiquitous, is
+    /// false. The Mac's iCloud Drive downloads by itself: there it is always false, with no lookup.
+    @Sendable static func isCloudOnly(_ url: URL) -> Bool {
+        #if os(iOS)
+        guard let values = try? url.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
+              values.isUbiquitousItem == true else { return false }
+        return values.ubiquitousItemDownloadingStatus == .notDownloaded
+        #else
+        false
+        #endif
+    }
+
+    /// Asks `download` once for each known file of `names` that is not on this device: a placeholder (by its real name),
+    /// or a real name `cloudOnly` says is only in iCloud (A67). By the file's real URL in `folder`, in listing order, each
+    /// name once. Returns the names asked for.
     @discardableResult
-    static func request(folder: URL, names: [String], download: (URL) -> Void) -> [String] {
-        let asked = placeholders(in: names, known: known)
-        for name in asked { download(folder.appending(path: name)) }
+    static func request(folder: URL, names: [String], download: (URL) -> Void,
+                        cloudOnly: (URL) -> Bool = isCloudOnly) -> [String] {
+        var asked: [String] = []
+        for name in names {
+            let real: String
+            if let placeholder = placeholders(in: [name], known: known).first {
+                real = placeholder
+            } else if known.contains(name), cloudOnly(folder.appending(path: name)) {
+                real = name
+            } else {
+                continue
+            }
+            guard !asked.contains(real) else { continue }
+            asked.append(real)
+            download(folder.appending(path: real))
+        }
         return asked
     }
 }
