@@ -43,6 +43,7 @@ nonisolated enum HistoryFiles {
         do {
             try UserFiles.refuseIfCloudOnly(url, cloudOnly: cloudOnly)
             _ = try UserFiles.settleConflicts(of: url, plan: conflictPlan, backupsAt: nil)
+            // The check runs again here on purpose: a file iOS evicts during the settle is still never coordinated.
             data = try UserFiles.read(url, cloudOnly: cloudOnly)
         } catch UserFilesError.notDownloaded {
             return .notDownloaded

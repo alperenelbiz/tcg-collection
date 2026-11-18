@@ -103,6 +103,15 @@ print "installed $BUNDLE_ID on $udid"
 if (( launch_console )); then
   mkdir -p build/iphone
   print "console log: $console_log"
-  # pipefail (`set -e -o pipefail` at the top): the exit status is devicectl's, not the filter's.
+  # pipefail (`set -e -o pipefail` at the top): a failed devicectl fails the pipeline, not only a failed filter. `set +e`
+  # around it so a failure is said with the log's end before the script exits with the same status.
+  set +e
   "${launch_cmd[@]}" 2>&1 | "${filter_cmd[@]}"
+  launch_status=$?
+  set -e
+  if (( launch_status != 0 )); then
+    print -u2 "devicectl failed (exit $launch_status): see $console_log"
+    tail -n 10 "$console_log" >&2
+    exit $launch_status
+  fi
 fi
