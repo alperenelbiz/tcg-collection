@@ -95,9 +95,14 @@ nonisolated enum UserFiles {
     }
 
     /// Writes `settings.json` (`{"version": 1}`) into a folder that has none. The folder must exist; it is not made.
-    static func writeSettingsIfMissing(in folder: URL) throws {
+    /// A file that is only in iCloud (a placeholder, or cloud-only: A67) is there: nothing is written, nothing thrown.
+    static func writeSettingsIfMissing(in folder: URL, cloudOnly: (URL) -> Bool = ICloudFiles.isCloudOnly) throws {
         let url = folder.appending(path: settingsName)
-        guard try read(url) == nil else { return }
+        do {
+            guard try read(url, cloudOnly: cloudOnly) == nil else { return }
+        } catch UserFilesError.notDownloaded {
+            return
+        }
         var data = try JSONSerialization.data(withJSONObject: ["version": 1], options: [.prettyPrinted, .sortedKeys])
         data.append(0x0A)
         try write(data, to: url)

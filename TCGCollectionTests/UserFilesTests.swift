@@ -267,4 +267,17 @@ struct UserFilesTests {
         }
         #expect(try Data(contentsOf: file) == bytes)
     }
+
+    /// A67 fix round 1: a `settings.json` that is only in iCloud (cloud-only or a placeholder) is there: nothing is
+    /// written and nothing is thrown, so a folder choice does not fail.
+    @Test func aSettingsFileThatIsNotOnTheDeviceIsLeftAlone() throws {
+        let dir = tempDir(), settings = dir.appending(path: "settings.json"), bytes = Data("{\"version\":1,\"x\":2}".utf8)
+        try bytes.write(to: settings)
+        try UserFiles.writeSettingsIfMissing(in: dir, cloudOnly: CloudOnlyMarks(["settings.json"]).check)
+        #expect(try Data(contentsOf: settings) == bytes)
+        let other = tempDir(), placeholder = other.appending(path: ".settings.json.icloud")
+        try Data().write(to: placeholder)
+        try UserFiles.writeSettingsIfMissing(in: other)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: other.path) == [".settings.json.icloud"])
+    }
 }
