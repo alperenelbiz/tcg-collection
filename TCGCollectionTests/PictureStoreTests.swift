@@ -143,9 +143,14 @@ struct PictureStoreTests {
         CachedPicture(name: name, bytes: bytes, used: at(days))
     }
 
-    @Test func theLimitIsThreeGigabytes() {
+    @Test func theCacheLimitPerPlatform() {                              // A63
+        #if os(iOS)
+        #expect(PictureStore.cacheLimit == 1 * 1024 * 1024 * 1024)
+        #expect(PictureStore.cacheLimit == 1_073_741_824)
+        #else
         #expect(PictureStore.cacheLimit == 3 * 1024 * 1024 * 1024)
         #expect(PictureStore.cacheLimit == 3_221_225_472)
+        #endif
     }
 
     @Test func underTheLimitNothingIsDeleted() {

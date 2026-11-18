@@ -77,7 +77,14 @@ struct TCGCollectionApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             // The iPhone: a change made just before the app goes away is written now. (The Mac waits in AppDelegate.)
-            if phase == .background, let library = model?.library { Task { await library.flush() } }
+            guard phase == .background, let library = model?.library else { return }
+            #if os(iOS)
+            // A64: iOS gives the app extra time for the flush and suspends it once the task ends. The task ends when the
+            // flush ends, or when the time runs out first (the change may then be lost; the next launch reads the file).
+            Task { await Self.flushInBackground(library) }
+            #else
+            Task { await library.flush() }
+            #endif
         }
         .commands {
             CommandGroup(after: .appSettings) {
@@ -110,6 +117,22 @@ struct TCGCollectionApp: App {
         .windowResizability(.contentSize)
         #endif
     }
+
+    #if os(iOS)
+    /// The library's flush inside a background task named "Saving your collection" (A64). Both closures run on the main
+    /// actor: `BackgroundSave.run` runs on its caller's, and iOS calls the expiration handler on the main thread.
+    private static func flushInBackground(_ library: UserLibrary) async {
+        await BackgroundSave.run(
+            start: { expiration in
+                MainActor.assumeIsolated {
+                    UIApplication.shared.beginBackgroundTask(withName: "Saving your collection",
+                                                             expirationHandler: expiration)
+                }
+            },
+            end: { task in MainActor.assumeIsolated { UIApplication.shared.endBackgroundTask(task) } },
+            work: { await library.flush() })
+    }
+    #endif
 
     #if DEBUG
     /// `-catalogReport YES`: the report goes to standard output, then the app quits.

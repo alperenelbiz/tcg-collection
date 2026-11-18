@@ -158,8 +158,12 @@ actor PictureStore {
 
     // MARK: The cache limit
 
-    /// At most this many bytes of pictures stay in the folder after a cleaning: 3 GB.
+    /// At most this many bytes of pictures stay in the folder after a cleaning: 3 GB on the Mac, 1 GB on the iPhone (A63).
+    #if os(iOS)
+    static let cacheLimit = 1 * 1024 * 1024 * 1024
+    #else
     static let cacheLimit = 3 * 1024 * 1024 * 1024
+    #endif
     /// A cleaning over the limit deletes until the pictures take at most this share of it.
     static let cleanedShare = 0.9
 
