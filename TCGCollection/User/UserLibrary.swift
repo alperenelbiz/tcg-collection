@@ -521,6 +521,7 @@ final class UserLibrary {
         guard let folder else { return }
         loadGeneration += 1
         let generation = loadGeneration
+        let began = ContinuousClock.now
         cloudCheck?.cancel()
         cloudCheck = nil
         isLoaded = false
@@ -545,6 +546,7 @@ final class UserLibrary {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
             version += 1
+            StepLog.note(.folderMissing)
             return
         }
         folderIsMissing = false
@@ -566,6 +568,24 @@ final class UserLibrary {
         guard generation == loadGeneration else { return }
         isLoaded = true
         version += 1
+        noteFolderRead(asked: asked, seconds: StepLog.seconds(ContinuousClock.now - began))
+    }
+
+    /// A65: the folder's read in one line, then one line per known file that is only in iCloud (a game file by its read,
+    /// the other files by the request: their reads are not the library's).
+    private func noteFolderRead(asked: [String], seconds: Double) {
+        let notDownloaded = Games.all.map(\.id).filter { isNotDownloaded($0) }
+        StepLog.note(.folderRead(games: Games.all.filter { files[$0.id] != nil }.count, notDownloaded: notDownloaded.count,
+                                 seconds: seconds))
+        for game in notDownloaded { StepLog.note(.fileNotDownloaded(file: .game(game))) }
+        for file in asked.compactMap(StepLogFile.init(named:)) where !file.isGameFile {
+            StepLog.note(.fileNotDownloaded(file: file))
+        }
+    }
+
+    /// The game's last read found only an iCloud placeholder.
+    private func isNotDownloaded(_ game: String) -> Bool {
+        refused[game] == Self.refusedText("\(game).json", .notDownloaded)
     }
 
     /// A62: asks iCloud once for every known file of `folder` that is only a placeholder (game files, history files,
@@ -597,6 +617,8 @@ final class UserLibrary {
                 guard let self, !Task.isCancelled, self.loadGeneration == generation, self.folder == folder else { return }
                 for name in arrived {
                     pending.removeAll { $0 == name }
+                    // A65: a game file's arrival is said by its read (`apply`), the other files' here.
+                    if let file = StepLogFile(named: name), !file.isGameFile { StepLog.note(.fileArrived(file: file)) }
                     self.fileChanged(folder.appending(path: name))
                 }
             }
@@ -613,7 +635,7 @@ final class UserLibrary {
     func readNotDownloadedAgain() -> Task<Void, Never>? {
         guard let folder, readsAgain else { return nil }
         var last: Task<Void, Never>?
-        for game in Games.all.map(\.id) where refused[game] == Self.refusedText("\(game).json", .notDownloaded) {
+        for game in Games.all.map(\.id) where isNotDownloaded(game) {
             last = queueReload(game, in: folder)
         }
         return last
@@ -730,6 +752,8 @@ final class UserLibrary {
         unreadableDeckCounts[game] = result.unreadableDecks
         switch result.content {
         case .file(var file):
+            // A65: a game file that was only in iCloud is read now.
+            if isNotDownloaded(game) { StepLog.note(.fileArrived(file: .game(game))) }
             creates.remove(game)
             let lost = clampForSale(&file)
             // A read that changes nothing on screen (the same file read again) says nothing again. With no file of the game

@@ -210,7 +210,13 @@ extension AppModel {
         guard !plan.isEmpty, !backfillStopped else { return true }
         var completed = true
         backfillProgress = BackfillProgress(done: 0, total: plan.count)
-        defer { backfillProgress = nil }
+        // A65: one line at the start, one per 10 days, one at the end.
+        StepLog.note(.backfillStart(days: plan.count))
+        defer {
+            StepLog.note(.backfillEnd(done: backfillProgress?.done ?? 0, total: plan.count,
+                                      result: backfillStopped ? .stopped : completed ? .done : .cut))
+            backfillProgress = nil
+        }
         let lane = priceSync.downloads, gate = archiveGate
         var sincePass = 0
         for day in plan {
@@ -256,6 +262,7 @@ extension AppModel {
             sincePass += 1
             if sincePass >= 10 {
                 sincePass = 0
+                StepLog.note(.backfillProgress(done: backfillProgress?.done ?? 0, total: plan.count))
                 requestHistory()
             }
         }

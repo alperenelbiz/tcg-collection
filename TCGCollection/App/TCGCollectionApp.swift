@@ -141,16 +141,24 @@ struct TCGCollectionApp: App {
     /// closures run on the main actor: `begin` runs `start` at once on its caller's, and iOS calls the expiration handler
     /// on the main thread.
     private static func beginBackgroundSave() -> BackgroundSave.Session {
-        BackgroundSave.begin(
+        // A65: a line when the task begins, when its time runs out, and when it ends (with its length).
+        let began = ContinuousClock.now
+        return BackgroundSave.begin(
             start: { expiration in
                 MainActor.assumeIsolated {
-                    UIApplication.shared.beginBackgroundTask(withName: "Saving your collection",
-                                                             expirationHandler: expiration)
+                    StepLog.note(.backgroundSaveStart)
+                    return UIApplication.shared.beginBackgroundTask(withName: "Saving your collection", expirationHandler: {
+                        StepLog.note(.backgroundSaveExpired)
+                        expiration()
+                    })
                 }
             },
             end: { task in
                 // `finish` is called on the main actor (the flush's task inherits it); the expiration handler too.
-                MainActor.assumeIsolated { UIApplication.shared.endBackgroundTask(task) }
+                MainActor.assumeIsolated {
+                    UIApplication.shared.endBackgroundTask(task)
+                    StepLog.note(.backgroundSaveEnd(seconds: StepLog.seconds(ContinuousClock.now - began)))
+                }
             })
     }
     #endif

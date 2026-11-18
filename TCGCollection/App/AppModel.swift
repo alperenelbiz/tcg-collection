@@ -845,7 +845,11 @@ final class AppModel {
         // Final fix wave, item 7: every archive day of the window found on disk is a day received, also one whose decode
         // fails (its archive is kept): it is recorded before the decodes, so an outside cleaner that deletes it later
         // never leads to a download.
-        await priceSync.downloads.recordHeld(Set(await archiveGate.archiveDays(in: window)))
+        let archives = Set(await archiveGate.archiveDays(in: window))
+        await priceSync.downloads.recordHeld(archives)
+        // A65: one line at the start and one at the end, never per day.
+        StepLog.note(.migrationStart(archives: archives.count))
+        let began = ContinuousClock.now, writtenBefore = await archiveGate.writtenCount
         await archiveGate.migrate(window: window, games: Games.all) { [weak self] day, decoded in
             #if DEBUG
             // The report's time per day, from one migrated day to the next: the gate's whole `decodeDay` (decode, write,
@@ -861,6 +865,8 @@ final class AppModel {
         // phase 5B's record existed is recorded at the first launch of this build.
         let held = await archiveGate.dayFiles().filter { window.contains($0) }
         await priceSync.downloads.recordHeld(held)
+        let decodedDays = await archiveGate.writtenCount - writtenBefore
+        StepLog.note(.migrationEnd(days: decodedDays, seconds: StepLog.seconds(ContinuousClock.now - began)))
     }
 
     #if DEBUG
@@ -1615,6 +1621,11 @@ final class AppModel {
     }
 
     private func launch() async {
+        #if os(iOS)
+        StepLog.note(.launch(platform: .iphone, build: Self.isDebugBuild ? .debug : .release))
+        #else
+        StepLog.note(.launch(platform: .mac, build: Self.isDebugBuild ? .debug : .release))
+        #endif
         watchSaleNotices()
         watchHistoryChanges()
         watchBackfillGates()
@@ -1998,6 +2009,7 @@ final class AppModel {
     func sceneWentToBackground() {
         guard sceneIsActive else { return }
         sceneIsActive = false
+        StepLog.note(.background(syncCut: syncTask != nil || turnOnTask != nil, backfillCut: backfillTask != nil))
         backfillTask?.cancel()
         syncTask?.cancel()          // `syncFollowedGames` records the cut (`syncCut`) when it ends
         turnOnTask?.cancel()
@@ -2011,6 +2023,7 @@ final class AppModel {
         readCloudFilesAgain()
         guard !sceneIsActive else { return }
         sceneIsActive = true
+        StepLog.note(.resume)
         resumeCutWork()
         runBackfill()
     }
@@ -2155,7 +2168,12 @@ final class AppModel {
         // flight ends first); the step's own 4 requests are then the only ones.
         let lane = priceSync.downloads
         await lane.pause()
+        // A65: one line at the step's start and one at its end, never one per set.
+        let ids = games.map(\.id), began = ContinuousClock.now
+        StepLog.note(.catalogStart(games: ids))
         let done = await syncCatalogSteps(of: games, now: now, rebuild: rebuild)
+        StepLog.note(.catalogEnd(games: ids, sets: done.fetched, failed: done.failed, listsFailed: done.failedSetLists,
+                                 cut: Task.isCancelled, seconds: StepLog.seconds(ContinuousClock.now - began)))
         await lane.resume()
         return done
     }
@@ -2214,6 +2232,14 @@ final class AppModel {
     /// Nil when the prices are fine or there was nothing new; else the status text. A failure keeps the old prices.
     /// The outcome shows at once; the final status line repeats a failure.
     private func syncPrices(now: Date) async -> String? {
+        // A65: one line at the start, one at the end with the price day of the game on screen.
+        StepLog.note(.priceStart)
+        let began = ContinuousClock.now
+        var outcome = StepLogEvent.Result.ok
+        defer {
+            StepLog.note(.priceEnd(day: prices.day(game: gameID), result: outcome,
+                                   seconds: StepLog.seconds(ContinuousClock.now - began)))
+        }
         status = .syncing(StatusText.prices)
         // K9 (review round 1, finding 7): App Nap does not slow the price step's download and decode.
         let end = backfillActivity(Self.activityReason)
@@ -2235,7 +2261,11 @@ final class AppModel {
             return nil
         } catch {
             // Task 1B: cut by the background: no failure (the lane did not count the day); the step runs again.
-            if Task.isCancelled { return nil }
+            if Task.isCancelled {
+                outcome = .cut
+                return nil
+            }
+            outcome = .failed
             // Review round 2, B: a request that threw stops the 90-day download for the run; the button and the menu
             // item go off at once.
             if await priceSync.downloads.backgroundStopped { backfillStopped = true }
