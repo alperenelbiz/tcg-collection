@@ -76,6 +76,11 @@ final class UserLibrary {
     @ObservationIgnored var cloudCheckLimit: Duration = .seconds(120)
     /// The running disk check of the current load, or nil (none asked, or it ended). A new load or a folder switch ends it.
     @ObservationIgnored private(set) var cloudCheck: Task<Void, Never>?
+    /// A65: where the step lines go (`StepLog.note`; the tests collect them).
+    @ObservationIgnored var stepLog: (StepLogEvent) -> Void = StepLog.note
+    /// Ruling G5 (3): the names of history files and `settings.json` asked of iCloud (or held as not downloaded by the
+    /// model) whose arrival is not said yet. A game file's arrival is said by its read.
+    @ObservationIgnored private var cloudPending: Set<String> = []
 
     static var defaultCloudDownload: (@MainActor (URL) -> Void)? {
         #if os(iOS)
@@ -524,6 +529,7 @@ final class UserLibrary {
         let began = ContinuousClock.now
         cloudCheck?.cancel()
         cloudCheck = nil
+        cloudPending = []
         isLoaded = false
         // A queued write keeps its state: it is written before memory is read again.
         await flush()
@@ -546,7 +552,7 @@ final class UserLibrary {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             folderIsMissing = true
             version += 1
-            StepLog.note(.folderMissing)
+            stepLog(.folderMissing)
             return
         }
         folderIsMissing = false
@@ -575,12 +581,27 @@ final class UserLibrary {
     /// the other files by the request: their reads are not the library's).
     private func noteFolderRead(asked: [String], seconds: Double) {
         let notDownloaded = Games.all.map(\.id).filter { isNotDownloaded($0) }
-        StepLog.note(.folderRead(games: Games.all.filter { files[$0.id] != nil }.count, notDownloaded: notDownloaded.count,
+        stepLog(.folderRead(games: Games.all.filter { files[$0.id] != nil }.count, notDownloaded: notDownloaded.count,
                                  seconds: seconds))
-        for game in notDownloaded { StepLog.note(.fileNotDownloaded(file: .game(game))) }
-        for file in asked.compactMap(StepLogFile.init(named:)) where !file.isGameFile {
-            StepLog.note(.fileNotDownloaded(file: file))
+        for game in notDownloaded { stepLog(.fileNotDownloaded(file: .game(game))) }
+        for name in asked {
+            guard let file = StepLogFile(named: name), !file.isGameFile else { continue }
+            stepLog(.fileNotDownloaded(file: file))
+            cloudPending.insert(name)
         }
+    }
+
+    /// Ruling G5 (3): a history file the model read as only a placeholder: its arrival is said once, when it comes.
+    func expectCloudArrival(_ name: String) {
+        guard let file = StepLogFile(named: name), !file.isGameFile else { return }
+        cloudPending.insert(name)
+    }
+
+    /// Ruling G5 (3): the file `name` is on the device: `file-arrived` once, when it was asked for or held as not
+    /// downloaded; nothing for any other name.
+    func noteCloudArrival(_ name: String) {
+        guard cloudPending.remove(name) != nil, let file = StepLogFile(named: name) else { return }
+        stepLog(.fileArrived(file: file))
     }
 
     /// The game's last read found only an iCloud placeholder.
@@ -618,7 +639,7 @@ final class UserLibrary {
                 for name in arrived {
                     pending.removeAll { $0 == name }
                     // A65: a game file's arrival is said by its read (`apply`), the other files' here.
-                    if let file = StepLogFile(named: name), !file.isGameFile { StepLog.note(.fileArrived(file: file)) }
+                    self.noteCloudArrival(name)
                     self.fileChanged(folder.appending(path: name))
                 }
             }
@@ -658,6 +679,7 @@ final class UserLibrary {
         unsavedProfiles = []
         creates = []
         knownProfiles = [:]
+        cloudPending = []
         notice = nil
         folderIsMissing = false
         watcher?.stop()
@@ -692,6 +714,12 @@ final class UserLibrary {
     /// the load is read again, so its return is seen.
     @discardableResult
     func fileChanged(_ url: URL) -> Task<Void, Never>? {
+        // Ruling G5 (3): an awaited history file or settings file reported after the disk check: said once it is real.
+        let name = url.lastPathComponent
+        if cloudPending.contains(name), let folder, UserFolder.isSameFolder(url.deletingLastPathComponent(), folder),
+           FileManager.default.fileExists(atPath: url.path) {
+            noteCloudArrival(name)
+        }
         if let folder, let game = HistoryFiles.gameID(ofFileNamed: url.lastPathComponent),
            UserFolder.isSameFolder(url.deletingLastPathComponent(), folder) {
             historyFileChanged?(game)
@@ -753,7 +781,7 @@ final class UserLibrary {
         switch result.content {
         case .file(var file):
             // A65: a game file that was only in iCloud is read now.
-            if isNotDownloaded(game) { StepLog.note(.fileArrived(file: .game(game))) }
+            if isNotDownloaded(game) { stepLog(.fileArrived(file: .game(game))) }
             creates.remove(game)
             let lost = clampForSale(&file)
             // A read that changes nothing on screen (the same file read again) says nothing again. With no file of the game

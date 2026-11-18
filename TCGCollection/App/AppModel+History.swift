@@ -459,6 +459,8 @@ extension AppModel {
         case .history(let found):
             historyOnDisk[game] = .file
             history = found
+            // Ruling G5 (3): a history file held as not downloaded is here now (said once).
+            library.noteCloudArrival(HistoryFiles.name(game: game))
         case .malformed:
             historyOnDisk[game] = .malformed
             history = nil
@@ -470,6 +472,7 @@ extension AppModel {
             historyOnDisk[game] = .blocked
             history = nil
             blocked = .notDownloaded
+            library.expectCloudArrival(HistoryFiles.name(game: game))
         }
         historyUnwritten.remove(game)
         if !historyReadGames.contains(game) { historyReadGames.insert(game) }

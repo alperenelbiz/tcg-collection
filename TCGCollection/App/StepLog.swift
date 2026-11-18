@@ -74,7 +74,8 @@ nonisolated enum StepLogEvent: Sendable, Equatable {
     case resume
 }
 
-/// Phase 6B (A65): the step log. One line per event, `tcg: <step>[ key=value]…`, to standard output in every build.
+/// Phase 6B (A65): the step log. One line per event, `tcg: <step>[ key=value]…`, to standard output in every build of
+/// the iPhone app (ruling G5: not on the Mac).
 nonisolated enum StepLog {
     /// The line of `event`. Pure. A game id not in `Games.all` reads `unknown`; a day that is not `yyyy-MM-dd` too.
     static func line(_ event: StepLogEvent) -> String {
@@ -82,10 +83,31 @@ nonisolated enum StepLog {
         return (["tcg: " + step] + pairs.map { "\($0.0)=\($0.1)" }).joined(separator: " ")
     }
 
-    /// Prints the line of `event` with one unbuffered write (a pipe would hold a buffered `print` back), from any thread.
+    /// Ruling G5 (2): the lines are written on the iPhone only (the device run reads them); the Mac's stdout stays as it
+    /// was before phase 6B. `line(_:)` is shared and tested on the Mac.
+    #if os(iOS)
+    static let prints = true
+    #else
+    static let prints = false
+    #endif
+
+    /// Prints the line of `event` on the iPhone, with one unbuffered write (a buffered `print` would hold lines back on
+    /// a pipe such as `devicectl --console`), from any thread.
     static func note(_ event: StepLogEvent) {
-        FileHandle.standardOutput.write(Data((line(event) + "\n").utf8))
+        guard prints else { return }
+        write(line(event), to: .standardOutput)
     }
+
+    /// One line to `handle`, never fatal (fix round 1): the throwing `write(contentsOf:)` (the old `write(_:)` raises an
+    /// Objective-C exception Swift cannot catch), its error dropped; SIGPIPE is ignored first, so a console that went
+    /// away gives EPIPE instead of killing the app.
+    static func write(_ line: String, to handle: FileHandle) {
+        _ = brokenPipeIgnored
+        try? handle.write(contentsOf: Data((line + "\n").utf8))
+    }
+
+    /// `signal(SIGPIPE, SIG_IGN)`, once per process, at the first write (the Mac app never writes, so never sets it).
+    private static let brokenPipeIgnored: Void = { _ = signal(SIGPIPE, SIG_IGN) }()
 
     private static func parts(_ event: StepLogEvent) -> (String, [(String, String)]) {
         switch event {

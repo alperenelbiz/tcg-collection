@@ -99,4 +99,30 @@ struct StepLogTests {
         #expect(StepLogFile(named: "settings.json") == .settings)
         #expect(StepLogFile(named: "notes.txt") == nil)
     }
+
+    /// Fix round 1: a write to a pipe whose reader is gone (the console detached) throws EPIPE; SIGPIPE is ignored and
+    /// the error is dropped, so the app is not killed.
+    @Test func aWriteToAClosedPipeDoesNotCrash() throws {
+        let pipe = Pipe()
+        try pipe.fileHandleForReading.close()
+        StepLog.write(StepLog.line(.resume), to: pipe.fileHandleForWriting)
+        StepLog.write(StepLog.line(.resume), to: pipe.fileHandleForWriting)
+    }
+
+    /// Fix round 1: a write to a closed handle throws (the throwing API), and the error is dropped.
+    @Test func aWriteToAClosedHandleDoesNotCrash() throws {
+        let pipe = Pipe()
+        let writer = pipe.fileHandleForWriting
+        try writer.close()
+        StepLog.write(StepLog.line(.resume), to: writer)
+    }
+
+    /// Fix round 1, ruling G5 (2): a line is written only on the iPhone; the Mac's stdout stays as before.
+    @Test func onlyTheIPhonePrints() {
+        #if os(iOS)
+        #expect(StepLog.prints)
+        #else
+        #expect(!StepLog.prints)
+        #endif
+    }
 }

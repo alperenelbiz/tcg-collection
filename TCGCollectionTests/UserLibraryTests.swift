@@ -245,6 +245,49 @@ struct UserLibraryTests {
         #expect(lib.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
     }
 
+    /// Task 3 fix round 1, ruling G5 (3): a history file or `settings.json` asked of iCloud that arrives after the disk
+    /// check ended prints its `file-arrived` line once, through the watcher's report; an ordinary report prints none.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aLateArrivalOfAnAskedFileIsSaidOnce() async throws {
+        let dir = tempDir()
+        try Data().write(to: dir.appending(path: ".riftbound.prices.json.icloud"))
+        try Data().write(to: dir.appending(path: ".settings.json.icloud"))
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        var events: [StepLogEvent] = []
+        lib.stepLog = { events.append($0) }
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(10)
+        lib.cloudCheckLimit = .milliseconds(30)
+        await lib.load()
+        await lib.cloudCheck?.value                                            // ended at its limit: nothing arrived
+        #expect(events.contains(.fileNotDownloaded(file: .history("riftbound"))))
+        #expect(events.contains(.fileNotDownloaded(file: .settings)))
+        events = []
+        let history = dir.appending(path: "riftbound.prices.json"), settings = dir.appending(path: "settings.json")
+        lib.fileChanged(history)                                               // reported before it is on disk: no line
+        #expect(events.isEmpty)
+        try Data("{}".utf8).write(to: history)
+        try Data("{}".utf8).write(to: settings)
+        lib.fileChanged(history)
+        lib.fileChanged(settings)
+        lib.fileChanged(history)                                               // a later change report: no second line
+        lib.fileChanged(settings)
+        #expect(events == [.fileArrived(file: .history("riftbound")), .fileArrived(file: .settings)])
+        lib.fileChanged(dir.appending(path: "yu-gi-oh.prices.json"))           // never asked for: no line
+        #expect(events.count == 2)
+    }
+
+    /// Ruling G5 (3): a history file the model held as not downloaded is expected; its arrival is said once.
+    @MainActor @Test func aHistoryFileHeldAsNotDownloadedIsSaidOnceWhenItArrives() {
+        let lib = UserLibrary(folder: tempDir(), watcher: nil)
+        var events: [StepLogEvent] = []
+        lib.stepLog = { events.append($0) }
+        lib.noteCloudArrival("cyberpunk.prices.json")                         // not expected: nothing
+        lib.expectCloudArrival("cyberpunk.prices.json")
+        lib.noteCloudArrival("cyberpunk.prices.json")
+        lib.noteCloudArrival("cyberpunk.prices.json")
+        #expect(events == [.fileArrived(file: .history("cyberpunk"))])
+    }
+
     /// Ruling G4 (b): the Mac (no `cloudDownload`) runs no check; a folder switch ends the old folder's check.
     @MainActor @Test(.timeLimit(.minutes(1))) func noDiskCheckOnTheMacAndASwitchEndsIt() async throws {
         let a = tempDir(), b = tempDir()
