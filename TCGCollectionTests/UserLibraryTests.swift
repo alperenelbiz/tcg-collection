@@ -310,6 +310,34 @@ struct UserLibraryTests {
         lib.cloudCheck?.cancel()
     }
 
+    /// Re-review A: an activation's check that started during `load()` and the load's own check: the second start
+    /// cancels the first, so only one check reads the arrival, with one `file-arrived`.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aNewDiskCheckCancelsTheOldOne() async throws {
+        let dir = tempDir()
+        try ownersFile.write(to: dir.appending(path: "riftbound.json"))
+        let marks = CloudOnlyMarks(["riftbound.json"])
+        let lib = UserLibrary(folder: dir, watcher: FakeWatcher())
+        lib.cloudOnly = marks.check
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(20)
+        lib.cloudCheckLimit = .milliseconds(1)
+        var events: [StepLogEvent] = []
+        lib.stepLog = { events.append($0) }
+        await lib.load()
+        await lib.cloudCheck?.value
+        lib.cloudCheckLimit = .seconds(50)
+        lib.startCloudCheck(["riftbound.json"], in: dir, generation: 1)        // the activation's check (A)
+        let first = try #require(lib.cloudCheck)
+        lib.startCloudCheck(["riftbound.json"], in: dir, generation: 1)        // the load's check (B)
+        #expect(first.isCancelled)
+        marks.set([])
+        await lib.cloudCheck?.value
+        await first.value
+        await lib.flush()
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2])
+        #expect(events.filter { $0 == .fileArrived(file: .game("riftbound")) }.count == 1)
+    }
+
     /// A67: a change of a game whose file is cloud-only is refused, and the file is never written over.
     @MainActor @Test(.timeLimit(.minutes(1))) func aChangeOfACloudOnlyGameIsRefused() async throws {
         let dir = tempDir(), file = dir.appending(path: "riftbound.json")

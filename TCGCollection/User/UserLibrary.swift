@@ -639,15 +639,16 @@ final class UserLibrary {
         let generation = loadGeneration
         let asked = await askForCloudFiles(in: folder)
         guard !asked.isEmpty, generation == loadGeneration, self.folder == folder, readsAgain else { return asked }
-        cloudCheck?.cancel()
         startCloudCheck(asked, in: folder, generation: generation)
         return asked
     }
 
     /// Ruling G4 (b): every `cloudCheckInterval`, the asked names that are now real files on disk (a local `fileExists`,
     /// off the main actor; no network) go to `fileChanged`, each once. It ends when all arrived, at `cloudCheckLimit`,
-    /// when another load or a folder switch began, or when the library is gone.
-    private func startCloudCheck(_ asked: [String], in folder: URL, generation: Int) {
+    /// when another load or a folder switch began, or when the library is gone. A check still running is cancelled first
+    /// (never two). Internal for the tests.
+    func startCloudCheck(_ asked: [String], in folder: URL, generation: Int) {
+        cloudCheck?.cancel()                                   // never two checks
         let interval = cloudCheckInterval, limit = cloudCheckLimit, cloudOnly = cloudOnly
         cloudCheck = Task { [weak self] in
             var pending = asked
