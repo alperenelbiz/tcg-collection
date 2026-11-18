@@ -4,7 +4,9 @@
 #   scripts/install-iphone.sh                   build, then install
 #   scripts/install-iphone.sh --dry-run         print the chosen device and the commands, run nothing, exit 0
 #   scripts/install-iphone.sh --launch-console  build, install, then launch the app with its console attached
-#                                               (the app's `tcg: ` step lines come here; Ctrl+C stops it)
+#                                               (only the app's `tcg: ` step lines and devicectl's launched / awaited /
+#                                               terminated lines show; the whole console goes to
+#                                               build/iphone/console-<yyyy-MM-dd-HHmmss>.log; Ctrl+C stops it)
 #
 # The device: the one line of `xcrun devicectl list devices` whose Reality is "physical", whose State is
 # "available (paired)" and whose model is an iPhone (`(iPhoneNN,N)`). No such line, or more than one, is an error (exit
@@ -82,12 +84,14 @@ build_cmd=(xcodebuild build -project TCGCollection.xcodeproj -scheme TCGCollecti
   -destination "id=$udid" -derivedDataPath build/iphone -allowProvisioningUpdates)
 install_cmd=(xcrun devicectl device install app --device "$udid" "$APP")
 launch_cmd=(xcrun devicectl device process launch --console --device "$udid" "$BUNDLE_ID")
+console_log="build/iphone/console-$(date +%Y-%m-%d-%H%M%S).log"
+filter_cmd=(scripts/tcg-console-filter.sh "$console_log")
 
 if (( dry_run )); then
   print "device: $model $udid"
   print "build: ${(q-)build_cmd[@]}"
   print "install: ${(q-)install_cmd[@]}"
-  (( launch_console )) && print "launch: ${(q-)launch_cmd[@]}"
+  (( launch_console )) && print "launch: ${(q-)launch_cmd[@]} 2>&1 | ${(q-)filter_cmd[@]}"
   exit 0
 fi
 
@@ -97,5 +101,8 @@ xcodegen generate >/dev/null
 "${install_cmd[@]}"
 print "installed $BUNDLE_ID on $udid"
 if (( launch_console )); then
-  exec "${launch_cmd[@]}"
+  mkdir -p build/iphone
+  print "console log: $console_log"
+  # pipefail (set above): the exit status is devicectl's, not the filter's.
+  "${launch_cmd[@]}" 2>&1 | "${filter_cmd[@]}"
 fi
