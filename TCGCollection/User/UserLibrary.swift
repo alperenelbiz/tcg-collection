@@ -628,6 +628,22 @@ final class UserLibrary {
         ICloudFiles.listing(of: folder)
     }
 
+    /// Fix wave (Important 1), the scene became active (the iPhone): asks iCloud again for every known file of the folder
+    /// that is still only a placeholder or only in iCloud, and gives the asked names a new disk check of `cloudCheckLimit`
+    /// (a check still running is cancelled first: never two). A name already on the device is not asked again; its
+    /// `file-arrived` was said once. A no-op without `cloudDownload` (the Mac), without a folder, or for a folder missing
+    /// at load. Returns the names asked for.
+    @discardableResult
+    func askForCloudFilesAgain() async -> [String] {
+        guard cloudDownload != nil, let folder, readsAgain else { return [] }
+        let generation = loadGeneration
+        let asked = await askForCloudFiles(in: folder)
+        guard !asked.isEmpty, generation == loadGeneration, self.folder == folder, readsAgain else { return asked }
+        cloudCheck?.cancel()
+        startCloudCheck(asked, in: folder, generation: generation)
+        return asked
+    }
+
     /// Ruling G4 (b): every `cloudCheckInterval`, the asked names that are now real files on disk (a local `fileExists`,
     /// off the main actor; no network) go to `fileChanged`, each once. It ends when all arrived, at `cloudCheckLimit`,
     /// when another load or a folder switch began, or when the library is gone.

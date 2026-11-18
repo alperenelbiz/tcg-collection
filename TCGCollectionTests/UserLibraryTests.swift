@@ -256,6 +256,60 @@ struct UserLibraryTests {
         #expect(events.filter { $0 == .fileArrived(file: .game("yu-gi-oh")) }.count == 1)
     }
 
+    /// Fix wave (Important 1): the first disk check's window ends while the file is still only in iCloud; an activation
+    /// asks iCloud again and starts a new window, so the file is read when it becomes local, with one `file-arrived`.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anActivationAsksAgainAfterTheFirstCheckEnded() async throws {
+        let dir = tempDir()
+        for game in ["riftbound", "yu-gi-oh", "cyberpunk"] { try ownersFile.write(to: dir.appending(path: "\(game).json")) }
+        let marks = CloudOnlyMarks(["yu-gi-oh.json"])
+        let lib = UserLibrary(folder: dir, watcher: FakeWatcher())             // the watcher never fires
+        lib.cloudOnly = marks.check
+        var asked: [String] = []
+        lib.cloudDownload = { asked.append($0.lastPathComponent) }
+        lib.cloudCheckInterval = .milliseconds(20)
+        lib.cloudCheckLimit = .milliseconds(100)
+        var events: [StepLogEvent] = []
+        lib.stepLog = { events.append($0) }
+        await lib.load()
+        await lib.cloudCheck?.value                                             // the first window ends: still cloud-only
+        #expect(asked == ["yu-gi-oh.json"])
+        lib.cloudCheckLimit = .seconds(50)
+        let first = lib.cloudCheck
+        await lib.askForCloudFilesAgain()                                       // the activation
+        #expect(asked == ["yu-gi-oh.json", "yu-gi-oh.json"])
+        #expect(lib.cloudCheck != nil && lib.cloudCheck != first)
+        lib.readNotDownloadedAgain(); await lib.flush()
+        #expect(lib.problem(game: "yu-gi-oh") == "yu-gi-oh.json is not downloaded from iCloud yet.")
+        marks.set([])
+        let start = ContinuousClock.now
+        await lib.cloudCheck?.value
+        await lib.flush()
+        #expect(ContinuousClock.now - start < .seconds(2))
+        #expect(lib.rows(game: "yu-gi-oh").map(\.count) == [2])
+        #expect(lib.canChange(game: "yu-gi-oh"))
+        await lib.askForCloudFilesAgain()                                       // a later activation: nothing to ask
+        lib.readNotDownloadedAgain(); await lib.flush()
+        #expect(asked.count == 2)
+        #expect(events.filter { $0 == .fileArrived(file: .game("yu-gi-oh")) }.count == 1)
+    }
+
+    /// Fix wave (Important 1): a disk check still running is cancelled before the activation's new one starts.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anActivationReplacesARunningCheck() async throws {
+        let dir = tempDir()
+        try ownersFile.write(to: dir.appending(path: "riftbound.json"))
+        let lib = UserLibrary(folder: dir, watcher: FakeWatcher())
+        lib.cloudOnly = CloudOnlyMarks(["riftbound.json"]).check
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(20)
+        lib.cloudCheckLimit = .seconds(50)
+        await lib.load()
+        let first = try #require(lib.cloudCheck)
+        await lib.askForCloudFilesAgain()
+        #expect(first.isCancelled)
+        #expect(lib.cloudCheck != nil && lib.cloudCheck != first)
+        lib.cloudCheck?.cancel()
+    }
+
     /// A67: a change of a game whose file is cloud-only is refused, and the file is never written over.
     @MainActor @Test(.timeLimit(.minutes(1))) func aChangeOfACloudOnlyGameIsRefused() async throws {
         let dir = tempDir(), file = dir.appending(path: "riftbound.json")

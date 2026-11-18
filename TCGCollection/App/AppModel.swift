@@ -2030,9 +2030,12 @@ final class AppModel {
 
     /// Phase 6B, ruling G4 (a): a file iCloud brought while the watcher said nothing. The games read as not downloaded
     /// are read again, then every history game blocked as not downloaded is marked for the history queue (as a report).
+    /// Fix wave (Important 1): first iCloud is asked again for the files still not on the device, with a new disk check
+    /// (a no-op on the Mac: no `cloudDownload`).
     private func readCloudFilesAgain() {
         let library = library
         cloudReadTask = Task { [weak self] in
+            await library.askForCloudFilesAgain()
             await library.readNotDownloadedAgain()?.value
             self?.historyNotDownloadedAgain()
         }
