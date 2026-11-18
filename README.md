@@ -118,7 +118,7 @@ and the retirement of an earlier version.
 - **Checked on the real thing.** Every phase ended with the full UI test suite, an install, and a check by the owner
   on his own Mac and iPhone; the iPhone build was run on a real device with a step log read over the cable.
 
-The result: 1,225 unit tests, 121 Mac UI tests and 28 iPhone UI tests, and no third-party dependency.
+The result: 1,228 unit tests, 122 Mac UI tests and 29 iPhone UI tests, and no third-party dependency.
 
 ## License
 
