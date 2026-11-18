@@ -38,8 +38,9 @@ targets:
         # The app's accent (Theme.accent, #F2B33D) for what SwiftUI's tint does not reach on the Mac: the sidebar's
         # selected row and the system's own selection colours. A system accent other than Multicolor still wins.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        # The catalog holds no app icon (XcodeGen asks for "AppIcon" by default; the iPhone build then fails).
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # The app icon: TCGCollection/AppIcon.icon, an Icon Composer file (three fanned cards, the front one amber;
+        # one file for the Mac and the iPhone; the system draws its glass and its dark and clear modes).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: -larchive
       # The Debug build is another app to macOS: XCUITest and a Debug run never touch the installed app,
       # its preferences or its window state. Release is the app that scripts/install-mac.sh installs.
