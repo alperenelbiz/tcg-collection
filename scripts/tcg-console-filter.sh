@@ -4,9 +4,9 @@
 #   <console stream> | scripts/tcg-console-filter.sh <log file>
 #
 # Reads standard input line by line. Every line goes to <log file> (the whole console, byte for byte). A line goes to
-# standard output only when it starts with `tcg: ` (the app's step lines) or when it is one of devicectl's own lines
-# that says the app was launched, is awaited or ended (`Launched application`, `Waiting for the application`,
-# `terminated`). Each line is written at once, so a live console shows its lines as they come.
+# standard output only when it starts with one of these (the app's step lines, and devicectl's own lines that say the
+# app was launched, is awaited or ended): `tcg: `, `Launched application`, `Waiting for the application`,
+# `The app terminated`, `App terminated`. Each line is written at once, so a live console shows its lines as they come.
 if [[ $# -ne 1 ]]; then
   print -u2 "Usage: tcg-console-filter.sh <log file>"
   exit 1
@@ -28,7 +28,7 @@ while true; do
     break
   fi
   print -rn -- "$line$nl" >&$fd
-  if [[ "$line" == 'tcg: '* || "$line" == *'Launched application'* || "$line" == *'Waiting for the application'* || "$line" == *terminated* ]]; then
+  if [[ "$line" == ('tcg: '|'Launched application'|'Waiting for the application'|'The app terminated'|'App terminated')* ]]; then
     print -rn -- "$line$nl"
   fi
   (( rc == 0 )) || break
