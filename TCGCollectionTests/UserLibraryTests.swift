@@ -202,6 +202,68 @@ struct UserLibraryTests {
         #expect(mac.problem(game: "cyberpunk") == "cyberpunk.json is not downloaded from iCloud yet.")
     }
 
+    /// Ruling G4 (b): no watcher report; the real file appears while the disk check runs: it is read within one interval,
+    /// and the check ends at once (all asked names arrived), long before its limit.
+    @MainActor @Test(.timeLimit(.minutes(1))) func anArrivalIsFoundByTheDiskCheckWithoutAReport() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json"), placeholder = dir.appending(path: ".riftbound.json.icloud")
+        try Data().write(to: placeholder)
+        let lib = UserLibrary(folder: dir, watcher: FakeWatcher())             // the watcher never fires
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(20)
+        lib.cloudCheckLimit = .seconds(50)
+        await lib.load()
+        #expect(lib.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
+        try FileManager.default.removeItem(at: placeholder)
+        try ownersFile.write(to: file)
+        let start = ContinuousClock.now
+        await lib.cloudCheck?.value
+        await lib.flush()
+        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2])
+        #expect(lib.canChange(game: "riftbound"))
+        #expect(try Data(contentsOf: file) == ownersFile)
+    }
+
+    /// Ruling G4 (b): nothing arrives: no read, and the check ends at its limit.
+    @MainActor @Test(.timeLimit(.minutes(1))) func theDiskCheckStopsAtItsLimit() async throws {
+        let dir = tempDir()
+        try Data().write(to: dir.appending(path: ".riftbound.json.icloud"))
+        let lib = UserLibrary(folder: dir, watcher: nil)
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(10)
+        lib.cloudCheckLimit = .milliseconds(100)
+        await lib.load()
+        var reads: [String] = []
+        lib.beforeRead = { reads.append($0.lastPathComponent) }
+        let check = try #require(lib.cloudCheck)
+        let start = ContinuousClock.now
+        await check.value
+        let took = ContinuousClock.now - start
+        #expect(took >= .milliseconds(80)); #expect(took < .seconds(5))
+        await lib.flush()
+        #expect(reads.isEmpty)
+        #expect(lib.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
+    }
+
+    /// Ruling G4 (b): the Mac (no `cloudDownload`) runs no check; a folder switch ends the old folder's check.
+    @MainActor @Test(.timeLimit(.minutes(1))) func noDiskCheckOnTheMacAndASwitchEndsIt() async throws {
+        let a = tempDir(), b = tempDir()
+        try Data().write(to: a.appending(path: ".riftbound.json.icloud"))
+        let mac = UserLibrary(folder: a, watcher: nil)
+        mac.cloudDownload = nil
+        await mac.load()
+        #expect(mac.cloudCheck == nil)
+        let lib = UserLibrary(folder: a, watcher: nil)
+        lib.cloudDownload = { _ in }
+        lib.cloudCheckInterval = .milliseconds(10)
+        lib.cloudCheckLimit = .seconds(50)
+        await lib.load()
+        let check = try #require(lib.cloudCheck)
+        await lib.use(folder: b)
+        await check.value                                                     // ended by the switch, not its limit
+        #expect(lib.cloudCheck == nil)                                         // b has no placeholder
+    }
+
     /// Item 8: while a game has a failed write, a reload of that game does not replace memory: the change that could not
     /// be saved stays, and so does its problem. The next successful write (the next change, with the whole state) clears
     /// the failure; only then are reloads applied again.

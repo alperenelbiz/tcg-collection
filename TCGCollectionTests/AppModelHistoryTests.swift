@@ -621,6 +621,45 @@ struct AppModelHistoryTests {
         #expect(await state(model, Self.unpriced) == .notDownloaded)
     }
 
+    // MARK: Files iCloud brings while the app runs (phase 6B, A62, ruling G4 (a))
+
+    /// No watcher report comes for the arrival: the scene becoming active reads the game again.
+    @Test(.timeLimit(.minutes(1))) func aGameNotDownloadedIsReadAgainWhenTheSceneBecomesActive() async throws {
+        let root = tempRoot()
+        try write(root, [".riftbound.json.icloud": ""])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.library.flush()
+        #expect(model.library.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
+        #expect(!model.library.canChange(game: "riftbound"))
+        try FileManager.default.removeItem(at: user(root).appending(path: ".riftbound.json.icloud"))
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside])])
+        model.sceneWentToBackground()
+        model.sceneBecameActive()
+        await model.waitForCloudReads()
+        #expect(model.library.rows(game: "riftbound").map(\.productID) == [Self.dockside])
+        #expect(model.library.canChange(game: "riftbound"))
+        #expect(model.library.problem(game: "riftbound") == nil)
+    }
+
+    /// A history file blocked as not downloaded is read again when the scene becomes active.
+    @Test(.timeLimit(.minutes(1))) func aHistoryNotDownloadedIsReadAgainWhenTheSceneBecomesActive() async throws {
+        let root = tempRoot()
+        try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), ".riftbound.prices.json.icloud": ""])
+        let model = try await offlineModel(root)
+        await model.start()
+        await model.waitForHistory()
+        #expect(model.historyBlocked["riftbound"] == .notDownloaded)
+        try FileManager.default.removeItem(at: user(root).appending(path: ".riftbound.prices.json.icloud"))
+        model.sceneWentToBackground()
+        model.sceneBecameActive()
+        await model.waitForCloudReads()
+        await model.waitForHistory()
+        #expect(model.historyBlocked["riftbound"] == nil)
+        #expect(await state(model, Self.unpriced) != .notDownloaded)
+        #expect(exists(historyURL(root)))                                       // the pass then wrote its file
+    }
+
     @Test(.timeLimit(.minutes(1))) func aMalformedHistoryFileIsReplacedByTheNextWrite() async throws {
         let root = tempRoot()
         try write(root, ["riftbound": Self.gameFile(rows: [Self.dockside]), "riftbound.prices.json": "not json"])

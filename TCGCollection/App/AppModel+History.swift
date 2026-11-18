@@ -205,6 +205,12 @@ extension AppModel {
     }
 
 
+    /// Phase 6B, ruling G4 (a): every game whose history file was a placeholder at its last read is marked as reported
+    /// changed, so the queue reads it again (behind the pass's gates).
+    func historyNotDownloadedAgain() {
+        for (game, state) in historyBlocked where state == .notDownloaded { historyFileChanged(game) }
+    }
+
     /// H11: before a folder switch. A running pass stops and keeps nothing; memory of the old folder goes.
     func historyFolderWillChange() {
         cancelHistoryPass()

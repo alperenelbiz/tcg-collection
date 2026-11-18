@@ -477,6 +477,8 @@ final class AppModel {
     /// A64, Task 1B: false while the iPhone's scene is in the background (`sceneWentToBackground`); always true on the Mac,
     /// which never calls the scene methods. Observed: the 90-day download's gate (`backfillMayRun`).
     private(set) var sceneIsActive = true
+    /// The reads of `readCloudFilesAgain` (phase 6B, ruling G4 (a)).
+    @ObservationIgnored private var cloudReadTask: Task<Void, Never>?
     /// True once the launch's price step, its migration (K11) and its first history pass request are done: no download
     /// of the queue before that.
     @ObservationIgnored var backfillLaunchReady = false
@@ -2006,11 +2008,27 @@ final class AppModel {
     /// through `watchBackfillGates` (its gate `sceneIsActive` opened), and here at once (it does nothing when it runs or a
     /// gate is closed).
     func sceneBecameActive() {
+        readCloudFilesAgain()
         guard !sceneIsActive else { return }
         sceneIsActive = true
         resumeCutWork()
         runBackfill()
     }
+
+    /// Phase 6B, ruling G4 (a): a file iCloud brought while the watcher said nothing. The games read as not downloaded
+    /// are read again, then every history game blocked as not downloaded is marked for the history queue (as a report).
+    private func readCloudFilesAgain() {
+        let library = library
+        cloudReadTask = Task { [weak self] in
+            await library.readNotDownloadedAgain()?.value
+            self?.historyNotDownloadedAgain()
+        }
+    }
+
+    #if DEBUG
+    /// Test only: returns when the reads `sceneBecameActive` asked for have run.
+    func waitForCloudReads() async { await cloudReadTask?.value }
+    #endif
 
     /// Runs the work the background cut, once nothing of it still ends (a cancelled task calls it again when it ended).
     private func resumeCutWork() {

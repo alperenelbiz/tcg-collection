@@ -70,6 +70,13 @@ final class UserLibrary {
     /// `FileManager`; the Mac's is nil (its iCloud Drive downloads by itself): nothing is asked there.
     @ObservationIgnored var cloudDownload: (@MainActor (URL) -> Void)? = UserLibrary.defaultCloudDownload
 
+    /// Ruling G4 (b): after `askForCloudFiles` asked, the asked names are looked for on disk every `cloudCheckInterval`
+    /// for at most `cloudCheckLimit` (a fallback for an arrival the watcher does not report). Injected by the tests.
+    @ObservationIgnored var cloudCheckInterval: Duration = .seconds(3)
+    @ObservationIgnored var cloudCheckLimit: Duration = .seconds(120)
+    /// The running disk check of the current load, or nil (none asked, or it ended). A new load or a folder switch ends it.
+    @ObservationIgnored private(set) var cloudCheck: Task<Void, Never>?
+
     static var defaultCloudDownload: (@MainActor (URL) -> Void)? {
         #if os(iOS)
         { url in try? FileManager.default.startDownloadingUbiquitousItem(at: url) }
@@ -514,6 +521,8 @@ final class UserLibrary {
         guard let folder else { return }
         loadGeneration += 1
         let generation = loadGeneration
+        cloudCheck?.cancel()
+        cloudCheck = nil
         isLoaded = false
         // A queued write keeps its state: it is written before memory is read again.
         await flush()
@@ -541,8 +550,9 @@ final class UserLibrary {
         folderIsMissing = false
         // Watching starts before the first read, so a change during it is read again after it.
         watcher?.start(folder: folder) { [weak self] url in await self?.fileChanged(url)?.value }
-        await askForCloudFiles(in: folder)
+        let asked = await askForCloudFiles(in: folder)
         guard generation == loadGeneration else { return }
+        if !asked.isEmpty { startCloudCheck(asked, in: folder, generation: generation) }
         await enqueue {
             for game in Games.all {
                 guard generation == self.loadGeneration else { return }
@@ -561,14 +571,52 @@ final class UserLibrary {
     /// A62: asks iCloud once for every known file of `folder` that is only a placeholder (game files, history files,
     /// `settings.json`); a no-op without `cloudDownload` (the Mac). A game file that arrives is reported by the watcher
     /// under its real name and read then (`fileChanged`); until then its read is refused as not downloaded.
-    func askForCloudFiles(in folder: URL) async {
-        guard let download = cloudDownload else { return }
+    /// Returns the names asked for.
+    @discardableResult
+    func askForCloudFiles(in folder: URL) async -> [String] {
+        guard let download = cloudDownload else { return [] }
         let names = await Self.listing(of: folder)
-        ICloudFiles.request(folder: folder, names: names, download: download)
+        return ICloudFiles.request(folder: folder, names: names, download: download)
     }
 
     @concurrent private nonisolated static func listing(of folder: URL) async -> [String] {
         ICloudFiles.listing(of: folder)
+    }
+
+    /// Ruling G4 (b): every `cloudCheckInterval`, the asked names that are now real files on disk (a local `fileExists`,
+    /// off the main actor; no network) go to `fileChanged`, each once. It ends when all arrived, at `cloudCheckLimit`,
+    /// when another load or a folder switch began, or when the library is gone.
+    private func startCloudCheck(_ asked: [String], in folder: URL, generation: Int) {
+        let interval = cloudCheckInterval, limit = cloudCheckLimit
+        cloudCheck = Task { [weak self] in
+            var pending = asked
+            let end = ContinuousClock.now + limit
+            while !pending.isEmpty, ContinuousClock.now < end {
+                do { try await Task.sleep(for: min(interval, end - ContinuousClock.now)) } catch { return }
+                let arrived = await Self.existing(pending, in: folder)
+                guard let self, !Task.isCancelled, self.loadGeneration == generation, self.folder == folder else { return }
+                for name in arrived {
+                    pending.removeAll { $0 == name }
+                    self.fileChanged(folder.appending(path: name))
+                }
+            }
+        }
+    }
+
+    @concurrent private nonisolated static func existing(_ names: [String], in folder: URL) async -> [String] {
+        names.filter { FileManager.default.fileExists(atPath: folder.appending(path: $0).path) }
+    }
+
+    /// Ruling G4 (a), the scene became active (the iPhone): every game whose last read found only a placeholder is read
+    /// again on the reload path (a fallback for an arrival the watcher does not report). Returns the last read queued.
+    @discardableResult
+    func readNotDownloadedAgain() -> Task<Void, Never>? {
+        guard let folder, readsAgain else { return nil }
+        var last: Task<Void, Never>?
+        for game in Games.all.map(\.id) where refused[game] == Self.refusedText("\(game).json", .notDownloaded) {
+            last = queueReload(game, in: folder)
+        }
+        return last
     }
 
     /// After the folder sheet: writes what is queued to the old folder, stops watching it and loads `folder`. It does not
