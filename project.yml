@@ -21,6 +21,14 @@ targets:
     type: application
     supportedDestinations: [iOS, macOS]
     sources: [TCGCollection]
+    # Phase 7 (A69): Xcode's generated plist sets CFBundleName to PRODUCT_NAME (TCGCollection2) and ignores
+    # INFOPLIST_KEY_CFBundleName (also through a merged INFOPLIST_FILE); this phase sets the menu-bar name in the built
+    # Info.plist, before code signing.
+    postBuildScripts:
+      - name: Set CFBundleName
+        basedOnDependencyAnalysis: false
+        script: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${INFOPLIST_KEY_CFBundleName}" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
     settings:
       base:
         PRODUCT_NAME: TCGCollection2
@@ -49,9 +57,11 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.debug
           INFOPLIST_KEY_CFBundleDisplayName: TCG Collection (Debug)
+          INFOPLIST_KEY_CFBundleName: TCG Collection (Debug)
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2
           INFOPLIST_KEY_CFBundleDisplayName: TCG Collection
+          INFOPLIST_KEY_CFBundleName: TCG Collection
   TCGCollectionTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]

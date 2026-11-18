@@ -13,12 +13,17 @@ DIR="${APPLICATIONS_DIR:-/Applications}"
 APP="$DIR/TCG Collection.app"
 OLD="$DIR/TCG Collection 2.app"
 DRY=0
-[[ "$1" == "--dry-run" ]] && DRY=1
+case "$1" in
+  "") ;;
+  --dry-run) DRY=1 ;;
+  *) echo "usage: scripts/install-mac.sh [--dry-run]" >&2; exit 1 ;;
+esac
+[[ $# -le 1 ]] || { echo "usage: scripts/install-mac.sh [--dry-run]" >&2; exit 1; }
 
-bundle_id() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true; }
+bundle_id() { [[ -f "$1/Contents/Info.plist" ]] && /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true; }
 
 HERE=""
-if [[ -e "$APP" ]]; then
+if [[ -e "$APP" || -L "$APP" ]]; then
   HERE="$(bundle_id "$APP")"
   if [[ "$HERE" != "$ID" ]]; then
     echo "The first version is still at /Applications/TCG Collection.app. Remove it first (phase 7)." >&2
@@ -27,7 +32,7 @@ if [[ -e "$APP" ]]; then
   fi
 fi
 OLDID=""
-[[ -e "$OLD" ]] && OLDID="$(bundle_id "$OLD")"
+[[ -e "$OLD" || -L "$OLD" ]] && OLDID="$(bundle_id "$OLD")"
 
 if (( DRY )); then
   echo "dry run: nothing is built, quit, copied or moved"
@@ -35,7 +40,7 @@ if (( DRY )); then
   if [[ -z "$HERE" ]]; then echo "at the target: nothing; it would install"
   else echo "at the target: this app ($HERE); it would quit it if it runs and replace it"; fi
   if [[ "$OLDID" == "$ID" ]]; then echo "older app: $OLD ($OLDID); it would quit it and move it to the Trash"
-  elif [[ -e "$OLD" ]]; then echo "older app: $OLD (bundle id '${OLDID:-none}'); it would leave it alone"
+  elif [[ -e "$OLD" || -L "$OLD" ]]; then echo "older app: $OLD (bundle id '${OLDID:-none}'); it would leave it alone"
   else echo "older app: none"; fi
   exit 0
 fi
@@ -44,10 +49,24 @@ xcodegen generate >/dev/null
 xcodebuild -project TCGCollection.xcodeproj -scheme TCGCollection -configuration Release \
   -destination 'platform=macOS' -derivedDataPath build build | grep -E "error|BUILD (SUCCEEDED|FAILED)"
 # "is running" never launches the app; a plain quit could start it (or the Debug build) to quit it.
-osascript -e "if application id \"$ID\" is running then tell application id \"$ID\" to quit" 2>/dev/null || true
-sleep 1
+running() { [[ "$(osascript -e "application id \"$ID\" is running" 2>/dev/null)" == "true" ]]; }
+if running; then
+  osascript -e "tell application id \"$ID\" to quit" 2>/dev/null || true
+  for _ in {1..20}; do running || break; sleep 0.5; done
+  if running; then
+    echo "TCG Collection is still running after 10 s. Quit it and run this script again. Nothing was changed." >&2
+    exit 1
+  fi
+fi
+# Copy first, remove after: a failed copy leaves the installed app as it was.
+rm -rf "$APP.new"
+if ! ditto build/Build/Products/Release/TCGCollection2.app "$APP.new"; then
+  rm -rf "$APP.new"
+  echo "The copy failed. Nothing was changed." >&2
+  exit 1
+fi
 rm -rf "$APP"
-ditto build/Build/Products/Release/TCGCollection2.app "$APP"
+mv "$APP.new" "$APP"
 echo "installed $APP"
 if [[ "$OLDID" == "$ID" ]]; then
   # Same bundle id as the new app: the quit above covered a running copy.
