@@ -87,6 +87,10 @@ actor FakeCatalog {
     /// Task 1B: every set list answer waits this long first (a cancel ends the wait with `CancellationError`).
     func delayGroups(_ delay: Duration?) { groupsDelay = delay }
     private var groupsDelay: Duration?
+    /// Fix wave item 1: every products request waits until its task is cancelled, then throws
+    /// `URLError(.networkConnectionLost)` (a request the background cut can end so on iOS, not as `.cancelled`).
+    func loseConnectionOnCancel() { losesConnection = true }
+    private var losesConnection = false
 
     func groups(category: Int) async throws -> Data {
         groupCalls += 1
@@ -104,6 +108,10 @@ actor FakeCatalog {
         running += 1
         maxConcurrent = max(maxConcurrent, running)
         defer { running -= 1 }
+        if losesConnection {
+            try? await Task.sleep(for: .seconds(30))
+            throw URLError(.networkConnectionLost)
+        }
         try await Task.sleep(for: .milliseconds(5))
         if let failAfter, index > failAfter { throw TCGCSVClientError(status: 503) }
         return bodies[group] ?? productsBody

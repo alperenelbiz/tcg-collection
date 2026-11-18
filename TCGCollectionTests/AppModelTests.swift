@@ -1174,6 +1174,34 @@ struct AppModelTests {
         if case .failed(let text) = model.status { Issue.record("a failure: \(text)") }
     }
 
+    /// Fix wave item 2: the background comes after the catalog and price steps ended, while the picture index step runs.
+    /// The sync is done: nothing is marked cut, and the foreground runs nothing again (no second set list request). The
+    /// index step's cancel stays "attempt counted, no failure".
+    @MainActor @Test(.timeLimit(.minutes(1))) func aBackgroundAfterTheLastStepsRerunsNothing() async throws {
+        let root = tempRoot()
+        let network = BackfillNetwork(serveAll: true)
+        await network.holdIndex()
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: network, fetcher: network, now: { Self.day1 })
+        let launch = Task { await model.start() }
+        let end = ContinuousClock.now + .seconds(20)
+        while await !network.indexWaiting {
+            guard ContinuousClock.now < end else { Issue.record("no index request was held"); return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let groups = await network.groupCalls, products = await network.productCalls.count
+        model.sceneWentToBackground()
+        await launch.value
+        await model.waitForSync()
+        if case .failed(let text) = model.status { Issue.record("a failure: \(text)") }
+        model.sceneBecameActive()
+        await model.waitForSync()
+        #expect(await network.groupCalls == groups)                             // the sync is not run again
+        #expect(await network.productCalls.count == products)
+        #expect(await network.indexCalls == 1)                                  // the day's attempt stays counted
+        if case .failed(let text) = model.status { Issue.record("a failure: \(text)") }
+    }
+
     // MARK: The for-sale notice (phase 2C task 2, C8)
 
     /// Waits until `condition` holds; fails after 10 s.

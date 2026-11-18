@@ -164,7 +164,7 @@ actor CatalogSync {
         case cards([ProductRecord])
         /// The fetch or the parse failed: the set is marked failed.
         case failed
-        /// The task was cancelled (`CancellationError`, `URLError.cancelled`).
+        /// The task was cancelled (`CancellationError`, `URLError.cancelled`, or any error once the task is cancelled).
         case cancelled
     }
 
@@ -177,7 +177,9 @@ actor CatalogSync {
         } catch let error as URLError where error.code == .cancelled {
             return .cancelled
         } catch {
-            return .failed
+            // Fix wave item 1: a request the background cut can end with another error (`.networkConnectionLost`,
+            // `.timedOut`): a cancelled task is a cancel, as `ArchiveDownloads.isCancel` says.
+            return Task.isCancelled ? .cancelled : .failed
         }
     }
 }

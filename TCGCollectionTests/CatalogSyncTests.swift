@@ -215,6 +215,19 @@ struct CatalogSyncTests {
         #expect(await rig.fake.productCalls < 14)                                   // no set was started after the cancel
     }
 
+    /// Fix wave item 1: a request the background cut that ends with another error than `.cancelled` (here
+    /// `.networkConnectionLost`, after the task was cancelled) is a cancel too: no set marked failed.
+    @Test(.timeLimit(.minutes(1))) func aConnectionLostAfterACancelMarksNoSetFailed() async throws {
+        let rig = try await Rig()
+        await rig.fake.loseConnectionOnCancel()
+        let run = Task { await rig.run() }
+        while await rig.fake.productCalls == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        run.cancel()
+        let result = await run.value
+        #expect(try await rig.store.progress(game: "riftbound").failed == 0)
+        #expect(result.failed == 0)
+    }
+
     /// Task 1B (A64): a set list request cancelled (the iPhone went to the background) is no failed set list.
     @Test(.timeLimit(.minutes(1))) func aCancelledSetListIsNoFailure() async throws {
         let rig = try await Rig()

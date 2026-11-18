@@ -135,7 +135,8 @@ struct PictureStoreTests {
         #expect(await fake.calls == 2)
     }
 
-    // MARK: The cache limit (feedback 1): 3 GB, cleaned once per launch, the least recently used first
+    // MARK: The cache limit (feedback 1; phase 6B): 3 GB on the Mac, 1 GB on the iPhone, cleaned once per launch,
+    // the least recently used first
 
     private static let day: TimeInterval = 86_400
     private static func at(_ days: Double) -> Date { Date(timeIntervalSince1970: 1_800_000_000 + days * day) }

@@ -977,8 +977,21 @@ actor BackfillNetwork {
     /// status line now shows over the download's progress); pictures are not served.
     func data(from url: URL) async throws -> (Data, Int) {
         guard url.lastPathComponent == "cardinfo.php" else { throw URLError(.notConnectedToInternet) }
+        indexCalls += 1
+        if indexHeld {
+            indexWaiting = true
+            try? await Task.sleep(for: .seconds(30))       // ends at the cancel
+            indexWaiting = false
+            throw URLError(.cancelled)
+        }
         return (try fixture("cardinfo-sample.json"), 200)
     }
+
+    /// Fix wave item 2: the picture index request waits until its task is cancelled, then throws `URLError.cancelled`.
+    func holdIndex() { indexHeld = true }
+    private var indexHeld = false
+    private(set) var indexWaiting = false
+    private(set) var indexCalls = 0
 }
 
 /// A clock a test moves.

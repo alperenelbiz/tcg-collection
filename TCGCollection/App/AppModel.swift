@@ -2131,8 +2131,9 @@ final class AppModel {
         let indexGames = syncedGames.filter { $0.pictures == .ygoprodeck }
         let indexSets = indexGames.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
         if Task.isCancelled { cut = true; return false }
+        // Fix wave item 2: no cut check after the index step: the sync is done by then. A cancel inside it is "the day's
+        // attempt counted, no failure" (`refreshYGOIndexIfNeeded`), and the foreground runs nothing again.
         let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: indexSets, now: now)
-        if Task.isCancelled { cut = true; return false }
         if held {
             let failure = priceFailure ?? indexFailure
             status = failure.map { .failed(StatusText.resetWaits + " · " + $0) } ?? .idle(StatusText.resetWaits)
