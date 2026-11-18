@@ -44,13 +44,14 @@ targets:
         OTHER_LDFLAGS: -larchive
       # The Debug build is another app to macOS: XCUITest and a Debug run never touch the installed app,
       # its preferences or its window state. Release is the app that scripts/install-mac.sh installs.
+      # Phase 7 (A69): the shown name is "TCG Collection" in both; the bundle ids and PRODUCT_NAME are unchanged.
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2.debug
-          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2 (Debug)
+          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection (Debug)
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.alperenelbiz.tcgcollection2
-          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection 2
+          INFOPLIST_KEY_CFBundleDisplayName: TCG Collection
   TCGCollectionTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]

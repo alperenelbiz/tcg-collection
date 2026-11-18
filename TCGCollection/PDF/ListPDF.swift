@@ -209,7 +209,7 @@ nonisolated enum ListPDF {
     static func data(title: String, items: [PDFItem]) -> Data? {
         let out = NSMutableData()
         var box = CGRect(origin: .zero, size: pageSize)
-        let info = [kCGPDFContextTitle as String: title, kCGPDFContextCreator as String: "TCG Collection 2"] as CFDictionary
+        let info = [kCGPDFContextTitle as String: title, kCGPDFContextCreator as String: "TCG Collection"] as CFDictionary
         guard let consumer = CGDataConsumer(data: out as CFMutableData),
               let context = CGContext(consumer: consumer, mediaBox: &box, info) else { return nil }
         let fonts = Fonts()

@@ -28,6 +28,12 @@ struct ListPDFTests {
 
     private func text(_ data: Data, page: Int = 0) throws -> String { try #require(document(data).page(at: page)?.string) }
 
+    /// A69 (phase 7): the PDF's creator is the app's shown name.
+    @Test func theCreatorIsTheShownName() throws {
+        let attributes = try #require(document(pdf(smallList())).documentAttributes)
+        #expect(attributes[PDFDocumentAttribute.creatorAttribute] as? String == "TCG Collection")
+    }
+
     // MARK: The grid
 
     /// A4, 36 pt margins, 4 columns of card pictures (63 : 88) with the name, `×n` and the price under each: 3 rows on
