@@ -5,6 +5,8 @@ import SwiftUI
 /// side, so a cell's memory does not grow with the source.
 nonisolated enum PictureSize: Sendable {
     case cell, page
+    /// A list row's small picture (the deck page's list, A57): 32 pt tall on the Mac, 40 pt on the iPhone.
+    case row
 
     /// The long side of the decoded picture. A cell: 960 px, enough for the widest gallery cell (316 pt, a picture 461 pt
     /// tall, 922 px at 2×; `CardImageTests`). A page: 1200 px (280 pt wide, 817 px at 2×).
@@ -12,6 +14,21 @@ nonisolated enum PictureSize: Sendable {
         switch self {
         case .cell: 960
         case .page: 1200
+        // 40 pt at 3×.
+        case .row: 128
+        }
+    }
+
+    /// The picture's proportion: the gallery's and the page's 59 : 86; a row's the card's 63 : 88 (the look of A57).
+    var aspectRatio: CGFloat {
+        self == .row ? 63.0 / 88.0 : 59.0 / 86.0
+    }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .cell: Theme.pictureRadius
+        case .page: Theme.largePictureRadius
+        case .row: Theme.deckRowPictureRadius
         }
     }
 }
@@ -43,11 +60,11 @@ struct CardImage: View {
 
     var body: some View {
         Theme.surface
-            .aspectRatio(59.0 / 86.0, contentMode: .fit)
+            .aspectRatio(size.aspectRatio, contentMode: .fit)
             .overlay {
                 if let picture {
                     Image(decorative: picture, scale: 1).resizable().scaledToFill()
-                } else if missing, let product {
+                } else if missing, size != .row, let product {
                     Text(product.cardName)
                         .font(size == .cell ? Theme.lineFont : .system(size: 15))
                         .foregroundStyle(Theme.faint)
@@ -55,7 +72,7 @@ struct CardImage: View {
                         .padding(8)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: size == .cell ? Theme.pictureRadius : Theme.largePictureRadius))
+            .clipShape(RoundedRectangle(cornerRadius: size.cornerRadius))
             .task(id: url) { await load() }
     }
 

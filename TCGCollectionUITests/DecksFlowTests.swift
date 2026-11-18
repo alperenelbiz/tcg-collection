@@ -1271,4 +1271,199 @@ final class DecksFlowTests: UITestCase {
         shot("decks-58-card-page-pending")
         XCTAssertEqual(try storedSharing(game: "riftbound"), [:], "the app answered for the user")
     }
+
+    // MARK: The list view (phase 6A feedback 1, A57, A58)
+
+    /// Two Riftbound decks: rb1 with Kai'Sa ×2 (1 owned: 1 missing), Dockside Lock-Up ×1 (3 owned) and Calm Rune ×12 (basic,
+    /// none owned); rb9 with Dockside Lock-Up ×1.
+    private static let listDecks = """
+        {"version": 1,
+         "collection": [{"productID": 721337, "finish": "Normal", "count": 1, "condition": "", "name": "Kai'Sa, Rebel"},
+                        {"productID": 721334, "finish": "Normal", "count": 3, "condition": "", "name": "Dockside Lock-Up"}],
+         "decks": [{"id": "rb1", "name": "Kai'Sa", "format": "standard", "active": false,
+                    "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2},
+                              {"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 1},
+                              {"cardKey": "calm rune", "name": "Calm Rune", "section": "runes", "count": 12}]},
+                   {"id": "rb9", "name": "Second", "format": "standard", "active": false,
+                    "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 1}]}]}
+        """
+
+    /// A deck card's element is a list row (one line, 44 pt tall, across the column), not a gallery cell (a picture over
+    /// its texts, 150 pt wide at least).
+    private func isRow(_ element: XCUIElement) -> Bool {
+        element.exists && element.frame.height < 60 && element.frame.width > 250
+    }
+
+    private func isCell(_ element: XCUIElement) -> Bool {
+        element.exists && element.frame.height > 150
+    }
+
+    /// A segment of the toolbar's `deck-view` control ("gallery" or "list"), by its identifier, else by its name.
+    private func viewSegment(_ app: XCUIApplication, _ mode: String) -> XCUIElement {
+        let byID = element(app, "deck-view-\(mode)")
+        return byID.waitForExistence(timeout: 5) ? byID : app.radioButtons[mode == "list" ? "List" : "Gallery"].firstMatch
+    }
+
+    private func userFileData(game: String) throws -> Data {
+        try Data(contentsOf: try XCTUnwrap(root).appending(path: "user/\(game).json"))
+    }
+
+    /// A57, A58, Review Focus 1, 2 and 5: the toolbar's switch shows the deck as a list: each card one row with the
+    /// gallery's label; two fast `+` both count; a row's card page and Back keep the list; the search text stays across a
+    /// switch; another deck and a relaunch show the list; the switch itself writes nothing to the user folder.
+    func testTheDeckListView() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb1"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: Self.listDecks)
+        }
+        let kaisaID = "deck-cell-kai sa rebel-main"
+        let kaisa = element(app, kaisaID)
+        XCTAssertTrue(kaisa.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        XCTAssertTrue(waitUntil { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×2 · 1 missing, ") }, kaisa.label)
+        XCTAssertTrue(isCell(kaisa), "the first time is not the gallery: \(kaisa.frame)")
+        let galleryLabel = kaisa.label
+        let dockside = reveal(app, "deck-cell-dockside lock up-main")
+        let docksideLabel = dockside.label
+        let rune = reveal(app, "deck-cell-calm rune-runes")
+        let runeLabel = rune.label
+        let before = try userFileData(game: "riftbound")
+
+        XCTAssertTrue(element(app, "deck-view").exists, "no deck-view control")
+        viewSegment(app, "list").click()
+        XCTAssertTrue(waitUntil { self.isRow(kaisa) }, "Kai'Sa is no row: \(kaisa.frame)")
+        XCTAssertEqual(kaisa.label, galleryLabel)
+        XCTAssertTrue(kaisa.label.contains("×2 · 1 missing"), kaisa.label)
+        XCTAssertEqual(reveal(app, "deck-cell-dockside lock up-main").label, docksideLabel)
+        let runeRow = reveal(app, "deck-cell-calm rune-runes")
+        XCTAssertTrue(isRow(runeRow), "the rune is no row: \(runeRow.frame)")
+        XCTAssertEqual(runeRow.label, runeLabel)                    // basic: never missing
+        XCTAssertFalse(runeRow.label.contains("missing"), runeRow.label)
+        XCTAssertEqual(try userFileData(game: "riftbound"), before, "the switch wrote the user folder")
+
+        // Review Focus 1: two fast clicks on a row's `+` both count.
+        let plus = reveal(app, "deck-cell-plus-kai sa rebel-main")
+        plus.click()
+        plus.click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-cell-value-kai sa rebel-main")) == "4" })
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards
+                == ["kai sa rebel|main|4", "dockside lock up|main|1", "calm rune|runes|12"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+        XCTAssertTrue(waitUntil { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×4 · 3 missing, ") }, kaisa.label)
+        let screen = element(app, "deck-screen")
+        for _ in 0..<6 { screen.scroll(byDeltaX: 0, deltaY: 200) }  // back to the top: Kai'Sa's row in the picture
+        shot("decks-list-01")
+
+        // Review Focus 2: a row's card page, then Back: still the list.
+        reveal(app, kaisaID).click()
+        let page = element(app, "card-page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "a list row opens no card page")
+        XCTAssertEqual(text(element(app, "card-title")), "Kai'Sa, Rebel")
+        app.toolbars.buttons["Back"].click()
+        XCTAssertTrue(waitUntil { !page.exists }, "Back left the card page")
+        XCTAssertTrue(waitUntil { self.isRow(kaisa) }, "Back left the list: \(kaisa.frame)")
+
+        // The search text stays across a switch.
+        let search = app.searchFields.firstMatch
+        search.click()
+        search.typeText("dock")
+        XCTAssertTrue(waitUntil { !kaisa.exists }, "the search shows Kai'Sa")
+        viewSegment(app, "gallery").click()
+        let docksideCell = element(app, "deck-cell-dockside lock up-main")
+        XCTAssertTrue(waitUntil { self.isCell(docksideCell) }, "no gallery: \(docksideCell.frame)")
+        XCTAssertEqual(search.value as? String, "dock")
+        XCTAssertFalse(kaisa.exists, "the switch dropped the search")
+        viewSegment(app, "list").click()
+        XCTAssertTrue(waitUntil { self.isRow(docksideCell) }, "no list: \(docksideCell.frame)")
+        XCTAssertEqual(search.value as? String, "dock")
+
+        // Review Focus 5: one choice for every deck.
+        element(app, "sidebar-deck-rb9").click()
+        XCTAssertTrue(waitUntil { self.title.hasPrefix("Second") }, title)
+        let second = element(app, "deck-cell-dockside lock up-main")
+        XCTAssertTrue(waitUntil { self.isRow(second) }, "the second deck is no list: \(second.frame)")
+        let after = try userFileData(game: "riftbound")
+
+        quit(app)
+        XCTAssertEqual(try userFileData(game: "riftbound"), after)
+        app.launch()                                             // the same root and flags: deck rb1
+        let again = element(app, kaisaID)
+        XCTAssertTrue(again.waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntil { self.isRow(again) }, "the relaunch is no list: \(again.frame)")
+        XCTAssertEqual(try userFileData(game: "riftbound"), after, "the relaunch wrote the user folder")
+        shot("decks-list-02-after-relaunch")
+    }
+
+    /// Review Focus 3: a 60-character card name truncates inside its row; the price column and the row's `+` stay whole
+    /// and inside the 900 pt window.
+    func testALongNameInTheDeckList() throws {
+        let long = "Vanished Cards of the Extraordinarily Long Riftbound Archive"
+        XCTAssertEqual(long.count, 60)
+        // 60 characters fit the Mac's row at 900 pt; this one does not, so its name is cut.
+        let longer = String(repeating: "Extraordinarily Long Name ", count: 5)
+        XCTAssertEqual(longer.count, 130)
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb2"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "decks": [{"id": "rb2", "name": "Long", "format": "standard", "active": false,
+                        "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 1},
+                                  {"cardKey": "vanished long", "name": "\(long)", "section": "main", "count": 1},
+                                  {"cardKey": "vanished longer", "name": "\(longer)", "section": "main", "count": 1}]}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-cell-kai sa rebel-main").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        viewSegment(app, "list").click()
+        let row = reveal(app, "deck-cell-vanished long-main")
+        XCTAssertTrue(waitUntil { self.isRow(row) }, "no list row: \(row.frame)")
+        XCTAssertEqual(row.label, "\(long), ×1, no price")
+        let plus = reveal(app, "deck-cell-plus-vanished long-main")
+        assertInWindow(app, row)
+        assertInWindow(app, plus)
+        assertInWindow(app, reveal(app, "deck-cell-minus-vanished long-main"))
+        XCTAssertLessThanOrEqual(row.frame.maxX, plus.frame.minX, "the row runs under its control")
+        XCTAssertEqual(row.frame.height, 44, accuracy: 2)
+        let kaisa = reveal(app, "deck-cell-kai sa rebel-main")
+        XCTAssertEqual(kaisa.frame.maxX, row.frame.maxX, accuracy: 1, "the rows' price columns do not line up")
+        let cut = reveal(app, "deck-cell-vanished longer-main"), cutPlus = reveal(app, "deck-cell-plus-vanished longer-main")
+        assertInWindow(app, cut)
+        assertInWindow(app, cutPlus)
+        XCTAssertEqual(cut.frame.height, 44, accuracy: 2)
+        XCTAssertEqual(cut.frame.maxX, row.frame.maxX, accuracy: 1, "a cut name pushes the price column")
+        XCTAssertLessThanOrEqual(cut.frame.maxX, cutPlus.frame.minX)
+        shot("decks-list-03-long-name")
+    }
+
+    /// Review Focus 4, D13: a card the settled catalog does not have, in the list: its saved name, no price, no
+    /// "missing", no link; its control works.
+    func testAPendingCardInTheDeckList() throws {
+        let app = try launch(game: "riftbound", extra: ["-screen", "deck:rb2"]) { _ in
+            try self.writeUserFile(game: "riftbound", json: """
+            {"version": 1,
+             "decks": [{"id": "rb2", "name": "Old", "format": "standard", "active": true,
+                        "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 1},
+                                  {"cardKey": "vanished card", "name": "Vanished Card", "section": "main", "count": 1}]}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-cell-kai sa rebel-main").waitForExistence(timeout: 20))
+        XCTAssertTrue(waitUntilSynced(app))
+        viewSegment(app, "list").click()
+        let gone = reveal(app, "deck-cell-vanished card-main")
+        XCTAssertTrue(waitUntil { self.isRow(gone) }, "no list row: \(gone.frame)")
+        XCTAssertTrue(waitUntil { gone.label == "Vanished Card, ×1, no price" }, gone.label)
+        shot("decks-list-04-card-not-in-the-catalog")
+        gone.click()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertFalse(element(app, "card-page").exists, "a deck card without a printing opened a page")
+        reveal(app, "deck-cell-plus-vanished card-main").click()
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards
+                == ["kai sa rebel|main|1", "vanished card|main|2"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+        let minus = reveal(app, "deck-cell-minus-vanished card-main")
+        minus.click()
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-cell-value-vanished card-main")) == "1" })
+        reveal(app, "deck-cell-minus-vanished card-main").click()
+        XCTAssertTrue(waitUntil { !gone.exists }, "− left the card")
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "riftbound"))?.first?.cards == ["kai sa rebel|main|1"] },
+                      "\(String(describing: try? storedDecks(game: "riftbound")))")
+    }
 }

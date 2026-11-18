@@ -87,6 +87,17 @@ nonisolated enum Theme {
     #else
     static let chartHeight: CGFloat = 132
     #endif
+    /// The deck page's list (phase 6A feedback 1, A57): a row's height on the Mac (one line), the picture's height in a
+    /// row (card proportion 63 : 88; 32 pt on the Mac, 40 pt on the iPhone, where it spans the row's two lines), its
+    /// corner radius, and the gap between the picture and the name.
+    static let deckRowHeight: CGFloat = 44
+    #if os(iOS)
+    static let deckRowPictureHeight: CGFloat = 40
+    #else
+    static let deckRowPictureHeight: CGFloat = 32
+    #endif
+    static let deckRowPictureRadius: CGFloat = 3
+    static let deckRowGap: CGFloat = 12
     static let chartLineWidth: CGFloat = 2
     static let chartDot: CGFloat = 6
 

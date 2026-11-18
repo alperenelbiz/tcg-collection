@@ -504,6 +504,7 @@ struct DeckView: View {
             #else
             .toolbar {
                 ToolbarItemGroup {
+                    viewPicker
                     Button("Add cards") { openSearch() }
                         .help("Add cards")
                         .disabled(deck == nil || !library.canChange(game: gameID))
@@ -602,13 +603,19 @@ struct DeckView: View {
     }
 
     private func sections(_ sections: [DeckSectionView], deck: Deck, format: DeckFormat) -> some View {
-        let canChange = model.library.canChange(game: state.gameID)
+        let canChange = model.library.canChange(game: state.gameID), mode = model.deckViewMode
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
                     if index > 0 { RuleLine() }
-                    DeckSectionBlock(section: section, warning: DeckPage.warning(section, deckHasCards: !deck.cards.isEmpty)) { line in
+                    DeckSectionBlock(section: section, warning: DeckPage.warning(section, deckHasCards: !deck.cards.isEmpty),
+                                     mode: mode) { line in
                         cell(line, format: format, canChange: canChange)
+                    } row: { line in
+                        DeckListRow(gameID: state.gameID, line: line, format: format, canChange: canChange) {
+                            step(by: $0, card: line.card)
+                        }
+                        .contextMenu { moveMenu(line.card, format: format, canChange: canChange) }
                     }
                 }
             }
@@ -617,6 +624,32 @@ struct DeckView: View {
         }
         .accessibilityIdentifier("deck-gallery")
     }
+
+    #if os(macOS)
+    /// A58: the deck page's view, gallery or list, for every deck on this device (`AppModel.deckViewMode`): a segmented
+    /// control left of "Add cards", two symbols, tinted `faint` (not the accent). A switch keeps the search text, the
+    /// kept path and the deck's join; only the scroll position may reset.
+    private var viewPicker: some View {
+        Picker("View", selection: Binding(get: { model.deckViewMode }, set: { model.deckViewMode = $0 })) {
+            Label("Gallery", systemImage: "square.grid.2x2")
+                .labelStyle(.iconOnly)
+                .help("Gallery")
+                .accessibilityIdentifier("deck-view-gallery")
+                .tag(DeckViewMode.gallery)
+            Label("List", systemImage: "list.bullet")
+                .labelStyle(.iconOnly)
+                .help("List")
+                .accessibilityIdentifier("deck-view-list")
+                .tag(DeckViewMode.list)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .tint(Theme.faint)
+        .fixedSize()
+        .help("Gallery or list")
+        .accessibilityIdentifier("deck-view")
+    }
+    #endif
 
     /// D8: the cell, 8 pt, then one line with the card's count in its section (`−` at 1 takes the card out of the
     /// section). The control is off while the game cannot change. The context menu moves the card (D9).
@@ -633,18 +666,21 @@ struct DeckView: View {
             }
             .disabled(!canChange)
         }
-        .contextMenu {
-            Menu("Move to") {
-                ForEach(format.sections.filter { $0.id != card.section }) { section in
-                    Button(section.name) {
-                        model.library.changeDeck(game: state.gameID, id: state.deckID) {
-                            DeckRules.moving($0, cardKey: card.cardKey, from: card.section, to: section.id)
-                        }
+        .contextMenu { moveMenu(card, format: format, canChange: canChange) }
+    }
+
+    /// D9: a cell's or a row's context menu: "Move to" ▸ every other section of the format.
+    private func moveMenu(_ card: DeckCard, format: DeckFormat, canChange: Bool) -> some View {
+        Menu("Move to") {
+            ForEach(format.sections.filter { $0.id != card.section }) { section in
+                Button(section.name) {
+                    model.library.changeDeck(game: state.gameID, id: state.deckID) {
+                        DeckRules.moving($0, cardKey: card.cardKey, from: card.section, to: section.id)
                     }
                 }
             }
-            .disabled(!canChange)
         }
+        .disabled(!canChange)
     }
 
     /// As on Wanted: the step goes onto the deck's current count of the card in that section, so two clicks before the
@@ -719,11 +755,15 @@ struct DeckView: View {
 }
 
 /// One section of the deck page: its name (15 pt semibold) and `· <count>` in `muted`, its warning right of it in `muted`
-/// (a warning is not a risk), then per group a 12 pt `muted` heading and the group's cells; "No cards" for an empty one.
-private struct DeckSectionBlock<Cell: View>: View {
+/// (a warning is not a risk), then per group a 12 pt `muted` heading and the group's cells or rows (A58); "No cards" for an
+/// empty one.
+private struct DeckSectionBlock<Cell: View, Row: View>: View {
     let section: DeckSectionView
     let warning: String?
+    /// A58: a group's cards as gallery cells (`cell`) or as list rows (`row`, A57).
+    let mode: DeckViewMode
     @ViewBuilder let cell: (DeckLine) -> Cell
+    @ViewBuilder let row: (DeckLine) -> Row
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -751,8 +791,23 @@ private struct DeckSectionBlock<Cell: View>: View {
                     Text(group.name)
                         .font(Theme.lineFont)
                         .foregroundStyle(Theme.muted)
-                    GalleryGrid(padded: false) {
-                        ForEach(group.lines) { line in cell(line) }
+                    switch mode {
+                    case .gallery:
+                        GalleryGrid(padded: false) {
+                            ForEach(group.lines) { line in cell(line) }
+                        }
+                    case .list:
+                        // A57: one row per card, a 1 pt rule between two rows; no zebra, no box.
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(group.lines.enumerated()), id: \.element.id) { index, line in
+                                if index > 0 {
+                                    Theme.rule
+                                        .frame(height: 1)
+                                        .accessibilityHidden(true)
+                                }
+                                row(line)
+                            }
+                        }
                     }
                 }
                 .padding(.top, 8)
@@ -782,6 +837,104 @@ private struct DeckCell: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(DeckPage.accessibilityText(line))
         }
+    }
+}
+
+/// A57: one card of the deck page's list. The Mac: one line, 44 pt tall: the shown printing's small picture (A18's rule, as
+/// the cell), 12 pt, the card's name (one line, cut at the end, the free width), `×n` in `muted` with ` · k missing` in
+/// `risk` (never for a basic card), the price right-aligned in a fixed column ("No price" when none), then the count
+/// control. The picture, name, count and price are the link to the card page, `deck-cell-<cardKey>-<section>` with the
+/// gallery cell's label; a card without a printing (pending, or not in the catalog, D13) has a flat block, its saved name,
+/// no price and no "missing", no link and no hover, and its control works. Hover puts `surface` behind the row. The caller
+/// gives the context menu. `step` gets one step of the control (+1 or −1), which the caller puts onto the deck's current
+/// count (so two fast clicks both count).
+struct DeckListRow: View {
+    let gameID: String
+    let line: DeckLine
+    let format: DeckFormat
+    let canChange: Bool
+    let step: (Int) -> Void
+
+    @State private var hovering = false
+
+    /// The hover background reaches this far past the row's ends.
+    private static let hoverPadding: CGFloat = 6
+
+    private var suffix: String { "\(line.card.cardKey)-\(line.card.section)" }
+
+    // Task 2 (phase 6A feedback 1) adds the iPhone's two-line row here.
+    var body: some View {
+        let card = line.card
+        HStack(spacing: Theme.deckRowGap) {
+            link
+            // `+` is off at 999 or more (the clamp never lowers a count; `−` always works).
+            CountControl(count: card.count, label: "\(line.name), \(format.section(card.section)?.name ?? card.section)",
+                         maximum: DeckRules.maxCount, prefix: "deck-cell", key: suffix) { step($0 - card.count) }
+                .disabled(!canChange)
+        }
+        .frame(height: Theme.deckRowHeight)
+        .padding(.horizontal, Self.hoverPadding)
+        .background {
+            if hovering, line.shown != nil { RoundedRectangle(cornerRadius: Theme.pictureRadius).fill(Theme.surface) }
+        }
+        .onHover { hovering = $0 }
+        .padding(.horizontal, -Self.hoverPadding)
+    }
+
+    @ViewBuilder
+    private var link: some View {
+        if let shown = line.shown {
+            NavigationLink(value: CardTarget(gameID: gameID, cardKey: line.card.cardKey, startProductID: shown.productID)) {
+                texts
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(DeckPage.accessibilityText(line))
+            .accessibilityIdentifier("deck-cell-\(suffix)")
+        } else {
+            texts
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(DeckPage.accessibilityText(line))
+                .accessibilityIdentifier("deck-cell-\(suffix)")
+        }
+    }
+
+    private var texts: some View {
+        HStack(spacing: Theme.deckRowGap) {
+            CardImage(product: line.shown, size: .row)
+                .frame(width: Theme.deckRowPictureHeight * PictureSize.row.aspectRatio, height: Theme.deckRowPictureHeight)
+            Text(line.name)
+                .font(Theme.bodyFont)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            count
+                .font(Theme.bodyFont)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
+            price
+                .foregroundStyle(Theme.muted)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(width: Theme.tableNumberWidth, alignment: .trailing)
+        }
+        // The whole row's height: the link, its click area and its accessibility frame are the row's, not the picture's.
+        .frame(maxHeight: .infinity)
+        .contentShape([.interaction, .accessibility], Rectangle())
+    }
+
+    /// `×n` in `muted`, then ` · k missing` in `risk` (`DeckPage.countText`'s rule: never for a basic card).
+    private var count: Text {
+        let copies = Text("×\(line.card.count)").foregroundStyle(Theme.muted)
+        guard line.missing > 0, !line.isBasic else { return copies }
+        return Text("\(copies)\(Text(" · \(line.missing) missing").foregroundStyle(Theme.risk))")
+    }
+
+    private var price: Text {
+        if let shown = line.shownPrice { return Text(CardFacts.priceText(shown)).font(Theme.bodyFont) }
+        return Text("No price").font(Theme.lineFont)
     }
 }
 

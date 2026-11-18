@@ -437,6 +437,14 @@ final class AppModel {
     @ObservationIgnored private(set) var priceDaysCleaning: Task<Void, Never>?
     /// K11: the archives on disk were migrated into day files in this run (once, after the launch's price step).
     @ObservationIgnored private var priceDaysMigrated = false
+    // MARK: The deck page's view (phase 6A feedback 1, A58)
+
+    /// The deck page's view, gallery or list: one choice for every deck, kept in this device's preferences
+    /// (`DeckViewMode.key`; with `-store` the root's own), never in the user folder. Observed: every deck page.
+    var deckViewMode: DeckViewMode = .gallery {
+        didSet { defaults.set(deckViewMode.rawValue, forKey: DeckViewMode.key) }
+    }
+
     // MARK: The 90-day download (phase 5B task 5; `AppModel+Backfill.swift`)
 
     /// The preference that says the user said yes to the 90-day download (A32, A48): set only by `startBackfill()` (the
@@ -562,6 +570,7 @@ final class AppModel {
         let saved = defaults.string(forKey: Self.gameKey)
         knownFollowed = defaults.stringArray(forKey: Self.followedGamesKey)
         backfillOptedIn = defaults.bool(forKey: Self.priceDaysDownloadKey)
+        deckViewMode = DeckViewMode(stored: defaults.string(forKey: DeckViewMode.key))
         for game in Games.all {
             if let lists = FacetLists.read(paths.facets(game.id)) { facetLists[game.id] = lists }
         }

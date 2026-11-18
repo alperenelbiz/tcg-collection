@@ -22,6 +22,18 @@ struct CardImageTests {
         #expect(PictureSize.page.maxPixels >= Int((280.0 * 86 / 59 * 2).rounded(.up)))
     }
 
+    /// A deck list row (A57) shows its picture at most 40 pt tall (the iPhone): 120 px at 3×; card proportion 63 : 88,
+    /// corner radius 3.
+    @Test func aRowDecodesEnoughPixelsForItsPicture() {
+        #expect(PictureSize.row.maxPixels == 128)
+        #expect(PictureSize.row.maxPixels >= 40 * 3)
+        #expect(abs(PictureSize.row.aspectRatio - 63.0 / 88.0) < 0.0001)
+        #expect(abs(PictureSize.cell.aspectRatio - 59.0 / 86.0) < 0.0001)
+        #expect(PictureSize.row.cornerRadius == 3)
+        #expect(PictureSize.cell.cornerRadius == Theme.pictureRadius)
+        #expect(PictureSize.page.cornerRadius == Theme.largePictureRadius)
+    }
+
     /// Decoded pictures are kept in memory up to a limit: a cell's picture is about 2.6 MB (688 × 960 px, 4 bytes each),
     /// so a gallery scrolled end to end would else hold gigabytes. The cost of an entry is its decoded size.
     @Test func decodedPicturesAreKeptUpToAMemoryLimit() throws {

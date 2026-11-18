@@ -1392,6 +1392,39 @@ struct AppModelTests {
         #expect(text.hasPrefix("This file could not be read ("))
     }
 
+    // MARK: The deck page's view (phase 6A feedback 1, A58)
+
+    /// A58: the deck page's view is a device preference (`deckViewMode`), kept across launches on one root, and never
+    /// written to the user folder.
+    @MainActor @Test func theDeckViewModeIsKeptInThePreferences() async throws {
+        let root = tempRoot()
+        let game = #"{"version":1,"collection":[]}"#
+        try writeUserFile(root, "riftbound", game)
+        let file = AppPaths.userTestRoot(root).appending(path: "riftbound.json")
+        let first = model(["app", "-store", root.path, "-offline", "YES"])
+        let user = AppPaths.userTestRoot(root)
+        let before = try userFiles(user)
+        #expect(first.deckViewMode == .gallery)
+        first.deckViewMode = .list
+        #expect(first.deckViewMode == .list)
+        #expect(first.defaults.string(forKey: DeckViewMode.key) == "list")
+        await first.library.flush()
+
+        let second = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(second.deckViewMode == .list)
+        second.deckViewMode = .gallery
+        let third = model(["app", "-store", root.path, "-offline", "YES"])
+        #expect(third.deckViewMode == .gallery)
+        #expect(try Data(contentsOf: file) == Data(game.utf8))
+        #expect(try userFiles(user) == before)
+    }
+
+    /// Every file of the user folder with its bytes.
+    private func userFiles(_ user: URL) throws -> [String: Data] {
+        let names = try FileManager.default.contentsOfDirectory(atPath: user.path)
+        return try Dictionary(uniqueKeysWithValues: names.map { ($0, try Data(contentsOf: user.appending(path: $0))) })
+    }
+
     // MARK: Followed games (phase 4B task 2: A28, G3–G6)
 
     /// A game file that turns the game off (G1).
