@@ -22,7 +22,7 @@ nonisolated struct TCGCSVClient: TCGCSVFetching {
 
     private func get(_ address: String) async throws -> Data {
         var request = URLRequest(url: URL(string: address)!)
-        request.setValue("TCGCollection/0.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("TCGCollection/1.0", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw TCGCSVClientError(status: status) }
