@@ -7,6 +7,18 @@ There is no server and no account. Each device downloads the public catalog and 
 works offline afterwards. What you own lives in plain JSON files in a folder you choose (iCloud Drive by default), so
 the Mac and the iPhone share it.
 
+![The Collection on the Mac](docs/screenshots/mac-collection.jpg)
+
+| A card page with its 90-day price history | A Commander deck |
+| --- | --- |
+| ![A card page](docs/screenshots/mac-card.jpg) | ![A deck page](docs/screenshots/mac-deck.jpg) |
+
+<p align="center">
+  <img src="docs/screenshots/iphone-collection.jpg" width="280" alt="The Collection on the iPhone">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/iphone-deck.jpg" width="280" alt="A deck as a list on the iPhone">
+</p>
+
 ## What it does
 
 - **Collection.** Add cards by hand on a card page, one count per printing and finish, or import a TCGplayer CSV export.
@@ -87,6 +99,7 @@ TCGCollectionUITests/       Mac UI tests
 TCGCollectionPhoneUITests/  iPhone UI tests
 scripts/                    install, UI test and console scripts
 docs/deck-rules-sources.md  the official source of every deck rule number the app checks
+docs/screenshots/           the pictures in this README
 ```
 
 ## How it was built
