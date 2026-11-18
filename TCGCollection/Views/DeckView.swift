@@ -664,10 +664,10 @@ struct DeckView: View {
         .accessibilityIdentifier("deck-view")
     }
     #else
-    /// The iPhone: "View" at the top of the deck's "…" menu (`deck-more`): "Gallery" and "List", the chosen one ticked, as
-    /// an inline picker shows them. Two toggles, not a `Picker` and not in a `Section("View")`: on iOS 27 a menu's
-    /// picker options, and toggles inside a section, lose their accessibility identifiers (seen: buttons "Gallery" and
-    /// "List" with none), and the tests need `deck-view-gallery`, `deck-view-list`. So the menu has no "View" heading.
+    /// The iPhone: the first two items of the deck's "…" menu (`deck-more`), Gallery and List, two Toggles with the
+    /// chosen one ticked. No "View" heading, no `Picker`, no `Section`: on iOS 27 an inline Picker or a Section lost the
+    /// items' identifiers (seen: buttons "Gallery" and "List" with none), and the tests need `deck-view-gallery` and
+    /// `deck-view-list`.
     @ViewBuilder
     private var viewPicker: some View {
         viewToggle("Gallery", mode: .gallery)
