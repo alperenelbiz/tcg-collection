@@ -3,21 +3,28 @@ import Synchronization
 
 /// A64: the iPhone's extra time around the library's flush when the app goes to the background. `start` asks the system
 /// for it (on iOS `UIApplication.beginBackgroundTask(withName:expirationHandler:)`) and returns its token; `end` gives it
-/// back (`endBackgroundTask`). `end` is called exactly once: when `work` ends, or earlier when the expiration handler
-/// fires (the time ran out: the task must end there, else iOS kills the app). Pure orchestration with an injected start
-/// and end, so the unit tests run it on the Mac. It runs on the caller's actor (approachable concurrency's
-/// `nonisolated(nonsending)`); the app calls it on the main actor, where iOS also calls the expiration handler.
+/// back (`endBackgroundTask`). `end` is called exactly once: at `Session.finish()` (the flush ended), or earlier when the
+/// expiration handler fires (the time ran out: the task must end there, else iOS kills the app). Pure orchestration with
+/// an injected start and end, so the unit tests run it on the Mac.
+///
+/// Task 1B: `begin` calls `start` before it returns, so the scene-phase change asks for the time in its own turn, before
+/// any `Task` hop (a hop could let iOS suspend the app first). The app calls it on the main actor, where iOS also calls the
+/// expiration handler; `finish` may be called from anywhere, more than once.
 nonisolated enum BackgroundSave {
-    static func run<Token: Sendable>(
+    /// One background task: `finish()` ends it, once (a later `finish` or expiration ends nothing more).
+    struct Session: Sendable {
+        fileprivate let finishing: @Sendable () -> Void
+        func finish() { finishing() }
+    }
+
+    static func begin<Token: Sendable>(
         start: (_ expiration: @escaping @Sendable () -> Void) -> Token,
-        end: @escaping @Sendable (Token) -> Void,
-        work: () async -> Void
-    ) async {
+        end: @escaping @Sendable (Token) -> Void
+    ) -> Session {
         let once = Once<Token>(end: end)
         let token = start { once.expire() }
         once.started(token)
-        await work()
-        once.finish()
+        return Session { once.finish() }
     }
 
     /// The token and whether the task has ended, behind one lock: the expiration handler can fire before `start` has

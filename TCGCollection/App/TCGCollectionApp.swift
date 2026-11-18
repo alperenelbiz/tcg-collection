@@ -76,13 +76,31 @@ struct TCGCollectionApp: App {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            // The iPhone: a change made just before the app goes away is written now. (The Mac waits in AppDelegate.)
-            guard phase == .background, let library = model?.library else { return }
+            guard let model else { return }
             #if os(iOS)
-            // A64: iOS gives the app extra time for the flush and suspends it once the task ends. The task ends when the
-            // flush ends, or when the time runs out first (the change may then be lost; the next launch reads the file).
-            Task { await Self.flushInBackground(library) }
+            switch phase {
+            case .background:
+                // A64: iOS gives the app extra time for the flush and suspends it once the task ends. The task begins here,
+                // in this turn, before any hop (Task 1B); it ends when the flush ends, or when the time runs out first (the
+                // change may then be lost; the next launch reads the file).
+                let session = Self.beginBackgroundSave()
+                // A64, Task 1B: nothing downloads in the background: the sync and the 90-day download are cancelled (no
+                // failure) and go on when the app is active again.
+                model.sceneWentToBackground()
+                let library = model.library
+                Task {
+                    await library.flush()
+                    session.finish()
+                }
+            case .active:
+                model.sceneBecameActive()
+            default:
+                break
+            }
             #else
+            // A change made just before the app goes away is written now. (The Mac waits in AppDelegate.)
+            guard phase == .background else { return }
+            let library = model.library
             Task { await library.flush() }
             #endif
         }
@@ -119,18 +137,21 @@ struct TCGCollectionApp: App {
     }
 
     #if os(iOS)
-    /// The library's flush inside a background task named "Saving your collection" (A64). Both closures run on the main
-    /// actor: `BackgroundSave.run` runs on its caller's, and iOS calls the expiration handler on the main thread.
-    private static func flushInBackground(_ library: UserLibrary) async {
-        await BackgroundSave.run(
+    /// A background task named "Saving your collection" around the library's flush (A64), begun synchronously. Both
+    /// closures run on the main actor: `begin` runs `start` at once on its caller's, and iOS calls the expiration handler
+    /// on the main thread.
+    private static func beginBackgroundSave() -> BackgroundSave.Session {
+        BackgroundSave.begin(
             start: { expiration in
                 MainActor.assumeIsolated {
                     UIApplication.shared.beginBackgroundTask(withName: "Saving your collection",
                                                              expirationHandler: expiration)
                 }
             },
-            end: { task in MainActor.assumeIsolated { UIApplication.shared.endBackgroundTask(task) } },
-            work: { await library.flush() })
+            end: { task in
+                // `finish` is called on the main actor (the flush's task inherits it); the expiration handler too.
+                MainActor.assumeIsolated { UIApplication.shared.endBackgroundTask(task) }
+            })
     }
     #endif
 

@@ -84,10 +84,14 @@ actor FakeCatalog {
     func resetCounts() { productCalls = 0; productGroups = []; started = 0; maxConcurrent = 0 }
     func setBody(_ data: Data, forGroup group: Int) { bodies[group] = data }
     func failGroups(_ fail: Bool) { groupsFail = fail }
+    /// Task 1B: every set list answer waits this long first (a cancel ends the wait with `CancellationError`).
+    func delayGroups(_ delay: Duration?) { groupsDelay = delay }
+    private var groupsDelay: Duration?
 
     func groups(category: Int) async throws -> Data {
         groupCalls += 1
         await log?.add("groups \(category)")
+        if let groupsDelay { try await Task.sleep(for: groupsDelay) }
         if groupsFail { throw TCGCSVClientError(status: 500) }
         return category == self.category ? groupsBody : Self.noSets
     }

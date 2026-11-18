@@ -215,6 +215,18 @@ struct CatalogSyncTests {
         #expect(await rig.fake.productCalls < 14)                                   // no set was started after the cancel
     }
 
+    /// Task 1B (A64): a set list request cancelled (the iPhone went to the background) is no failed set list.
+    @Test(.timeLimit(.minutes(1))) func aCancelledSetListIsNoFailure() async throws {
+        let rig = try await Rig()
+        await rig.fake.delayGroups(.seconds(30))
+        let run = Task { await rig.run() }
+        while await rig.fake.groupCalls == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        run.cancel()
+        let result = await run.value
+        #expect(result.failedSetLists == 0)
+        #expect(await rig.fake.productCalls == 0)
+    }
+
     @Test func neverMoreThanFourRequestsAtOnce() async throws {
         let rig = try await Rig()
         _ = await rig.run()

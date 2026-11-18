@@ -80,6 +80,8 @@ actor CatalogSync {
             // A cancelled sync stops: the sets it did not reach are not failed, only not fetched yet.
             if Task.isCancelled { break }
             guard let plan = await plan(for: game, now: now, rebuild: rebuild) else {
+                // A set list request cancelled (the iPhone went to the background, Task 1B) is no failure.
+                if Task.isCancelled { break }
                 failedSetLists += 1
                 continue
             }

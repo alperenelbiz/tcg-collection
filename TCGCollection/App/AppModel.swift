@@ -474,6 +474,9 @@ final class AppModel {
     #endif
     /// The queue's task; nil while it does not run.
     @ObservationIgnored var backfillTask: Task<Void, Never>?
+    /// A64, Task 1B: false while the iPhone's scene is in the background (`sceneWentToBackground`); always true on the Mac,
+    /// which never calls the scene methods. Observed: the 90-day download's gate (`backfillMayRun`).
+    private(set) var sceneIsActive = true
     /// True once the launch's price step, its migration (K11) and its first history pass request are done: no download
     /// of the queue before that.
     @ObservationIgnored var backfillLaunchReady = false
@@ -702,6 +705,16 @@ final class AppModel {
     @ObservationIgnored private var profileWork: Task<Void, Never>?
     /// True once the launch's sync has begun: before it, a game turned on is covered by that sync.
     @ObservationIgnored private var syncBegan = false
+    /// Task 1B: the sync's task (the followed games' catalog steps, the price step, the picture index step); nil while no
+    /// sync runs. The background cancels it.
+    @ObservationIgnored private var syncTask: Task<Void, Never>?
+    /// Task 1B: the turned-on games' steps (`runTurnedOnGames`); nil while none run. The background cancels it.
+    @ObservationIgnored private var turnOnTask: Task<Void, Never>?
+    /// Task 1B: a sync the background cut short, or that was due while in the background; its `rebuild`. It runs again
+    /// when the app is active.
+    @ObservationIgnored private var syncCut: Bool?
+    /// Task 1B: turned-on games' steps the background cut short, or that were due while in the background.
+    @ObservationIgnored private var turnedOnCut = false
 
     /// The sheets that belong to one game's decks close without writing (A5, G7): the sharing sheet, the paste sheet, New
     /// Deck (and the paste it asked for), Rename Deck.
@@ -876,8 +889,36 @@ final class AppModel {
     /// G5: the catalog steps of the games turned on, one after the other, when no sync runs (a running sync takes them at
     /// its end). Not before the launch's sync has begun (it covers them), and not when the app cannot sync.
     private func runTurnedOnGames() async {
-        guard syncBegan, !isRunning else { return }
+        await startTurnedOnGames()?.value
+    }
+
+    /// Task 1B: the turned-on games' steps run in a task the model keeps (`turnOnTask`), so the background can cancel
+    /// them. In the background nothing starts: the steps are due when the app is active again.
+    @discardableResult
+    private func startTurnedOnGames() -> Task<Void, Never>? {
+        guard syncBegan, !isRunning, turnOnTask == nil else { return nil }
+        guard sceneIsActive else {
+            if !turnedOn.isEmpty { turnedOnCut = true }
+            return nil
+        }
+        let task = Task { [weak self] in
+            await self?.runTurnedOnSteps()
+            self?.turnOnTask = nil
+            self?.resumeCutWork()
+        }
+        turnOnTask = task
+        return task
+    }
+
+    private func runTurnedOnSteps() async {
+        guard !isRunning else { return }
         while !turnedOn.isEmpty {
+            // Task 1B: cut by the background; the steps left are due when the app is active again.
+            if Task.isCancelled {
+                turnedOnCut = true
+                return
+            }
+            let before = status
             let games = turnedOn.compactMap { Games.game($0) }.filter { isSynced($0.id) }
             turnedOn = []
             let ids = Set(games.map(\.id))
@@ -908,6 +949,14 @@ final class AppModel {
             }
             catalogPending.formUnion(ids)
             let result = await syncCatalog(of: games, now: now, rebuild: false)
+            if Task.isCancelled {
+                // Task 1B: a cancel is no failure. The games stay due (and pending); the sets fetched are not asked again.
+                turnedOn = games.map(\.id) + turnedOn.filter { !ids.contains($0) }
+                isRunning = false
+                status = before
+                turnedOnCut = true
+                return
+            }
             catalogPending.subtract(ids)
             let newSets = indexGames.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
             let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: newSets, now: now)
@@ -1916,18 +1965,97 @@ final class AppModel {
     /// The game on screen gets its cards and prices first; Magic and Yu-Gi-Oh! take many minutes. Only the followed games
     /// (G5); games turned on meanwhile get their steps at the end (`runTurnedOnGames`).
     private func sync(rebuild: Bool) async {
-        guard !isRunning else { return }
-        await syncFollowedGames(rebuild: rebuild)
-        await runTurnedOnGames()
+        await startSync(rebuild: rebuild)?.value
     }
 
-    private func syncFollowedGames(rebuild: Bool) async {
+    /// Task 1B: the sync runs in a task the model keeps (`syncTask`), so the background can cancel it. In the background
+    /// nothing starts: the sync is due when the app is active again (`syncCut`).
+    @discardableResult
+    private func startSync(rebuild: Bool) -> Task<Void, Never>? {
+        guard !isRunning, syncTask == nil else { return nil }
+        guard sceneIsActive else {
+            syncCut = (syncCut ?? false) || rebuild
+            return nil
+        }
         isRunning = true
         syncBegan = true
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if await self.syncFollowedGames(rebuild: rebuild) { await self.runTurnedOnGames() }
+            self.syncTask = nil
+            self.resumeCutWork()
+        }
+        syncTask = task
+        return task
+    }
+
+    /// A64, Task 1B (the iPhone; the Mac never calls it): the app went to the background. Nothing downloads there: the
+    /// sync (catalog steps, price step, picture index step), the turned-on games' steps and the 90-day download are
+    /// cancelled. A cancel is no failure: no set or day is marked failed, no failure is said, the download is not stopped
+    /// for the run. They go on when the app is active again (`sceneBecameActive`).
+    func sceneWentToBackground() {
+        guard sceneIsActive else { return }
+        sceneIsActive = false
+        backfillTask?.cancel()
+        syncTask?.cancel()          // `syncFollowedGames` records the cut (`syncCut`) when it ends
+        turnOnTask?.cancel()
+    }
+
+    /// A64, Task 1B: the app is active again. A sync or turned-on step the background cut runs again under its own rules
+    /// (no set twice in a UTC day: the sets fetched before the cancel are not fetched again); the 90-day download restarts
+    /// through `watchBackfillGates` (its gate `sceneIsActive` opened), and here at once (it does nothing when it runs or a
+    /// gate is closed).
+    func sceneBecameActive() {
+        guard !sceneIsActive else { return }
+        sceneIsActive = true
+        resumeCutWork()
+        runBackfill()
+    }
+
+    /// Runs the work the background cut, once nothing of it still ends (a cancelled task calls it again when it ended).
+    private func resumeCutWork() {
+        guard sceneIsActive, syncTask == nil, turnOnTask == nil, !isRunning else { return }
+        if let rebuild = syncCut {
+            syncCut = nil
+            turnedOnCut = false
+            startSync(rebuild: rebuild)       // its end runs the turned-on games' steps
+        } else if turnedOnCut {
+            turnedOnCut = false
+            startTurnedOnGames()
+        }
+    }
+
+    #if DEBUG
+    /// Test only: returns when no sync and no turned-on step runs (also one that started after the call).
+    func waitForSync() async {
+        while true {
+            if let task = syncTask {
+                await task.value
+            } else if let task = turnOnTask {
+                await task.value
+            } else {
+                return
+            }
+        }
+    }
+    #endif
+
+    /// The followed games' steps. False when the background cut it (Task 1B): `syncCut` then holds it for the next
+    /// `sceneBecameActive`, the status is the one before the sync, and the games not done stay pending.
+    private func syncFollowedGames(rebuild: Bool) async -> Bool {
+        isRunning = true
+        syncBegan = true
+        let before = status
+        var cut = false
         defer {
             isRunning = false
-            // Games turned on during this sync, after its other-games step began, are still due.
-            catalogPending = catalogWaits ? [] : Set(turnedOn)
+            if cut {
+                status = before
+                if syncCut == nil { syncCut = rebuild }
+            } else {
+                // Games turned on during this sync, after its other-games step began, are still due.
+                catalogPending = catalogWaits ? [] : Set(turnedOn)
+            }
         }
         let now = self.now()
         // A held sync skips only the catalog steps: the price and index steps keep their own once-a-day rules.
@@ -1941,14 +2069,18 @@ final class AppModel {
         if !held, isSynced(chosen.id) {
             first = await syncCatalog(of: [chosen], now: now, rebuild: rebuild)
         }
+        // Task 1B: each step cut by the background ends the sync here; it runs again when the app is active.
+        if Task.isCancelled { cut = true; return false }
         catalogPending.remove(chosen.id)
         let dayBefore = syncedGames.map { prices.day(game: $0.id) }
         let priceFailure = await syncPrices(now: now)
+        if Task.isCancelled { cut = true; return false }
         if !held {
             // The followed games of this moment: a game turned on since the launch is among them.
             let others = syncedGames.filter { $0.id != chosen.id }
             turnedOn.removeAll { id in others.contains { $0.id == id } }
             rest = await syncCatalog(of: others, now: now, rebuild: rebuild)
+            if Task.isCancelled { cut = true; return false }
             catalogPending = Set(turnedOn)
         }
         // K11: once per launch, after the price step and the other games' catalog steps (review 1: the first launch's
@@ -1967,11 +2099,13 @@ final class AppModel {
         // index request while that game is not followed (G5).
         let indexGames = syncedGames.filter { $0.pictures == .ygoprodeck }
         let indexSets = indexGames.reduce(0) { $0 + result.newSets[$1.id, default: 0] }
+        if Task.isCancelled { cut = true; return false }
         let indexFailure = indexGames.isEmpty ? nil : await refreshYGOIndexIfNeeded(newSets: indexSets, now: now)
+        if Task.isCancelled { cut = true; return false }
         if held {
             let failure = priceFailure ?? indexFailure
             status = failure.map { .failed(StatusText.resetWaits + " · " + $0) } ?? .idle(StatusText.resetWaits)
-            return
+            return true
         }
         let pending = await rulesPendingCount(now: now)
         let done = StatusText.done(result: result, priceDay: prices.day(game: gameID), rulesPending: pending)
@@ -1983,6 +2117,7 @@ final class AppModel {
         } else {
             status = .idle(done)
         }
+        return true
     }
 
     /// Sets of every followed game that are stored under older rules and were fetched today: they wait for the next UTC
@@ -2081,6 +2216,8 @@ final class AppModel {
             status = .syncing(StatusText.pricesLoaded(day: prices.day(game: gameID)))
             return nil
         } catch {
+            // Task 1B: cut by the background: no failure (the lane did not count the day); the step runs again.
+            if Task.isCancelled { return nil }
             // Review round 2, B: a request that threw stops the 90-day download for the run; the button and the menu
             // item go off at once.
             if await priceSync.downloads.backgroundStopped { backfillStopped = true }
@@ -2101,6 +2238,8 @@ final class AppModel {
             ygoIndex = try await ygoLoader.refresh()
             return nil
         } catch {
+            // Task 1B: cut by the background: no failure. The day's attempt stays counted (no second request that day).
+            if Task.isCancelled { return nil }
             return "Yu-Gi-Oh! pictures: \(Self.describe(error))"
         }
     }

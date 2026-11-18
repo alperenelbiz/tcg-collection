@@ -21,10 +21,11 @@ extension AppModel {
     // MARK: Questions
 
     /// The gates of every download of the queue: the app may sync (not offline, a store file open), the folder is chosen
-    /// and read and the first-run question is not due (`catalogMayStart`), no catalog reset was asked for in this run, and
-    /// on the iPhone the network is neither expensive nor constrained (A46).
+    /// and read and the first-run question is not due (`catalogMayStart`), no catalog reset was asked for in this run, on
+    /// the iPhone the network is neither expensive nor constrained (A46), and the app is not in the background (A64, Task
+    /// 1B: always true on the Mac).
     var backfillMayRun: Bool {
-        canSync && catalogMayStart && !catalogResetRequested && backfillNetworkAllowed
+        canSync && catalogMayStart && !catalogResetRequested && backfillNetworkAllowed && sceneIsActive
     }
 
     /// The line under the chart (A33): what it says, and whether it offers the button. Nil: no line.
@@ -163,8 +164,9 @@ extension AppModel {
                 guard let self else { return }
                 if may {
                     self.runBackfill()
-                } else if !self.backfillNetworkAllowed {
-                    // Off Wi-Fi (iOS): the day in flight is cancelled; back on Wi-Fi the queue runs again.
+                } else if !self.backfillNetworkAllowed || !self.sceneIsActive {
+                    // Off Wi-Fi or in the background (iOS): the day in flight is cancelled (no failure); back on Wi-Fi or
+                    // in the foreground the queue runs again.
                     self.backfillTask?.cancel()
                 }
             }
@@ -197,7 +199,7 @@ extension AppModel {
     /// run (`.stopped`: a wrong clock); a decode that fails is the gate's failed day (its archive is kept and
     /// decoded at the next launch, never downloaded again); a network error stops the queue for the run and is said once
     /// (every day done is kept; the next launch goes on). A cancel (a reset; going off Wi-Fi on the iPhone) stops it
-    /// without a word.
+    /// without a word; so does the app going to the background on the iPhone (A64, Task 1B).
     /// Returns false when the run was cut short (a cancel or a closed gate) before its plan was done.
     private func backfillQueue() async -> Bool {
         let end = backfillActivity(Self.activityReason)

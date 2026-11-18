@@ -285,6 +285,41 @@ struct AppModelBackfillTests {
         #expect(model.backfillProgress == nil)
     }
 
+    // MARK: The iPhone in the background (Task 1B, A64)
+
+    /// A64: the app goes to the background while a day of the queue downloads. The request is cancelled, and a cancel is
+    /// no failure: no sentence, the queue not stopped for the run, the day not failed in the lane. Back to the
+    /// foreground, the queue asks for that day again and finishes.
+    @Test(.timeLimit(.minutes(1))) func aBackgroundCancelLeavesNoFailure() async throws {
+        let root = tempRoot()
+        let paths = AppPaths(root: root)
+        let network = BackfillNetwork(serveAll: true)
+        let model = model(root, network)
+        await model.start()
+        await network.hold("2026-01-01", cancellable: true)
+        model.startBackfill()
+        try await until { await network.holding }
+        model.sceneWentToBackground()
+        try await until { model.backfillTask == nil }
+        #expect(model.statusNotice == nil)
+        #expect(!model.backfillStopped)
+        #expect(await !model.priceSync.downloads.failed.contains("2026-01-01"))
+        #expect(await !model.priceSync.downloads.backgroundStopped)
+        #expect(!model.backfillMayRun)
+        #expect(!exists(paths.priceDay("2026-01-01")))
+        await network.release()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await network.calls.filter { $0 == "2026-01-01" }.count == 1)    // nothing asked in the background
+        model.sceneBecameActive()
+        try await until { await network.calls.filter { $0 == "2026-01-01" }.count == 2 }
+        try await until { model.backfillTask == nil && model.backfillProgress == nil }
+        await model.waitForBackfill()
+        #expect(exists(paths.priceDay("2026-01-01")))
+        #expect(model.missingDays.isEmpty)
+        #expect(model.statusNotice == nil)
+        #expect(!model.backfillStopped)
+    }
+
     // MARK: App Nap (K9)
 
     @Test(.timeLimit(.minutes(1))) func theActivityIsHeldWhileTheQueueWorks() async throws {
@@ -773,8 +808,14 @@ actor BackfillNetwork {
         self.failing = failing
     }
 
-    /// The download of `day` waits until `release()`.
-    func hold(_ day: String) { held = day }
+    /// The download of `day` waits until `release()`. With `cancellable` (Task 1B) it also ends when its task is
+    /// cancelled, as URLSession's does (`URLError.cancelled`); without it a cancel waits for `release()` as before.
+    func hold(_ day: String, cancellable: Bool = false) {
+        held = day
+        heldCancellable = cancellable
+    }
+
+    private var heldCancellable = false
 
     /// The download of `day` writes half a file under a temporary name, then waits until its task is cancelled.
     func cutShort(_ day: String) { cut = day }
@@ -794,12 +835,62 @@ actor BackfillNetwork {
         waiting = nil
     }
 
+    /// Task 1B: a held download ends when its task is cancelled, as URLSession's does (`URLError.cancelled`).
+    private func waitWhileHeld() async throws {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume() } else { waiting = continuation }
+            }
+        } onCancel: {
+            Task { await self.wakeCancelled() }
+        }
+        if Task.isCancelled { throw URLError(.cancelled) }
+    }
+
+    private func wakeCancelled() {
+        holding = false
+        waiting?.resume()
+        waiting = nil
+    }
+
+    /// Task 1B: every products request after the first `count` answers waits until `releaseProducts()` or until its task
+    /// is cancelled (then it throws `URLError.cancelled`, as URLSession does).
+    func holdProducts(after count: Int) { productsAnswerLimit = count }
+
+    private var productsAnswerLimit: Int?
+    private var productsLimitWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    /// Every products request, by set, in order; and the sets whose products were answered.
+    private(set) var productCalls: [Int] = []
+    private(set) var productsAnswered: [Int] = []
+    /// The products requests waiting for `releaseProducts()` now.
+    var productsWaitingCount: Int { productsLimitWaiters.count }
+
+    private func waitForProductsLimit() async throws {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume() } else { productsLimitWaiters[id] = continuation }
+            }
+        } onCancel: {
+            Task { await self.wakeProducts(id) }
+        }
+        if Task.isCancelled { throw URLError(.cancelled) }
+    }
+
+    private func wakeProducts(_ id: UUID) {
+        productsLimitWaiters.removeValue(forKey: id)?.resume()
+    }
+
     func holdProducts() { productsHeld = true }
 
     func releaseProducts() {
         productsHeld = false
         productsWaiting?.resume()
         productsWaiting = nil
+        productsAnswerLimit = nil
+        let waiters = productsLimitWaiters
+        productsLimitWaiters = [:]
+        for waiter in waiters.values { waiter.resume() }
     }
 
     func failGroups(_ fail: Bool) { groupsFail = fail }
@@ -821,14 +912,19 @@ actor BackfillNetwork {
     }
 
     func products(category: Int, group: Int) async throws -> Data {
+        productCalls.append(group)
         enter()
         defer { sharedInFlight -= 1 }
         try await Task.sleep(for: .milliseconds(2))
+        if let limit = productsAnswerLimit, productsAnswered.count >= limit {
+            try await waitForProductsLimit()
+        }
         if productsHeld, !productsHolding {
             productsHolding = true
             await withCheckedContinuation { productsWaiting = $0 }
             productsHolding = false
         }
+        productsAnswered.append(group)
         return try fixture("products-89.json")
     }
 
@@ -845,7 +941,11 @@ actor BackfillNetwork {
         try await Task.sleep(for: .milliseconds(2))
         if held == day {
             holding = true
-            await withCheckedContinuation { waiting = $0 }
+            if heldCancellable {
+                try await waitWhileHeld()
+            } else {
+                await withCheckedContinuation { waiting = $0 }
+            }
         }
         let fm = FileManager.default
         try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)

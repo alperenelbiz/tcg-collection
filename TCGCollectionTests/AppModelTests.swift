@@ -1133,6 +1133,47 @@ struct AppModelTests {
         #expect(model.gameID == "riftbound" && model.screen == .collection && model.importing == nil)
     }
 
+    // MARK: The iPhone in the background (Task 1B, A64)
+
+    /// A64: the app goes to the background while the launch's catalog step fetches sets. The step is cancelled, and a
+    /// cancel is no failure: no set marked failed, the status not a failure, nothing more asked (not the price step's
+    /// archive). Back to the foreground the sync runs again and fetches only the sets not fetched before the cancel.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aBackgroundCancelOfACatalogStepFailsNoSet() async throws {
+        let root = tempRoot()
+        let network = BackfillNetwork(serveAll: true)
+        await network.holdProducts(after: 2)
+        let model = AppModel(options: .init(arguments: ["app", "-store", root.path, "-game", "riftbound"]),
+                             catalogClient: network, archiveClient: network, fetcher: network, now: { Self.day1 })
+        let launch = Task { await model.start() }
+        let end = ContinuousClock.now + .seconds(10)
+        while await network.productsWaitingCount == 0 {
+            guard ContinuousClock.now < end else { Issue.record("no set fetch was held"); return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        model.sceneWentToBackground()
+        await launch.value
+        let before = await network.productsAnswered
+        #expect(before.count == 2)
+        let progress = try await model.store.progress(game: "riftbound")
+        #expect(progress.failed == 0)
+        #expect(progress.fetched == 2)
+        if case .failed(let text) = model.status { Issue.record("a failure: \(text)") }
+        #expect(await network.calls.isEmpty)                                   // no price step in the background
+        await network.releaseProducts()
+        model.sceneBecameActive()
+        await model.waitForSync()
+        let after = try await model.store.progress(game: "riftbound")
+        #expect(after.failed == 0)
+        #expect(after.fetched == 14)
+        let answered = await network.productsAnswered
+        #expect(answered.count == 14)                                          // every set answered once
+        #expect(Set(answered).count == 14)
+        let calls = await network.productCalls
+        for group in before { #expect(calls.filter { $0 == group }.count == 1) }   // never asked again
+        #expect(await network.calls == ["2026-01-02"])
+        if case .failed(let text) = model.status { Issue.record("a failure: \(text)") }
+    }
+
     // MARK: The for-sale notice (phase 2C task 2, C8)
 
     /// Waits until `condition` holds; fails after 10 s.
