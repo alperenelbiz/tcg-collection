@@ -39,6 +39,19 @@ struct DeckViewTests {
                  missing: missing, price: nil)
     }
 
+    /// A57, D13 (phase 6A feedback 1, F2): a list row's price column: the shown printing's price, "No price" for a printing
+    /// without one, and nothing for a card without a printing (its label still says "no price").
+    @Test func aListRowsPriceColumn() {
+        var priced = line(count: 1, missing: 0)
+        priced.shownPrice = ShownPrice(amount: 5.12, isLow: false)
+        #expect(DeckPage.rowPriceText(priced) == "$5.12")
+        #expect(DeckPage.rowPriceText(line(count: 1, missing: 0)) == "No price")
+        let gone = DeckLine(card: card("vanished", "main", 1, name: "Vanished"), shown: nil, kind: nil, isBasic: false,
+                            owned: 0, missing: 0, price: nil)
+        #expect(DeckPage.rowPriceText(gone) == nil)
+        #expect(DeckPage.accessibilityText(gone) == "Vanished, ×1, no price")
+    }
+
     // MARK: The sidebar
 
     /// A14, D7: an active deck shows its missing copies as a number; one that misses nothing, one that is not active, and

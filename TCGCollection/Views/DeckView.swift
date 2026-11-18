@@ -234,6 +234,13 @@ nonisolated enum DeckPage {
         [line.name, countText(line), line.shownPrice.map { CardFacts.priceText($0) } ?? "no price"].joined(separator: ", ")
     }
 
+    /// A57, D13: a list row's price column: the shown printing's price, "No price" when it has none, nil (nothing shown)
+    /// for a card without a printing; its label (`accessibilityText`) still says "no price", as the gallery's.
+    static func rowPriceText(_ line: DeckLine) -> String? {
+        guard line.shown != nil else { return nil }
+        return line.shownPrice.map { CardFacts.priceText($0) } ?? "No price"
+    }
+
     /// A section's warning, only on a deck with at least one card: an empty deck shows its empty message, not every bound
     /// it does not meet yet.
     static func warning(_ section: DeckSectionView, deckHasCards: Bool) -> String? {
@@ -489,6 +496,9 @@ struct DeckView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     MoreMenu(identifier: "deck-more") {
+                        // A58: the view, gallery or list; it works also while the deck cannot change.
+                        viewPicker
+                        Divider()
                         Group {
                             Button("Add cards", systemImage: "plus") { openSearch() }
                                 .accessibilityIdentifier("deck-add-cards")
@@ -625,12 +635,16 @@ struct DeckView: View {
         .accessibilityIdentifier("deck-gallery")
     }
 
+    /// A58: the deck page's view, gallery or list, for every deck on this device (`AppModel.deckViewMode`). A switch keeps
+    /// the search text, the kept path and the deck's join; only the scroll position may reset.
+    private var viewMode: Binding<DeckViewMode> {
+        Binding(get: { model.deckViewMode }, set: { model.deckViewMode = $0 })
+    }
+
     #if os(macOS)
-    /// A58: the deck page's view, gallery or list, for every deck on this device (`AppModel.deckViewMode`): a segmented
-    /// control left of "Add cards", two symbols, tinted `faint` (not the accent). A switch keeps the search text, the
-    /// kept path and the deck's join; only the scroll position may reset.
+    /// The Mac: a segmented control left of "Add cards", two symbols, tinted `faint` (not the accent).
     private var viewPicker: some View {
-        Picker("View", selection: Binding(get: { model.deckViewMode }, set: { model.deckViewMode = $0 })) {
+        Picker("View", selection: viewMode) {
             Label("Gallery", systemImage: "square.grid.2x2")
                 .labelStyle(.iconOnly)
                 .help("Gallery")
@@ -648,6 +662,23 @@ struct DeckView: View {
         .fixedSize()
         .help("Gallery or list")
         .accessibilityIdentifier("deck-view")
+    }
+    #else
+    /// The iPhone: "View" at the top of the deck's "…" menu (`deck-more`): "Gallery" and "List", the chosen one ticked, as
+    /// an inline picker shows them. Two toggles, not a `Picker` and not in a `Section("View")`: on iOS 27 a menu's
+    /// picker options, and toggles inside a section, lose their accessibility identifiers (seen: buttons "Gallery" and
+    /// "List" with none), and the tests need `deck-view-gallery`, `deck-view-list`. So the menu has no "View" heading.
+    @ViewBuilder
+    private var viewPicker: some View {
+        viewToggle("Gallery", mode: .gallery)
+        viewToggle("List", mode: .list)
+    }
+
+    private func viewToggle(_ title: String, mode: DeckViewMode) -> some View {
+        Toggle(title, isOn: Binding(get: { model.deckViewMode == mode }, set: { on in
+            if on { model.deckViewMode = mode }
+        }))
+        .accessibilityIdentifier("deck-view-\(mode.rawValue)")
     }
     #endif
 
@@ -862,15 +893,20 @@ struct DeckListRow: View {
 
     private var suffix: String { "\(line.card.cardKey)-\(line.card.section)" }
 
-    // Task 2 (phase 6A feedback 1) adds the iPhone's two-line row here.
     var body: some View {
-        let card = line.card
+        #if os(iOS)
+        phoneRow
+        #else
+        macRow
+        #endif
+    }
+
+    #if os(macOS)
+    /// The Mac: one line, 44 pt: the link (picture, name, count, price), then the control; hover puts `surface` behind it.
+    private var macRow: some View {
         HStack(spacing: Theme.deckRowGap) {
-            link
-            // `+` is off at 999 or more (the clamp never lowers a count; `−` always works).
-            CountControl(count: card.count, label: "\(line.name), \(format.section(card.section)?.name ?? card.section)",
-                         maximum: DeckRules.maxCount, prefix: "deck-cell", key: suffix) { step($0 - card.count) }
-                .disabled(!canChange)
+            link(macTexts)
+            control
         }
         .frame(height: Theme.deckRowHeight)
         .padding(.horizontal, Self.hoverPadding)
@@ -881,8 +917,60 @@ struct DeckListRow: View {
         .padding(.horizontal, -Self.hoverPadding)
     }
 
+    private var macTexts: some View {
+        HStack(spacing: Theme.deckRowGap) {
+            picture
+            name
+            count
+            (price ?? Text(""))
+                .lineLimit(1)
+                .frame(width: Theme.tableNumberWidth, alignment: .trailing)
+        }
+        // The whole row's height: the link, its click area and its accessibility frame are the row's, not the picture's.
+        .frame(maxHeight: .infinity)
+        .contentShape([.interaction, .accessibility], Rectangle())
+    }
+    #else
+    /// The iPhone (402 pt): two lines. The picture (40 pt tall) spans both; line 1 the name (one line, cut at the end) and
+    /// the price at the right; line 2 the count at the left and the control (44 pt) at the right. The link covers the
+    /// row; the control lies on top of it, so a tap on `−` or `+` never opens the card page.
+    private var phoneRow: some View {
+        ZStack(alignment: .bottomTrailing) {
+            link(phoneTexts)
+            control
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var phoneTexts: some View {
+        HStack(spacing: Theme.deckRowGap) {
+            picture
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.deckRowGap) {
+                    name
+                    if let price { price.lineLimit(1).fixedSize() }
+                }
+                count
+                    .frame(height: CountControl.height, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape([.interaction, .accessibility], Rectangle())
+    }
+    #endif
+
+    /// `+` is off at 999 or more (the clamp never lowers a count; `−` always works).
+    private var control: some View {
+        let card = line.card
+        return CountControl(count: card.count, label: "\(line.name), \(format.section(card.section)?.name ?? card.section)",
+                            maximum: DeckRules.maxCount, prefix: "deck-cell", key: suffix) { step($0 - card.count) }
+            .disabled(!canChange)
+    }
+
+    /// The link to the card page with the gallery cell's identifier and label; a card without a printing has no link (no
+    /// hit testing), only the identifier and the label.
     @ViewBuilder
-    private var link: some View {
+    private func link(_ texts: some View) -> some View {
         if let shown = line.shown {
             NavigationLink(value: CardTarget(gameID: gameID, cardKey: line.card.cardKey, startProductID: shown.productID)) {
                 texts
@@ -899,42 +987,41 @@ struct DeckListRow: View {
         }
     }
 
-    private var texts: some View {
-        HStack(spacing: Theme.deckRowGap) {
-            CardImage(product: line.shown, size: .row)
-                .frame(width: Theme.deckRowPictureHeight * PictureSize.row.aspectRatio, height: Theme.deckRowPictureHeight)
-            Text(line.name)
-                .font(Theme.bodyFont)
-                .foregroundStyle(Theme.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            count
-                .font(Theme.bodyFont)
-                .monospacedDigit()
-                .lineLimit(1)
-                .fixedSize()
-            price
-                .foregroundStyle(Theme.muted)
-                .monospacedDigit()
-                .lineLimit(1)
-                .frame(width: Theme.tableNumberWidth, alignment: .trailing)
-        }
-        // The whole row's height: the link, its click area and its accessibility frame are the row's, not the picture's.
-        .frame(maxHeight: .infinity)
-        .contentShape([.interaction, .accessibility], Rectangle())
+    private var picture: some View {
+        CardImage(product: line.shown, size: .row)
+            .frame(width: Theme.deckRowPictureHeight * PictureSize.row.aspectRatio, height: Theme.deckRowPictureHeight)
+    }
+
+    private var name: some View {
+        Text(line.name)
+            .font(Theme.bodyFont)
+            .foregroundStyle(Theme.text)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// `×n` in `muted`, then ` · k missing` in `risk` (`DeckPage.countText`'s rule: never for a basic card).
-    private var count: Text {
+    private var count: some View {
         let copies = Text("×\(line.card.count)").foregroundStyle(Theme.muted)
-        guard line.missing > 0, !line.isBasic else { return copies }
-        return Text("\(copies)\(Text(" · \(line.missing) missing").foregroundStyle(Theme.risk))")
+        let text = line.missing > 0 && !line.isBasic
+            ? Text("\(copies)\(Text(" · \(line.missing) missing").foregroundStyle(Theme.risk))") : copies
+        return text
+            .font(Theme.bodyFont)
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
     }
 
-    private var price: Text {
-        if let shown = line.shownPrice { return Text(CardFacts.priceText(shown)).font(Theme.bodyFont) }
-        return Text("No price").font(Theme.lineFont)
+    /// The shown printing's price, or "No price" (`lineFont`) when it has none; nil for a card without a printing (D13: it
+    /// shows nothing in the price column; its accessibility label still says "no price", as the gallery's).
+    private var price: Text? {
+        DeckPage.rowPriceText(line).map { text in
+            Text(text)
+                .font(line.shownPrice == nil ? Theme.lineFont : Theme.bodyFont)
+                .foregroundStyle(Theme.muted)
+                .monospacedDigit()
+        }
     }
 }
 

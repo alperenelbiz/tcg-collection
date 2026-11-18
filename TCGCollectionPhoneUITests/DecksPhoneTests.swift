@@ -208,4 +208,104 @@ final class DecksPhoneTests: PhoneUITestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { !app.buttons["wanted-cell-\(key)"].firstMatch.exists },
                       "the shared card stayed on Wanted")
     }
+    // MARK: The list view (phase 6A feedback 1, A57, A58)
+
+    /// Kai'Sa ×2 (none owned: 2 missing) and Dockside Lock-Up ×1 (priced in the fixture) in deck rb1.
+    private static let listDeck = """
+        {"version": 1, "collection": [],
+         "decks": [{"id": "rb1", "name": "Wind", "format": "standard", "active": true,
+                    "cards": [{"cardKey": "kai sa rebel", "name": "Kai'Sa, Rebel", "section": "main", "count": 2},
+                              {"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 1}]}]}
+        """
+
+    /// The deck list's row `rb1` → the deck's page, its first card shown.
+    private func openListDeck(_ app: XCUIApplication, firstCell: String) {
+        XCTAssertTrue(element(app, "sidebar-deck-rb1").waitForExistence(timeout: 20), "no deck row")
+        element(app, "sidebar-deck-rb1").tap()
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 10), "no deck page")
+        XCTAssertTrue(element(app, firstCell).waitForExistence(timeout: 30), "no \(firstCell)")
+    }
+
+    /// The "…" menu's "View" picker → List. Asserts that `deck-view-list` is found inside `deck-more`.
+    private func chooseList(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        tapWhenReady(app, "deck-more", file: file, line: line)
+        let list = app.buttons["deck-view-list"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "no deck-view-list in the … menu", file: file, line: line)
+        XCTAssertTrue(app.buttons["deck-view-gallery"].firstMatch.exists, "no deck-view-gallery in the … menu",
+                      file: file, line: line)
+        list.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !list.exists }, "the … menu stayed open", file: file, line: line)
+    }
+
+    /// A57, A58 on the iPhone: "…" → View → List: each card one two-line row with the gallery's label; the row's `+` is a
+    /// 44 pt touch target inside the screen; `+` → the file's count + 1.
+    func testTheDeckListOnTheIPhone() throws {
+        let app = launch(extra: ["-screen", "decks"],
+                         prepare: { root in try self.writeUserFile(Self.listDeck, game: "riftbound", root: root) })
+        let kaisaID = "deck-cell-kai sa rebel-main", docksideID = "deck-cell-dockside lock up-main"
+        openListDeck(app, firstCell: kaisaID)
+        let kaisa = element(app, kaisaID), dockside = element(app, docksideID)
+        XCTAssertTrue(waitUntil(timeout: 30) { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×2 · 2 missing, ") }, kaisa.label)
+        XCTAssertTrue(waitUntil(timeout: 30) { dockside.label.hasPrefix("Dockside Lock-Up, ×1 · 1 missing, $") }, dockside.label)
+        let kaisaLabel = kaisa.label, docksideLabel = dockside.label
+        let galleryHeight = kaisa.frame.height
+        XCTAssertGreaterThan(galleryHeight, 150, "the first time is not the gallery: \(kaisa.frame)")
+
+        chooseList(app)
+        XCTAssertTrue(waitUntil(timeout: 10) { kaisa.frame.height < 100 && kaisa.frame.height > 0 },
+                      "Kai'Sa is no list row: \(kaisa.frame)")
+        XCTAssertEqual(kaisa.label, kaisaLabel)
+        XCTAssertEqual(dockside.label, docksideLabel)
+        assertOnScreen(kaisa)
+        assertOnScreen(dockside)
+        let plus = app.buttons["deck-cell-plus-kai sa rebel-main"].firstMatch
+        XCTAssertTrue(plus.exists, "no row control")
+        assertOnScreen(plus)
+        assertOnScreen(app.buttons["deck-cell-minus-kai sa rebel-main"].firstMatch)
+        XCTAssertGreaterThanOrEqual(plus.frame.height, 44, "the row's + is no touch target: \(plus.frame)")
+        // The control is on the row's second line, right of the count; the row's first line is above it.
+        XCTAssertLessThan(kaisa.frame.minY, plus.frame.minY, "the control is not on the second line")
+        shot("decks-list-phone-01")
+
+        plus.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) { self.text(self.element(app, "deck-cell-value-kai sa rebel-main")) == "3" })
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            self.storedDeckCards(game: "riftbound") == ["rb1|kai sa rebel|main|3", "rb1|dockside lock up|main|1"]
+        }, "\(storedDeckCards(game: "riftbound"))")
+        XCTAssertTrue(waitUntil(timeout: 10) { kaisa.label.hasPrefix("Kai'Sa, Rebel, ×3 · 3 missing, ") }, kaisa.label)
+
+        // A row's tap opens the card page.
+        kaisa.tap()
+        XCTAssertTrue(element(app, "card-page").waitForExistence(timeout: 10), "a list row opens no card page")
+    }
+
+    /// Review Focus 3 on the iPhone: a 60-character card name (a card the catalog does not have: its saved name) truncates
+    /// in its row; the rows, the priced row's price and every control stay inside the 402 pt screen, and the long row is
+    /// no wider than the priced one.
+    func testALongNameInThePhoneDeckList() throws {
+        let long = "Vanished Cards of the Extraordinarily Long Riftbound Archive"
+        XCTAssertEqual(long.count, 60)
+        let app = launch(extra: ["-screen", "decks"], prepare: { root in
+            try self.writeUserFile("""
+                {"version": 1, "collection": [],
+                 "decks": [{"id": "rb1", "name": "Long", "format": "standard", "active": false,
+                            "cards": [{"cardKey": "dockside lock up", "name": "Dockside Lock-Up", "section": "main", "count": 1},
+                                      {"cardKey": "vanished long", "name": "\(long)", "section": "main", "count": 1}]}]}
+                """, game: "riftbound", root: root)
+        })
+        let priced = element(app, "deck-cell-dockside lock up-main"), row = element(app, "deck-cell-vanished long-main")
+        openListDeck(app, firstCell: "deck-cell-dockside lock up-main")
+        XCTAssertTrue(waitUntil(timeout: 30) { priced.label.hasPrefix("Dockside Lock-Up, ×1 · 1 missing, $") }, priced.label)
+        chooseList(app)
+        XCTAssertTrue(waitUntil(timeout: 10) { row.frame.height < 100 && row.frame.height > 0 }, "no list row: \(row.frame)")
+        XCTAssertTrue(waitUntil(timeout: 10) { row.label == "\(long), ×1, no price" }, row.label)
+        for element in [priced, row] { assertOnScreen(element) }
+        for key in ["dockside lock up-main", "vanished long-main"] {
+            assertOnScreen(app.buttons["deck-cell-plus-\(key)"].firstMatch)
+            assertOnScreen(app.buttons["deck-cell-minus-\(key)"].firstMatch)
+        }
+        XCTAssertEqual(row.frame.maxX, priced.frame.maxX, accuracy: 1, "the long name widens its row")
+        XCTAssertEqual(row.frame.height, priced.frame.height, accuracy: 1, "the long name wraps")
+        shot("decks-list-phone-02-long-name")
+    }
 }

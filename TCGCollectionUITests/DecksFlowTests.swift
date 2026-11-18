@@ -1298,10 +1298,13 @@ final class DecksFlowTests: UITestCase {
         element.exists && element.frame.height > 150
     }
 
-    /// A segment of the toolbar's `deck-view` control ("gallery" or "list"), by its identifier, else by its name.
-    private func viewSegment(_ app: XCUIApplication, _ mode: String) -> XCUIElement {
+    /// A segment of the toolbar's `deck-view` control ("gallery" or "list"), by its identifier (XCUITest finds the
+    /// segments' identifiers on macOS 27; asserted here, with no fallback by name).
+    private func viewSegment(_ app: XCUIApplication, _ mode: String,
+                             file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let byID = element(app, "deck-view-\(mode)")
-        return byID.waitForExistence(timeout: 5) ? byID : app.radioButtons[mode == "list" ? "List" : "Gallery"].firstMatch
+        XCTAssertTrue(byID.waitForExistence(timeout: 5), "no deck-view-\(mode) segment", file: file, line: line)
+        return byID
     }
 
     private func userFileData(game: String) throws -> Data {
