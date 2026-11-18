@@ -18,8 +18,8 @@ enum TestWindow {
         UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true])
     }
 
-    /// The frame on the primary display, centered in its visible part.
-    static func frame(on screen: NSScreen) -> CGRect {
+    /// The frame on the primary display, centered in its visible part; `size` is `-windowSize` when given.
+    static func frame(on screen: NSScreen, size: CGSize = TestWindow.size) -> CGRect {
         let visible = screen.visibleFrame
         return CGRect(x: (visible.midX - size.width / 2).rounded(), y: (visible.midY - size.height / 2).rounded(),
                       width: size.width, height: size.height)
@@ -29,7 +29,7 @@ enum TestWindow {
 extension View {
     /// `TestWindow` placement in a Debug run with `-store`; nothing otherwise.
     @ViewBuilder func testWindowPlacement(_ options: LaunchOptions) -> some View {
-        if options.storeRoot != nil { background(WindowPlacer()) } else { self }
+        if options.storeRoot != nil { background(WindowPlacer(size: options.windowSize ?? TestWindow.size)) } else { self }
     }
 }
 
@@ -38,12 +38,21 @@ extension View {
 /// name holds an address that changes at every launch ("unknown context at $…"), which gave the window a new identity
 /// (and a new saved-frame key) at every launch.
 struct WindowPlacer: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { PlacingView() }
+    let size: CGSize
+    func makeNSView(context: Context) -> NSView { PlacingView(size: size) }
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private final class PlacingView: NSView {
     private var placed = false
+    private let size: CGSize
+
+    init(size: CGSize) {
+        self.size = size
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -54,7 +63,7 @@ private final class PlacingView: NSView {
             // A test run saves no window for a later launch to restore.
             window.isRestorable = false
             guard let primary = NSScreen.screens.first else { return }
-            window.setFrame(TestWindow.frame(on: primary), display: true)
+            window.setFrame(TestWindow.frame(on: primary, size: self.size), display: true)
         }
     }
 }

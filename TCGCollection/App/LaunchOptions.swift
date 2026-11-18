@@ -47,6 +47,9 @@ nonisolated struct LaunchOptions: Sendable {
     /// `-pictureDelay <milliseconds>` (DEBUG, with `-fixtures`): every fixture picture answer waits this long, so a UI test
     /// can act while a PDF export waits for its pictures.
     var pictureDelay: Int?
+    /// `-windowSize <width>x<height>` (DEBUG, with `-store`; macOS): the test window's size instead of 900 × 450, for
+    /// pictures of the app (the README). Whole points from 1 to 10,000 each; any other value is nil.
+    var windowSize: CGSize?
 
     /// The file of `-importCSV` when this run may open it: a Debug build with `-store`. Otherwise nil: the flag is ignored
     /// (fails closed, as `-fixtures` does), so it never imports into the real collection.
@@ -99,6 +102,12 @@ nonisolated struct LaunchOptions: Sendable {
         exportPDF = value("-exportPDF").map { URL(fileURLWithPath: $0) }
         pasteDeck = value("-pasteDeck").map { URL(fileURLWithPath: $0) }
         pictureDelay = value("-pictureDelay").flatMap { Int($0) }
+        windowSize = value("-windowSize").flatMap { text in
+            let parts = text.split(separator: "x", omittingEmptySubsequences: false).map { Int($0) }
+            guard parts.count == 2, let width = parts[0], let height = parts[1],
+                  (1...10_000).contains(width), (1...10_000).contains(height) else { return nil }
+            return CGSize(width: width, height: height)
+        }
     }
 }
 

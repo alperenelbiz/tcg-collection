@@ -13,6 +13,15 @@ struct LaunchOptionsTests {
         let o = LaunchOptions(arguments: ["app"])
         #expect(o.storeRoot == nil && o.game == nil && o.card == nil && !o.offline && o.snapshot == nil && !o.catalogReport)
     }
+    /// `-windowSize <width>x<height>` (DEBUG, with `-store`): the test window's size, for README pictures; anything else
+    /// is nil, so the UI tests keep 900 × 450.
+    @Test func parsesTheWindowSizeFlag() {
+        #expect(LaunchOptions(arguments: ["app", "-windowSize", "1400x900"]).windowSize == CGSize(width: 1400, height: 900))
+        for bad in ["1400", "x900", "0x900", "1400x-1", "axb", "1400x900x2", "20000x900"] {
+            #expect(LaunchOptions(arguments: ["app", "-windowSize", bad]).windowSize == nil, "\(bad)")
+        }
+        #expect(LaunchOptions(arguments: ["app"]).windowSize == nil)
+    }
     @Test func aFlagWithoutAValueIsIgnored() { #expect(LaunchOptions(arguments: ["app", "-game"]).game == nil) }
     @Test func parsesTheFixturesFlag() {
         #expect(LaunchOptions(arguments: ["app", "-fixtures", "/tmp/f"]).fixtures?.path == "/tmp/f")
