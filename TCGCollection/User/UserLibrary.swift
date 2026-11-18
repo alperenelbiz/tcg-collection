@@ -65,6 +65,18 @@ final class UserLibrary {
     /// Phase 5A (H11): a reported `<game>.prices.json` of this folder goes here, with its game. It is no game file: the
     /// library reads nothing again for it and its `version` does not move.
     @ObservationIgnored var historyFileChanged: (@MainActor (String) -> Void)?
+    /// Phase 6B (A62): asks iCloud to download one file of the folder that is only a placeholder. Each load (the launch,
+    /// a folder switch) asks once for every known placeholder (`askForCloudFiles`). The iPhone's default asks
+    /// `FileManager`; the Mac's is nil (its iCloud Drive downloads by itself): nothing is asked there.
+    @ObservationIgnored var cloudDownload: (@MainActor (URL) -> Void)? = UserLibrary.defaultCloudDownload
+
+    static var defaultCloudDownload: (@MainActor (URL) -> Void)? {
+        #if os(iOS)
+        { url in try? FileManager.default.startDownloadingUbiquitousItem(at: url) }
+        #else
+        nil
+        #endif
+    }
     #if DEBUG
     /// `-writeDelay` (DEBUG): each write of a game file waits this long first, so a UI test can quit the app while a write
     /// is still queued (the quit must wait for it).
@@ -529,6 +541,8 @@ final class UserLibrary {
         folderIsMissing = false
         // Watching starts before the first read, so a change during it is read again after it.
         watcher?.start(folder: folder) { [weak self] url in await self?.fileChanged(url)?.value }
+        await askForCloudFiles(in: folder)
+        guard generation == loadGeneration else { return }
         await enqueue {
             for game in Games.all {
                 guard generation == self.loadGeneration else { return }
@@ -542,6 +556,19 @@ final class UserLibrary {
         guard generation == loadGeneration else { return }
         isLoaded = true
         version += 1
+    }
+
+    /// A62: asks iCloud once for every known file of `folder` that is only a placeholder (game files, history files,
+    /// `settings.json`); a no-op without `cloudDownload` (the Mac). A game file that arrives is reported by the watcher
+    /// under its real name and read then (`fileChanged`); until then its read is refused as not downloaded.
+    func askForCloudFiles(in folder: URL) async {
+        guard let download = cloudDownload else { return }
+        let names = await Self.listing(of: folder)
+        ICloudFiles.request(folder: folder, names: names, download: download)
+    }
+
+    @concurrent private nonisolated static func listing(of folder: URL) async -> [String] {
+        ICloudFiles.listing(of: folder)
     }
 
     /// After the folder sheet: writes what is queued to the old folder, stops watching it and loads `folder`. It does not

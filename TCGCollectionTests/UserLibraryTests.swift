@@ -151,6 +151,57 @@ struct UserLibraryTests {
         #expect(lib.problem == "riftbound.json is not downloaded from iCloud yet.")
     }
 
+    /// Phase 6B (A62, Review Focus 3): a placeholder of a game file at the load is asked for once (one request per
+    /// load), the game says it is not downloaded and cannot change, a `+` meanwhile writes nothing beside the
+    /// placeholder, and the file is read when the watcher reports it under its real name.
+    @MainActor @Test func aPlaceholderAtLoadIsAskedOnceAndReadWhenItArrives() async throws {
+        let dir = tempDir(), file = dir.appending(path: "riftbound.json"), placeholder = dir.appending(path: ".riftbound.json.icloud")
+        try Data().write(to: placeholder)
+        let watcher = FakeWatcher()
+        let lib = UserLibrary(folder: dir, watcher: watcher)
+        var asked: [String] = []
+        lib.cloudDownload = { asked.append($0.lastPathComponent) }
+        await lib.load()
+        #expect(asked == ["riftbound.json"])
+        #expect(lib.problem(game: "riftbound") == "riftbound.json is not downloaded from iCloud yet.")
+        #expect(!lib.canChange(game: "riftbound"))
+        lib.setCount(1, game: "riftbound", key: riftFoil, name: "A"); await lib.flush()      // refused
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(FileManager.default.fileExists(atPath: placeholder.path))
+        #expect(lib.rows(game: "riftbound").isEmpty)
+        // iCloud brings the file: the placeholder goes, the real file comes, the presenter reports its real name.
+        try FileManager.default.removeItem(at: placeholder)
+        try ownersFile.write(to: file)
+        await watcher.fire(file)
+        await lib.flush()
+        #expect(lib.rows(game: "riftbound").map(\.count) == [2])
+        #expect(lib.canChange(game: "riftbound")); #expect(lib.problem(game: "riftbound") == nil)
+        #expect(try Data(contentsOf: file) == ownersFile)
+        #expect(asked == ["riftbound.json"])                                    // a reload asks nothing more
+    }
+
+    /// Phase 6B (A62): a folder switch asks for the new folder's placeholders once; with no download (the Mac's default)
+    /// nothing is asked.
+    @MainActor @Test(.timeLimit(.minutes(1))) func aFolderSwitchAsksForTheNewFoldersPlaceholders() async throws {
+        let a = tempDir(), b = tempDir()
+        try Data().write(to: a.appending(path: ".cyberpunk.json.icloud"))
+        try Data().write(to: b.appending(path: ".settings.json.icloud"))
+        try Data().write(to: b.appending(path: ".magic-the-gathering.prices.json.icloud"))
+        let lib = UserLibrary(folder: a, watcher: nil)
+        var asked: [String] = []
+        lib.cloudDownload = { asked.append($0.lastPathComponent) }
+        await lib.load()
+        #expect(asked == ["cyberpunk.json"])
+        await lib.use(folder: b)
+        #expect(asked.sorted() == ["cyberpunk.json", "magic-the-gathering.prices.json", "settings.json"])
+        let mac = UserLibrary(folder: a, watcher: nil)
+        #if os(macOS)
+        #expect(mac.cloudDownload == nil)
+        #endif
+        await mac.load()
+        #expect(mac.problem(game: "cyberpunk") == "cyberpunk.json is not downloaded from iCloud yet.")
+    }
+
     /// Item 8: while a game has a failed write, a reload of that game does not replace memory: the change that could not
     /// be saved stays, and so does its problem. The next successful write (the next change, with the whole state) clears
     /// the failure; only then are reloads applied again.
