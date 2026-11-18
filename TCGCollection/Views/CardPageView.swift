@@ -665,9 +665,18 @@ struct DeckLines: View {
 
     private func addMenu(_ decks: [Deck], game: GameDefinition) -> some View {
         Menu("Add to deck") {
+            // A78: each deck is a submenu of its format's sections; a click adds one copy to that section.
             ForEach(decks) { deck in
-                Button(deck.name) {
-                    model.library.changeDeck(game: gameID, id: deck.id) { DeckPage.addingOne($0, card, game: game) }
+                Menu(deck.name) {
+                    ForEach(game.format(deck.format).sections) { section in
+                        Button(section.name) {
+                            model.library.changeDeck(game: gameID, id: deck.id) {
+                                DeckRules.addingOne($0, cardKey: card.cardKey, name: card.name, section: section.id,
+                                                    productID: card.productID)
+                            }
+                        }
+                        .accessibilityIdentifier("card-add-to-deck-\(deck.id)-\(section.id)")
+                    }
                 }
                 .accessibilityIdentifier("card-add-to-deck-\(deck.id)")
             }

@@ -200,9 +200,9 @@ final class DecksFlowTests: UITestCase {
         let moveTo = app.menuItems["Move to"].firstMatch
         XCTAssertTrue(moveTo.waitForExistence(timeout: 5))
         moveTo.hover()
-        let side = app.menuItems["Side Deck"].firstMatch
+        let side = moveTo.menuItems["Side Deck"].firstMatch
         XCTAssertTrue(side.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.menuItems["Legends"].firstMatch.exists)
+        XCTAssertTrue(moveTo.menuItems["Legends"].firstMatch.exists)
         shot("decks-09-move-to-menu")
         side.click()
         XCTAssertTrue(element(app, "deck-cell-\(kerry)-side").waitForExistence(timeout: 10))
@@ -495,7 +495,10 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(gear.waitForExistence(timeout: 5))
         XCTAssertTrue(app.menuItems["New Deck…"].firstMatch.exists)
         shot("decks-23-add-to-deck-menu")
-        gear.click()
+        gear.hover()
+        let gearMain = gear.menuItems["Main Deck"].firstMatch
+        XCTAssertTrue(gearMain.waitForExistence(timeout: 5), "no section submenu under the deck")
+        gearMain.click()
         let value = element(app, "deck-line-value-rb6-main")
         XCTAssertTrue(value.waitForExistence(timeout: 10), "no deck line after Add to deck")
         XCTAssertEqual(text(value), "1")
@@ -865,6 +868,59 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.text(facts).contains(rarity) }, text(facts), file: file, line: line)
     }
 
+    /// A78, A79: a card in a deck's Main Deck gets a copy in its Side Deck from the card page ("Add to deck" ▸ Wind ▸
+    /// Side Deck); on the deck page a line of 1 has no "Move one to"; "Add one to" ▸ Side Deck adds one there, the Main Deck
+    /// line unchanged; "Move one to" ▸ Main Deck on the Side Deck line of 2 moves exactly one copy.
+    func testACardInTwoSectionsOfOneDeck() throws {
+        let app = try launch(game: "yu-gi-oh") { _ in
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "\(Self.warrior)", "name": "Swiftwind Panther Warrior", "section": "main", "count": 1}]}]}
+            """)
+        }
+        let w = Self.warrior
+        let cell = element(app, "card-cell-\(w)")
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        cell.click()
+        revealOnCardPage(app, "card-add-to-deck").click()
+        let wind = app.menuItems["Wind"].firstMatch
+        XCTAssertTrue(wind.waitForExistence(timeout: 5))
+        wind.hover()
+        let side = wind.menuItems["Side Deck"].firstMatch
+        XCTAssertTrue(side.waitForExistence(timeout: 5))
+        XCTAssertTrue(wind.menuItems["Extra Deck"].firstMatch.exists, "the submenu lacks a section")
+        shot("decks-50-add-to-deck-sections")
+        side.click()
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards == ["\(w)|main|1", "\(w)|side|1"] },
+                      "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
+        XCTAssertTrue(revealOnCardPage(app, "deck-line-value-yg1-side").exists, "no Side Deck line on the card page")
+
+        element(app, "sidebar-deck-yg1").click()
+        reveal(app, "deck-cell-\(w)-main").rightClick()
+        let addOne = app.menuItems["Add one to"].firstMatch
+        XCTAssertTrue(addOne.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.menuItems["Move one to"].firstMatch.exists, "Move one to on a line of 1")
+        addOne.hover()
+        let addSide = addOne.menuItems["Side Deck"].firstMatch
+        XCTAssertTrue(addSide.waitForExistence(timeout: 5))
+        shot("decks-51-add-one-to")
+        addSide.click()
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards == ["\(w)|main|1", "\(w)|side|2"] },
+                      "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
+
+        reveal(app, "deck-cell-\(w)-side").rightClick()
+        let moveOne = app.menuItems["Move one to"].firstMatch
+        XCTAssertTrue(moveOne.waitForExistence(timeout: 5), "no Move one to on a line of 2")
+        moveOne.hover()
+        let moveMain = moveOne.menuItems["Main Deck"].firstMatch
+        XCTAssertTrue(moveMain.waitForExistence(timeout: 5))
+        shot("decks-52-move-one-to")
+        moveMain.click()
+        XCTAssertTrue(waitUntil { (try? self.storedDecks(game: "yu-gi-oh"))?.first?.cards == ["\(w)|main|2", "\(w)|side|1"] },
+                      "\(String(describing: try? storedDecks(game: "yu-gi-oh")))")
+        XCTAssertTrue(waitUntil { self.text(self.element(app, "deck-section-side")) == "Side Deck · 1" })
+    }
+
     /// A18: "Add to deck" on the second printing's page (719834, Super Rare) saves that printing on the new line; the deck
     /// cell shows it (its own price, $9.00, its cheapest finish) and opens its page. A deck that holds the card without a
     /// printing, with nothing owned, shows the cheapest printing (719835, $3.10). The deck lines' printing buttons stay in
@@ -889,7 +945,10 @@ final class DecksFlowTests: UITestCase {
         revealOnCardPage(app, "card-add-to-deck").click()
         let wind = app.menuItems["Wind"].firstMatch
         XCTAssertTrue(wind.waitForExistence(timeout: 5))
-        wind.click()
+        wind.hover()
+        let windMain = wind.menuItems["Main Deck"].firstMatch
+        XCTAssertTrue(windMain.waitForExistence(timeout: 5), "no section submenu under the deck")
+        windMain.click()
         XCTAssertTrue(waitUntil { (try? self.storedPrintings(game: "yu-gi-oh", deck: "yg1")) == ["\(Self.warrior)|main|719834"] },
                       "\(String(describing: try? storedPrintings(game: "yu-gi-oh", deck: "yg1")))")
         // The line stored on this page's printing offers "Any printing"; the other deck's line "Use this printing".

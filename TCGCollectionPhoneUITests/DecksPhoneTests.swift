@@ -237,6 +237,27 @@ final class DecksPhoneTests: PhoneUITestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { !list.exists }, "the … menu stayed open", file: file, line: line)
     }
 
+    /// A79 on the iPhone: a long press on a deck cell of 2 copies → "Move one to" → Sideboard: one copy moves, one stays.
+    func testMoveOneCopyToTheSideboardOnTheIPhone() throws {
+        let app = launch(extra: ["-screen", "decks"],
+                         prepare: { root in try self.writeUserFile(Self.listDeck, game: "riftbound", root: root) })
+        let kaisaID = "deck-cell-kai sa rebel-main"
+        openListDeck(app, firstCell: kaisaID)
+        element(app, kaisaID).press(forDuration: 1.2)
+        let moveOne = app.buttons["Move one to"].firstMatch
+        XCTAssertTrue(moveOne.waitForExistence(timeout: 5), "no Move one to in the context menu")
+        XCTAssertTrue(app.buttons["Add one to"].firstMatch.exists, "no Add one to in the context menu")
+        shot("decks-phone-move-one-menu")
+        moveOne.tap()
+        let sideboard = app.buttons["Sideboard"].firstMatch
+        XCTAssertTrue(sideboard.waitForExistence(timeout: 5), "no Sideboard in the submenu")
+        sideboard.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            self.storedDeckCards(game: "riftbound")
+                == ["rb1|kai sa rebel|main|1", "rb1|dockside lock up|main|1", "rb1|kai sa rebel|sideboard|1"]
+        }, "\(storedDeckCards(game: "riftbound"))")
+    }
+
     /// A57, A58 on the iPhone: "…" → View → List: each card one two-line row with the gallery's label; the row's `+` is a
     /// 44 pt touch target inside the screen; `+` → the file's count + 1.
     func testTheDeckListOnTheIPhone() throws {

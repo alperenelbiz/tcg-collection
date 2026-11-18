@@ -252,4 +252,29 @@ struct DeckRulesTests {
         #expect(cleared.cards == [card("bolt", "deck", 2, printing: 9), card("bolt", "sideboard", 1, printing: nil)])
         #expect(DeckRules.settingPrinting(start, key: DeckCardKey(cardKey: "bolt", section: "maybe"), productID: 9) == start)
     }
+
+    /// A79: "Move one to": one copy off the source line, one on the target; a new target line takes the source's printing,
+    /// a target line there keeps its own; the total is unchanged.
+    @Test func movingOneTakesOneCopyAcross() {
+        let start = deck([card("bolt", "deck", 3, printing: 7), card("ring", "deck", 2, printing: nil),
+                          card("ring", "sideboard", 1, printing: 4)])
+        let bolt = DeckRules.movingOne(start, cardKey: "bolt", from: "deck", to: "sideboard")
+        #expect(bolt.cards == [card("bolt", "deck", 2, printing: 7), card("ring", "deck", 2, printing: nil),
+                               card("ring", "sideboard", 1, printing: 4), card("bolt", "sideboard", 1, printing: 7)])
+        let ring = DeckRules.movingOne(start, cardKey: "ring", from: "deck", to: "sideboard")
+        #expect(ring.cards == [card("bolt", "deck", 3, printing: 7), card("ring", "deck", 1, printing: nil),
+                               card("ring", "sideboard", 2, printing: 4)])
+        #expect(total(bolt) == total(start))
+        let last = DeckRules.movingOne(deck([card("bolt", "deck", 1, printing: 7)]), cardKey: "bolt", from: "deck", to: "sideboard")
+        #expect(last.cards == [card("bolt", "sideboard", 1, printing: 7)])
+        #expect(DeckRules.movingOne(start, cardKey: "bolt", from: "deck", to: "deck") == start)
+        #expect(DeckRules.movingOne(start, cardKey: "none", from: "deck", to: "sideboard") == start)
+    }
+
+    /// A78, A79: one copy more in a chosen section leaves the card's other sections as they are.
+    @Test func addingOneToAnotherSectionLeavesTheFirst() {
+        let start = deck([card("bolt", "deck", 1, printing: 7)])
+        let added = DeckRules.addingOne(start, cardKey: "bolt", name: "Bolt", section: "sideboard", productID: 7)
+        #expect(added.cards == [card("bolt", "deck", 1, printing: 7), card("bolt", "sideboard", 1, printing: 7)])
+    }
 }

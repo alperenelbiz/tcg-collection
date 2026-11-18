@@ -76,6 +76,16 @@ nonisolated enum DeckRules {
         return deck
     }
 
+    /// A79: "Move one to": one copy off the card in `from`, one more in `to` (`addingOne`: a card new in `to` takes the
+    /// printing of the card in `from`; a card there keeps its own). Nothing changes for a card not in `from`, or `from == to`.
+    static func movingOne(_ deck: Deck, cardKey: String, from: String, to: String) -> Deck {
+        guard from != to, let source = deck.cards.first(where: { $0.cardKey == cardKey && $0.section == from }) else {
+            return deck
+        }
+        let taken = setting(deck, count: source.count - 1, cardKey: cardKey, name: source.name, section: from)
+        return addingOne(taken, cardKey: cardKey, name: source.name, section: to, productID: source.productID)
+    }
+
     /// D12: the deck takes `format`; a card whose section the new format has stays there, every other card goes to
     /// `defaultSection(card)` with its printing. Cards that land on one (card, section) are summed into the first (its
     /// place and name). The printing of that line: the printing of a card that stayed in its section (the target), else

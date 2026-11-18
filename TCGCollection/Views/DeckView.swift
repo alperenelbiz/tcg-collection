@@ -700,13 +700,39 @@ struct DeckView: View {
         .contextMenu { moveMenu(card, format: format, canChange: canChange) }
     }
 
-    /// D9: a cell's or a row's context menu: "Move to" ▸ every other section of the format.
+    /// D9: a cell's or a row's context menu: "Move to" ▸ every other section of the format (every copy). A79: "Add one to"
+    /// ▸ every other section (one copy more there), and while the line holds 2 copies or more "Move one to" ▸ them.
+    @ViewBuilder
     private func moveMenu(_ card: DeckCard, format: DeckFormat, canChange: Bool) -> some View {
+        let others = format.sections.filter { $0.id != card.section }
         Menu("Move to") {
-            ForEach(format.sections.filter { $0.id != card.section }) { section in
+            ForEach(others) { section in
                 Button(section.name) {
                     model.library.changeDeck(game: state.gameID, id: state.deckID) {
                         DeckRules.moving($0, cardKey: card.cardKey, from: card.section, to: section.id)
+                    }
+                }
+            }
+        }
+        .disabled(!canChange)
+        if card.count > 1 {
+            Menu("Move one to") {
+                ForEach(others) { section in
+                    Button(section.name) {
+                        model.library.changeDeck(game: state.gameID, id: state.deckID) {
+                            DeckRules.movingOne($0, cardKey: card.cardKey, from: card.section, to: section.id)
+                        }
+                    }
+                }
+            }
+            .disabled(!canChange)
+        }
+        Menu("Add one to") {
+            ForEach(others) { section in
+                Button(section.name) {
+                    model.library.changeDeck(game: state.gameID, id: state.deckID) {
+                        DeckRules.addingOne($0, cardKey: card.cardKey, name: card.name, section: section.id,
+                                            productID: card.productID)
                     }
                 }
             }
