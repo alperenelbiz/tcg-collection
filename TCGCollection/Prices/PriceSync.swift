@@ -27,7 +27,7 @@ nonisolated struct ArchiveClient: ArchiveFetching {
 
     func download(day: String, to file: URL) async throws -> Bool {
         var request = URLRequest(url: URL(string: "https://tcgcsv.com/archive/tcgplayer/prices-\(day).ppmd.7z")!)
-        request.setValue("TCGCollection/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("TCGCollection/1.1", forHTTPHeaderField: "User-Agent")
         let (temporary, response) = try await session.download(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {

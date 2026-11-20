@@ -26,7 +26,8 @@ the Mac and the iPhone share it.
 - **Wanted and For Sale.** A wanted list (with an optional pinned printing) and a for-sale list, a "Sold" action that
   keeps a record, and a PDF of either list.
 - **Decks.** Decks with each game's sections and formats (for example Commander, Extra Deck, Side Deck, Champion,
-  Legends), rule warnings, a deck text paste with suggestions for misspelt names, and a gallery or list view. When two
+  Legends), rule warnings, a deck text paste with suggestions for misspelt names, an export of a deck as text to copy and send, and a
+  gallery or list view. When two
   active decks need the same copies, you decide per card whether they share them or you buy more; the missing copies
   go to Wanted.
 - **Sets.** Every set counted as a master set (each printing in each finish), with the cost to complete it.
@@ -118,7 +119,7 @@ and the retirement of an earlier version.
 - **Checked on the real thing.** Every phase ended with the full UI test suite, an install, and a check by the owner
   on his own Mac and iPhone; the iPhone build was run on a real device with a step log read over the cable.
 
-The result: 1,228 unit tests, 122 Mac UI tests and 29 iPhone UI tests, and no third-party dependency.
+The result: 1,236 unit tests, 124 Mac UI tests and 30 iPhone UI tests, and no third-party dependency.
 
 ## License
 

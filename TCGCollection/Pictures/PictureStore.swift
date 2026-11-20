@@ -10,7 +10,7 @@ nonisolated struct URLSessionFetcher: DataFetching {
 
     func data(from url: URL) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
-        request.setValue("TCGCollection/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("TCGCollection/1.1", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
