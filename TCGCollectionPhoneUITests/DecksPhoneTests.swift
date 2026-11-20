@@ -237,6 +237,25 @@ final class DecksPhoneTests: PhoneUITestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { !list.exists }, "the … menu stayed open", file: file, line: line)
     }
 
+    /// A80 on the iPhone: "…" → Export…: the deck as text, Copy and Done; Done closes it. Copy is not tapped.
+    func testExportADeckOnTheIPhone() throws {
+        let app = launch(extra: ["-screen", "decks"],
+                         prepare: { root in try self.writeUserFile(Self.listDeck, game: "riftbound", root: root) })
+        openListDeck(app, firstCell: "deck-cell-kai sa rebel-main")
+        tapWhenReady(app, "deck-more")
+        let export = app.buttons["deck-export"].firstMatch
+        XCTAssertTrue(export.waitForExistence(timeout: 5), "no Export… in the … menu")
+        export.tap()
+        let sheet = element(app, "deck-export-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(element(app, "deck-export-text")).trimmingCharacters(in: .newlines),
+                       "Main Deck:\n1 Dockside Lock-Up\n2 Kai'Sa, Rebel")
+        XCTAssertTrue(element(app, "deck-export-copy").exists)
+        shot("decks-export-phone")
+        element(app, "deck-export-done").tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !sheet.exists }, "Done left the sheet open")
+    }
+
     /// A79 on the iPhone: a long press on a deck cell of 2 copies → "Move one to" → Sideboard: one copy moves, one stays.
     func testMoveOneCopyToTheSideboardOnTheIPhone() throws {
         let app = launch(extra: ["-screen", "decks"],

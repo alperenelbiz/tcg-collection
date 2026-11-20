@@ -244,6 +244,72 @@ final class DecksFlowTests: UITestCase {
         XCTAssertTrue(waitUntil { self.text(self.element(app, "sidebar-deck-missing-yg1")) == "5" })
     }
 
+    /// A80: Deck ▸ Export… shows the deck as Paste… text (sections in format order, cards by name) with Copy and Done;
+    /// Done closes it and nothing is written; an empty deck says so and its Copy is off. Copy is never clicked here: the UI
+    /// tests must not write the Mac's pasteboard.
+    func testExportADeck() throws {
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"]) { _ in
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "stardust dragon", "name": "Stardust Dragon", "section": "extra", "count": 1},
+                                                {"cardKey": "swiftwind panther warrior", "name": "Swiftwind Panther Warrior", "section": "main", "count": 3}]},
+                                     {"id": "yg2", "name": "Empty", "format": "standard", "active": false, "cards": []}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 20))
+        let before = try userFileData(game: "yu-gi-oh")
+        element(app, "deck-menu").click()
+        let export = app.menuItems["deck-export"].firstMatch
+        XCTAssertTrue(export.waitForExistence(timeout: 5), "no Export… in the Deck menu")
+        export.click()
+        let sheet = element(app, "deck-export-sheet")
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(element(app, "deck-export-title")), "Export Wind")
+        let shown = text(element(app, "deck-export-text"))
+        XCTAssertEqual(shown.trimmingCharacters(in: .newlines),
+                       "Main Deck:\n3 Swiftwind Panther Warrior\n\nExtra Deck:\n1 Stardust Dragon")
+        XCTAssertTrue(element(app, "deck-export-copy").isEnabled)
+        shot("decks-60-export-sheet", of: sheet)
+        element(app, "deck-export-done").click()
+        XCTAssertTrue(waitUntil { !sheet.exists }, "Done left the sheet open")
+        XCTAssertEqual(try userFileData(game: "yu-gi-oh"), before, "Export wrote the file")
+
+        element(app, "sidebar-deck-yg2").click()
+        XCTAssertTrue(waitUntil { self.title.hasPrefix("Empty") }, title)
+        element(app, "deck-menu").click()
+        XCTAssertTrue(export.waitForExistence(timeout: 5))
+        export.click()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 5))
+        XCTAssertEqual(text(element(app, "deck-export-text")), "This deck has no cards.")
+        XCTAssertFalse(element(app, "deck-export-copy").isEnabled, "Copy is on for an empty deck")
+        element(app, "deck-export-done").click()
+        XCTAssertTrue(waitUntil { !sheet.exists })
+    }
+
+    /// Final review: the deck is removed elsewhere while Export is open. The sheet never stands empty with no way out:
+    /// either it keeps its text and Done, or it is gone.
+    func testAnExportOpenWhileTheDeckIsRemovedElsewhere() throws {
+        let app = try launch(game: "yu-gi-oh", extra: ["-screen", "deck:yg1"]) { _ in
+            try self.writeUserFile(game: "yu-gi-oh", json: """
+            {"version": 1, "decks": [{"id": "yg1", "name": "Wind", "format": "standard", "active": false,
+                                      "cards": [{"cardKey": "swiftwind panther warrior", "name": "Swiftwind Panther Warrior", "section": "main", "count": 3}]}]}
+            """)
+        }
+        XCTAssertTrue(element(app, "deck-screen").waitForExistence(timeout: 20))
+        element(app, "deck-menu").click()
+        app.menuItems["deck-export"].firstMatch.click()
+        XCTAssertTrue(element(app, "deck-export-sheet").waitForExistence(timeout: 5))
+        try changeUserFile(game: "yu-gi-oh", json: #"{"version": 1, "decks": []}"#)
+        XCTAssertTrue(element(app, "deck-gone").waitForExistence(timeout: 10), "the removal was not read")
+        sleep(2)
+        let done = element(app, "deck-export-done")
+        XCTAssertTrue(app.sheets.count == 0 || done.exists, "a sheet stands with no Done: \(app.sheets.count)")
+        if done.exists {
+            done.click()
+            XCTAssertTrue(waitUntil { app.sheets.count == 0 }, "Done left the sheet open")
+        }
+    }
+
     /// Rename… saves a new name (an empty one is not saved); for Magic, Format ▸ Constructed moves the Commander section's
     /// card to the Deck and loses none (D12); Delete Deck… asks once, then the deck is gone and the Collection shows.
     func testRenameFormatAndDelete() throws {

@@ -415,6 +415,8 @@ final class DeckScreenState {
     var renaming = false
     /// "Delete Deck…" asks.
     var confirmsDelete = false
+    /// "Export…" is open (A80), on the deck's text taken when it opened: a deck removed meanwhile never empties it.
+    var exporting: DeckExportContent?
 
     init(gameID: String, deckID: String) {
         self.gameID = gameID
@@ -539,6 +541,10 @@ struct DeckView: View {
                     .environment(model)
                     .preferredColorScheme(.dark)
             }
+            .sheet(item: $state.exporting) { content in
+                DeckExportSheet(deckName: content.deckName, text: content.text)
+                    .preferredColorScheme(.dark)
+            }
             .confirmationDialog("Delete \(deck?.name ?? "this deck")?", isPresented: $state.confirmsDelete,
                                 titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
@@ -563,6 +569,7 @@ struct DeckView: View {
                 guard model.screen != .deck(state.deckID) else { return }
                 state.renaming = false
                 state.confirmsDelete = false
+                state.exporting = nil
             }
     }
 
@@ -775,6 +782,13 @@ struct DeckView: View {
         let library = model.library, gameID = state.gameID, deckID = state.deckID
         Button("Rename…") { state.renaming = true }
             .accessibilityIdentifier("deck-rename")
+        // A80: the deck as text, taken now. It follows the menu's state (off while the game cannot change; the page then
+        // shows no deck anyway).
+        Button("Export…") {
+            if let deck { state.exporting = DeckExportContent(deckName: deck.name, text: DeckExport.text(deck, format: game.format(deck.format))) }
+        }
+            .disabled(deck == nil)
+            .accessibilityIdentifier("deck-export")
         if game.formats.count > 1 {
             Menu("Format") {
                 ForEach(game.formats) { format in
